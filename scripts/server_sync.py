@@ -38,7 +38,12 @@ def run(cmd, **kw):
 
 
 def now():
-    return datetime.now().strftime("%Y-%m-%d %H:%M")
+    """Время Создателя (Europe/Moscow); при недоступной zoneinfo — локальное."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("Europe/Moscow")).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
 def sh(*cmd):
@@ -150,7 +155,7 @@ def append_log(events, tests):
 
 
 def export_bundle():
-    stamp = datetime.now().strftime("%Y%m%d-%H%M")
+    stamp = now().replace("-", "").replace(":", "").replace(" ", "-")
     out = os.path.join(DOWNLOAD, "marfa-station-%s.bundle" % stamp)
     code, _ = git("bundle", "create", out, "main")
     return out if code == 0 else None
