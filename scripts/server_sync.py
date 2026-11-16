@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-r"""МАРФА — server_sync.py: забор, распаковка и тесты на станции архитектора. v1.0
+r"""МАРФА — server_sync.py: забор, распаковка и тесты на станции архитектора. v1.2
 
-Станция = персистентная Linux-песочница архитектора (Z.ai). Файлы станции
-переживают смену контекста — это долгосрочная память архитектора.
+Станция = персистентная Linux-песочница архитектора (Z.ai) или любой сервер,
+где работает архитектор. Файлы станции переживают смену контекста — это
+долгосрочная память архитектора.
 
 Петля (docs/SYNC_PROTOCOL_v1.md):
     Z440 --(80_sync_github.bat)--> GitHub + outgoing\marfa-*.bundle --(в чат)-->
@@ -10,15 +11,27 @@ r"""МАРФА — server_sync.py: забор, распаковка и тест�
     + журнал ARCHITECT_LOG.md --(bundle)--> обратно Создателю.
 
 Что делает этот скрипт за один запуск:
+  0. Если в .env (или в переменных окружения) есть MARFA_GH_TOKEN — прямой
+     забор из GitHub (fetch + merge). Токен не печатается и не попадает
+     в логи: всё, что вернул git, маскируется звёздочками.
   1. Находит в upload/ самый свежий *.bundle Создателя — забирает историю в git.
   2. Находит самый свежий *.zip — распаковывает поверх рабочей копии (приём файлов).
   3. Прогоняет тесты станции: compileall (синтаксис всего кода) + pytest, если есть.
   4. Дописывает запись в docs/ARCHITECT_LOG.md — память архитектора.
   5. Обновляет bundle станции в download/ — для отправки Создателю.
+  6. Если MARFA_GH_PUSH=1 и токен есть — пуш коммитов станции в GitHub
+     (по умолчанию ВЫКЛЮЧЕН: канон — пуш делает только Создатель; включается
+     явной резолюцией Создателя, SYNC_PROTOCOL_v1.md, раздел 4а).
 
 Запуск (на станции):  python3 scripts/server_sync.py
 Зависимости: git, python3. pytest — опционально.
+
+.env (кладёт Создатель на сервере руками, НИКОГДА не через чат — Ф105):
+    MARFA_GH_TOKEN=github_pat_...     # fine-grained PAT, Contents: Read-only
+    MARFA_GH_REPO=kernedmd/marfa      # необязательно, это значение по умолчанию
+    MARFA_GH_PUSH=1                   # необязательно, включает шаг 6
 """
+
 import os
 import subprocess
 import sys
@@ -30,11 +43,21 @@ UPLOAD = os.path.abspath(os.path.join(ROOT, "..", "upload"))
 DOWNLOAD = os.path.abspath(os.path.join(ROOT, "..", "download"))
 LOG = os.path.join(ROOT, "docs", "ARCHITECT_LOG.md")
 
-GIT = ["git", "-C", ROOT]
+ENV_FILES = [os.path.join(ROOT, ".env"),
+             os.path.abspath(os.path.join(ROOT, "..", ".env"))]
+TOKEN_KEYS = ["MARFA_GH_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"]
+DEFAULT_REPO = "kernedmd/marfa"
+
+CODE_DIRS = ["core", "safety", "sensors", "evolution", "growth", "web",
+             "scripts", "tests"]
+GIT_ENV = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="echo")
+
+_secrets = []  # всё, что нельзя показывать (токены) — маскируется в выводе
 
 
-def run(cmd, **kw):
-    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+def run(cmd, timeout=600, **kw):
+    return subprocess.run(cmd, capture_output=True, text=True,
+                          env=GIT_ENV, timeout=timeout, **kw)
 
 
 def now():
@@ -46,19 +69,84 @@ def now():
         return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
-def sh(*cmd):
-    r = run(list(cmd))
-    return r.returncode, (r.stdout or "") + (r.stderr or "")
+def sh(*cmd, timeout=600):
+    try:
+        r = run(list(cmd), timeout=timeout)
+        return r.returncode, (r.stdout or "") + (r.stderr or "")
+    except subprocess.TimeoutExpired:
+        return 124, "таймаут %s с: %s" % (timeout, cmd[0])
 
 
-def git(*args):
-    return sh(*GIT, *args)
+def git(*args, timeout=600):
+    return sh("git", "-C", ROOT, *args, timeout=timeout)
+
+
+def mask(text):
+    """Спрятать токены в любом выводе — Ф105 работает и в логах станции."""
+    for s in _secrets:
+        if s:
+            text = text.replace(s, "***")
+    return text
+
+
+def load_env():
+    """Читает .env (KEY=VALUE) без печати значений; окружение важнее файла."""
+    env = {}
+    for path in ENV_FILES:
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    env[k.strip()] = v.strip().strip('"').strip("'")
+        except OSError:
+            continue
+    for k in list(env):
+        if k in os.environ:
+            env[k] = os.environ[k]
+    for k in TOKEN_KEYS + ["MARFA_GH_REPO", "MARFA_GH_PUSH"]:
+        if k in os.environ:
+            env[k] = os.environ[k]
+    return env
+
+
+def token_of(env):
+    for k in TOKEN_KEYS:
+        v = env.get(k, "")
+        if v:
+            _secrets.append(v)
+            return v
+    return None
 
 
 def head_rev():
-    """Короткий хеш HEAD или пустая строка, если коммитов ещё нет."""
     code, out = git("rev-parse", "--short", "HEAD")
     return out.strip() if code == 0 else ""
+
+
+def merge_fetch_head(label):
+    """Слить FETCH_HEAD; при несвязанных историях — вторая попытка."""
+    code, _ = git("merge", "FETCH_HEAD", "--no-edit",
+                  "-m", "приём: %s" % label)
+    if code != 0:
+        git("merge", "--abort")
+        code, _ = git("merge", "FETCH_HEAD", "--no-edit",
+                      "--allow-unrelated-histories",
+                      "-m", "приём: %s (несвязанные истории)" % label)
+        if code != 0:
+            git("merge", "--abort")
+            return False
+    return True
+
+
+def count_since(before):
+    after = head_rev()
+    if before and after:
+        _, n = git("rev-list", "--count", "%s..%s" % (before, after))
+        return n.strip() or "0"
+    return "?"
 
 
 def newest(pattern):
@@ -81,27 +169,53 @@ def ensure_repo():
     return None
 
 
+def github_fetch(env):
+    """Шаг 0: прямой забор из GitHub, если на сервере есть токен (Ф105: .env)."""
+    token = token_of(env)
+    if not token:
+        return None  # канал выключен — это норма, работаем через bundle
+    repo = env.get("MARFA_GH_REPO", DEFAULT_REPO).strip("/")
+    url = "https://x-access-token:%s@github.com/%s.git" % (token, repo)
+    before = head_rev()
+    code, out = git("fetch", url, "main", timeout=300)
+    out = mask(out)
+    if code != 0:
+        return "GitHub: недоступен (%s) — работаю дальше по bundle" % out.strip()[:120]
+    if not merge_fetch_head("GitHub %s" % repo):
+        return "GitHub: КОНФЛИКТ слияния — нужен архитектор руками (git status)"
+    n = count_since(before)
+    if n == "0":
+        return "GitHub %s: уже актуально" % repo
+    return "GitHub %s: +%s коммит(ов) — прямой забор" % (repo, n)
+
+
+def github_push(env):
+    """Шаг 6 (опция, MARFA_GH_PUSH=1): вернуть коммиты станции в GitHub."""
+    if env.get("MARFA_GH_PUSH") != "1":
+        return None
+    token = token_of(env)
+    if not token:
+        return "GitHub пуш: токена нет — пропущен"
+    repo = env.get("MARFA_GH_REPO", DEFAULT_REPO).strip("/")
+    url = "https://x-access-token:%s@github.com/%s.git" % (token, repo)
+    code, out = git("push", url, "main:main", timeout=300)
+    out = mask(out)
+    return ("GitHub пуш: OK" if code == 0
+            else "GitHub пуш: не прошёл (%s)" % out.strip()[:120])
+
+
 def import_bundle(path):
     """Забор истории из bundle Создателя."""
     base = os.path.basename(path)
     code, out = git("fetch", path, "main")
     if code != 0:
-        return "ПРОВАЛ fetch %s: %s" % (base, out.strip()[:200])
+        return "ПРОВАЛ fetch %s: %s" % (base, mask(out).strip()[:200])
     before = head_rev()
-    code, _ = git("merge", "FETCH_HEAD", "--no-edit",
-                  "-m", "приём: bundle Создателя %s" % base)
-    if code != 0:
-        git("merge", "--abort")
-        code, _ = git("merge", "FETCH_HEAD", "--no-edit",
-                      "--allow-unrelated-histories",
-                      "-m", "приём: bundle Создателя %s (несвязанные истории)" % base)
-        if code != 0:
-            git("merge", "--abort")
-            return "ПРОВАЛ merge %s — конфликт, нужен архитектор руками" % base
-    after = head_rev()
+    if not merge_fetch_head("bundle Создателя %s" % base):
+        return "ПРОВАЛ merge %s — конфликт, нужен архитектор руками" % base
+    n = count_since(before)
     if before:
-        _, n = git("rev-list", "--count", "%s..%s" % (before, after))
-        return "bundle %s: +%s коммит(ов)" % (base, n.strip() or "?")
+        return "bundle %s: +%s коммит(ов)" % (base, n)
     return "bundle %s: история принята (первый контакт станции)" % base
 
 
@@ -120,23 +234,32 @@ def import_zip(path):
 
 
 def run_tests():
-    """Тесты станции: синтаксис всего кода + pytest, если он есть и есть тесты."""
+    """Тесты станции: синтаксис всего кода + pytest, если тесты есть."""
     results = []
-    code, out = sh(sys.executable, "-m", "compileall", "-q",
-                   os.path.join(ROOT, "scripts"), os.path.join(ROOT, "tests"),
-                   os.path.join(ROOT, "core") if os.path.isdir(os.path.join(ROOT, "core")) else ROOT)
-    ok = code == 0
-    results.append(("compileall (синтаксис кода)", "OK" if ok else "ПРОВАЛ\n" + out[-500:]))
+    targets = [os.path.join(ROOT, d) for d in CODE_DIRS
+               if os.path.isdir(os.path.join(ROOT, d))]
+    if not targets:
+        targets = [ROOT]
+    code, out = sh(sys.executable, "-m", "compileall", "-q", *targets)
+    results.append(("compileall (синтаксис кода)",
+                    "OK" if code == 0 else "ПРОВАЛ\n" + out[-500:]))
 
+    has_pytests = False
     tests_dir = os.path.join(ROOT, "tests")
-    has_pytests = os.path.isdir(tests_dir) and any(
-        f.startswith("test_") and f.endswith(".py") for f in os.listdir(tests_dir))
+    if os.path.isdir(tests):
+        for _dp, _dn, fns in os.walk(tests_dir):
+            if any(f.startswith("test_") and f.endswith(".py") for f in fns):
+                has_pytests = True
+                break
     if has_pytests:
-        code, out = sh(sys.executable, "-m", "pytest", tests_dir, "-q")
-        results.append(("pytest дома", "OK\n" + out.strip()[-800:] if code == 0
+        code, out = sh(sys.executable, "-m", "pytest", tests_dir, "-q",
+                       timeout=900)
+        results.append(("pytest дома",
+                        "OK\n" + out.strip()[-800:] if code == 0
                         else "ПРОВАЛ (код %s)\n%s" % (code, out.strip()[-800:])))
     else:
-        results.append(("pytest дома", "НЕТ test_*.py на станции — жду bundle с кодом дома"))
+        results.append(("pytest дома",
+                        "НЕТ test_*.py на станции — жду код дома (bundle/GitHub)"))
     return results
 
 
@@ -163,11 +286,19 @@ def export_bundle():
 
 def main():
     print("=" * 60)
-    print("МАРФА — станция архитектора: синхронизация")
+    print("МАРФА — станция архитектора: синхронизация (v1.2)")
     print("=" * 60)
 
     msg = ensure_repo()
     events = [msg] if msg else []
+    env = load_env()
+
+    g = github_fetch(env)
+    if g is not None:
+        events.append(g)
+        print("[0]", g)
+    else:
+        print("[0] GitHub-токена нет — прямой забор выключен (канал: bundle)")
 
     b = newest(".bundle")
     if b:
@@ -196,6 +327,11 @@ def main():
         print("[5] Bundle станции:", out)
         print("    (отправь его Создателю — он положит в C:\\Marfa\\incoming\\")
         print("     и нажмёт scripts\\80_sync_github.bat)")
+
+    p = github_push(env)
+    if p:
+        events.append(p)
+        print("[6]", p)
     print("=" * 60)
 
 

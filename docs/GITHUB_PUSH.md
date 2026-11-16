@@ -37,7 +37,7 @@ git push origin main
 
 ```bat
 scripts\05_install_git.bat
-:: поставит портативный git в C:\Marfa	ools\git (ничего в Program Files)
+:: поставит портативный git в C:\Marfa  ools\git (ничего в Program Files)
 :: и напечатает готовый блок команд: init -> fetch bundle -> reset --hard -> push
 ```
 
@@ -72,3 +72,12 @@ scripts\verify.bat              :: пункт «.env не в git» должен 
 ```
 
 Дисциплина дальше: каждая фишка — отдельный коммит (Раздел 5), откат — `git revert`, не «починю потом» (6.7).
+
+## Сервер архитектора с прямым доступом (опция, 17.11.2026)
+
+Если сервер архитектора должен забирать репозиторий сам, без пересылки bundle
+через чат: fine-grained PAT с правом **Contents: Read-only** кладётся Создателем
+в `.env` на сервере (`MARFA_GH_TOKEN=...`), и `scripts/server_sync.py` v1.2
+делает fetch + merge прямо из GitHub. Токен не в чат, не в логи, не в
+`.git/config`. Пуш станции в GitHub — опция `MARFA_GH_PUSH=1`, по умолчанию
+выключена. Подробности и гарантии: docs/SYNC_PROTOCOL_v1.md, раздел 4а.

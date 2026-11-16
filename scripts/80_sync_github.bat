@@ -12,6 +12,17 @@ echo ============================================================
 :: ---------- 0. Страховка .gitignore (крупное и секреты не в git) ----------
 call :ensure_gitignore
 
+:: ---------- 0b. Инвентаризация размеров: что пойдёт в git, что в доме ----------
+if exist scripts\inventory_audit.py (
+  echo [0] Инвентаризация дома ^(inventory_audit.py^):
+  if exist venv\Scripts\python.exe (
+    venv\Scripts\python.exe scripts\inventory_audit.py
+  ) else (
+    python scripts\inventory_audit.py 2>nul
+  )
+  echo.
+)
+
 :: ---------- 1. Импорт bundle от архитектора, если он положен в incoming\ ----------
 if exist incoming\*.bundle (
   set /a N=0
@@ -76,7 +87,7 @@ goto :eof
 
 :ensure_gitignore
 if not exist .gitignore type nul > .gitignore
-for %%e in ("models/" "downloads/" "*.gguf" "venv/" "python311/" "tools/" "data/" "logs/" ".env" "__pycache__/" "*.pyc" "incoming/" "outgoing/" "*.bundle") do (
+for %%e in ("models/" "downloads/" "*.gguf" "*.safetensors" "venv/" "python311/" "tools/" "data/" "logs/" ".env" ".env.*" "__pycache__/" "*.pyc" ".pytest_cache/" "incoming/" "outgoing/" "*.bundle" "llama.cpp/" "node_modules/" "marfa/") do (
   findstr /x /c:%%e .gitignore >nul 2>&1 || echo %%~e>>.gitignore
 )
 goto :eof
