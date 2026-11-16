@@ -246,7 +246,7 @@ def run_tests():
 
     has_pytests = False
     tests_dir = os.path.join(ROOT, "tests")
-    if os.path.isdir(tests):
+    if os.path.isdir(tests_dir):
         for _dp, _dn, fns in os.walk(tests_dir):
             if any(f.startswith("test_") and f.endswith(".py") for f in fns):
                 has_pytests = True
