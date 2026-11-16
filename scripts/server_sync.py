@@ -279,6 +279,10 @@ def append_log(events, tests):
 
 def export_bundle():
     stamp = now().replace("-", "").replace(":", "").replace(" ", "-")
+    try:
+        os.makedirs(DOWNLOAD, exist_ok=True)
+    except OSError:
+        return None
     out = os.path.join(DOWNLOAD, "marfa-station-%s.bundle" % stamp)
     code, _ = git("bundle", "create", out, "main")
     return out if code == 0 else None
