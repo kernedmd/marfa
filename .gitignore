@@ -1,0 +1,27 @@
+# МАРФА — .gitignore (правило 2.4: рантайм в git не попадает)
+# Крупные файлы и секреты остаются только в доме на Z440.
+
+# модели и тяжёлые данные
+models/
+downloads/
+*.gguf
+*.safetensors
+
+# рантайм дома
+venv/
+python311/
+tools/
+data/
+logs/
+.env
+.env.*
+
+# python-мусор
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# петля синхронизации (docs/SYNC_PROTOCOL_v1.md)
+incoming/
+outgoing/
+*.bundle
