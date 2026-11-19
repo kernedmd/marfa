@@ -75,9 +75,9 @@ def now():
         return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
-def sh(*cmd, timeout=600):
+def sh(*cmd, timeout=600, **kw):
     try:
-        r = run(list(cmd), timeout=timeout)
+        r = run(list(cmd), timeout=timeout, **kw)
         return r.returncode, (r.stdout or "") + (r.stderr or "")
     except subprocess.TimeoutExpired:
         return 124, "таймаут %s с: %s" % (timeout, cmd[0])
