@@ -1,10 +1,23 @@
 @echo off
 chcp 65001 >nul
-title ����� �����
-echo [MARFA] ����᪠� ����, ����� � ������...
-start "���� (8082)" /min cmd /c "C:\Marfa\llama.cpp\llama-server.exe -m C:\Marfa\models\Qwen3-30B-A3B-Q4_K_M.gguf --host 127.0.0.1 --port 8082 -ngl 0 --temp 0.3"
-start "����� (8083)" /min cmd /c "C:\Marfa\llama.cpp\llama-server.exe -m C:\Marfa\models\vlm\Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf --mmproj C:\Marfa\models\vlm\mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf -ngl 99 -c 8192 -t 2 --temp 0.1"
-start "������ (5001)" /min cmd /c "cd /d C:\Marfa && venv\Scripts\python.exe -m flask --app web.app run --host 127.0.0.1 --port 5001"
-timeout /t 30 /nobreak >nul
-start http://127.0.0.1:5001/chat
-exit
+title МАРФА — старт дома
+
+rem ============================================================
+rem  Старт_Марфа.bat — кнопка Создателя: поднять весь дом.
+rem  Движок: start_marfa.py (№22) — команды живут в start_marfa.json
+rem  (мозг 8082, глаза 8083, панель 5001), движок ждёт глаза, пишет
+rem  журнал logs\startup.log. Повторный запуск безопасен: живых
+rem  слуг не трогает. Поменял модель или квант — правь json.
+rem ============================================================
+
+cd /d C:\Marfa
+if exist venv\Scripts\python.exe (
+  venv\Scripts\python.exe start_marfa.py
+) else (
+  python start_marfa.py
+)
+
+rem как в старой кнопке: после старта открыть чат Марфы
+start "" http://127.0.0.1:5001/chat
+echo.
+pause

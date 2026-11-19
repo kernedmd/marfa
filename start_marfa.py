@@ -8,8 +8,10 @@ r"""start_marfa.py — №22: автозапуск дома одной кома�
 
 Как это работает:
 - конфиг — start_marfa.json рядом со скриптом; при первом запуске создаётся
-  сам (шаблон). Команду глаз архитектор вписал; команду МОЗГА знает только
-  Создатель — впиши её руками один раз, поле brain_cmd;
+  сам (шаблон). Все три команды вписаны из живой кнопки Создателя
+  (Старт_Марфа.bat от 17.11.2026): мозг Qwen3-30B-A3B Q4_K_M на CPU,
+  глаза Qwen2.5-VL-3B + mmproj на CUDA, панель Flask 5001.
+  Сменил модель или квант — правь start_marfa.json;
 - уже живой слуга не трогается (можно звать старт повторно, безопасно);
 - каждый слуга поднимается в СВОЕЙ консоли — дом живёт своей жизнью,
   а Создатель видит логи каждого;
@@ -44,13 +46,20 @@ SERVICES = [
 ]
 
 TEMPLATE = {
-    "brain_cmd": "",
-    "eyes_cmd": (
-        "llama-cuda\\llama-server.exe -m models\\Qwen2.5-VL-3B-Instruct-"
-        "Q4_K_M.gguf --mmproj models\\mmproj-model-f16.gguf -ngl 99 -c 8192 "
-        "--image-min-tokens 1024 --port 8083 --host 127.0.0.1"
+    "brain_cmd": (
+        "llama.cpp\\llama-server.exe -m models\\Qwen3-30B-A3B-Q4_K_M.gguf "
+        "--host 127.0.0.1 --port 8082 -ngl 0 --temp 0.3"
     ),
-    "panel_cmd": "venv\\Scripts\\python.exe web\\app.py",
+    "eyes_cmd": (
+        "llama.cpp\\llama-server.exe -m models\\vlm\\Qwen2.5-VL-3B-"
+        "Instruct-Q4_K_M.gguf --mmproj models\\vlm\\mmproj-Qwen2.5-VL-"
+        "3B-Instruct-Q8_0.gguf -ngl 99 -c 8192 -t 2 --temp 0.1 "
+        "--host 127.0.0.1 --port 8083"
+    ),
+    "panel_cmd": (
+        "venv\\Scripts\\python.exe -m flask --app web.app run "
+        "--host 127.0.0.1 --port 5001"
+    ),
 }
 
 

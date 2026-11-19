@@ -29,9 +29,10 @@ def test_ensure_config_creates_template(tmp_path):
     p = tmp_path / "start_marfa.json"
     cfg = sm.ensure_config(p)
     assert p.exists()
-    assert cfg["brain_cmd"] == ""
-    assert "--port 8083" in cfg["eyes_cmd"]
-    assert "web" in cfg["panel_cmd"]
+    # шаблон = живые команды Создателя (Старт_Марфа.bat от 17.11.2026)
+    assert "llama-server" in cfg["brain_cmd"] and "--port 8082" in cfg["brain_cmd"]
+    assert "--port 8083" in cfg["eyes_cmd"] and "models\\vlm\\" in cfg["eyes_cmd"]
+    assert "web" in cfg["panel_cmd"] and "5001" in cfg["panel_cmd"]
 
 
 def test_ensure_config_keeps_existing(tmp_path):

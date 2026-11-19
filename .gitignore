@@ -26,6 +26,7 @@ incoming/
 outgoing/
 *.bundle
 .sync_imports
+_trash/
 
 # тяжёлые пере-скачиваемые каталоги дома (17.11.2026)
 llama.cpp/
