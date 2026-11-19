@@ -25,6 +25,7 @@ __pycache__/
 incoming/
 outgoing/
 *.bundle
+.sync_imports
 
 # тяжёлые пере-скачиваемые каталоги дома (17.11.2026)
 llama.cpp/
