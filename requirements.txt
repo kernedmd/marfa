@@ -1,0 +1,11 @@
+# --- Рантайм дома Марфа (в venv ставит scripts\04_install_qlora.ps1) ---
+psutil>=5.9
+flask>=3.0
+requests>=2.31
+
+# --- Память: основной бэкенд ChromaDB; при его отсутствии дом работает на JSON-фоллбэке (ADR-006) ---
+chromadb>=0.5; platform_system == "Windows"
+
+# --- QLoRA-стек ставится отдельной командой с CUDA-индексом (см. 04_install_qlora.ps1):
+# torch --index-url https://download.pytorch.org/whl/cu118
+# bitsandbytes peft trl transformers accelerate huggingface_hub

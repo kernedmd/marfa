@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Марфа</title>
+    <style>
+        body { font-family: Arial; background: #0d1117; color: #c9d1d9; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+        header { padding: 15px; background: #161b22; border-bottom: 1px solid #30363d; font-size: 18px; font-weight: bold; }
+        #chat { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        .msg { padding: 10px 15px; border-radius: 10px; max-width: 70%; line-height: 1.4; }
+        .user { background: #1f6feb; color: white; align-self: flex-end; }
+        .ai { background: #21262d; border: 1px solid #30363d; align-self: flex-start; }
+        #input-area { padding: 15px; background: #161b22; display: flex; gap: 10px; }
+        input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #30363d; background: #0d1117; color: white; outline: none; }
+        button { padding: 12px 20px; background: #238636; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #2ea043; }
+    </style>
+</head>
+<body>
+    <header>Марфа</header>
+    <div id="chat"><div class="msg ai">Привет! Я Марфа. Спрашивай что угодно.</div></div>
+    <div id="input-area">
+        <input id="inp" placeholder="Напиши Марфе..." onkeydown="if(event.key==='Enter') send()">
+        <button onclick="send()">Отправить</button>
+    </div>
+    <script>
+        async function send() {
+            const i = document.getElementById('inp');
+            const t = i.value.trim();
+            if(!t) return;
+            const c = document.getElementById('chat');
+            c.innerHTML += `<div class="msg user">${t}</div>`;
+            i.value = '';
+            c.scrollTop = c.scrollHeight;
+            try {
+                const r = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({text: t})
+                });
+                const d = await r.json();
+                c.innerHTML += `<div class="msg ai">${d.reply || 'Нет ответа'}</div>`;
+            } catch(e) {
+                c.innerHTML += `<div class="msg ai">Ошибка: ${e}</div>`;
+            }
+            c.scrollTop = c.scrollHeight;
+        }
+    </script>
+</body>
+</html>

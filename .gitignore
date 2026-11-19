@@ -1,0 +1,43 @@
+# МАРФА — .gitignore (правило 2.4: рантайм в git не попадает)
+# Крупные файлы и секреты остаются только в доме на Z440.
+
+# модели и тяжёлые данные
+models/
+downloads/
+*.gguf
+*.safetensors
+
+# рантайм дома
+venv/
+python311/
+tools/
+data/
+logs/
+.env
+.env.*
+
+# python-мусор
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# петля синхронизации (docs/SYNC_PROTOCOL_v1.md)
+incoming/
+outgoing/
+*.bundle
+.sync_imports
+_trash/
+# старые истории git после пересборки (кнопка v3.1) — тяжёлые, на удаление
+.git_old/
+
+# тяжёлые пере-скачиваемые каталоги дома (17.11.2026)
+llama.cpp/
+# сборки llama.cpp из первого снимка дома (19.11.2026, ночь) — рантайм, не код
+llama-cuda/
+llama-vulkan/
+
+# вложенная копия проекта внутри дома (C:\Marfa\marfa) — в git не идёт
+marfa/
+
+# веб-зависимости, если появятся
+node_modules/
