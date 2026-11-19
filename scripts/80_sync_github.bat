@@ -1,8 +1,16 @@
 @echo off
 chcp 65001 >nul
-title МАРФА — синхронизация дома с GitHub (одна кнопка, v3.0)
+title МАРФА — синхронизация дома с GitHub (одна кнопка, v3.1)
 
 rem ============================================================
+rem  v3.1 (20.11.2026): автолечение жирной истории.
+rem  Урок третьего прогона: в первый снимок дома попали тяжёлые
+rem  сборки llama (llama-cuda ~700 МБ в истории git) — пуш в GitHub
+rem  падает (curl 55 + лимит 100 МБ), а bundle не пролезает в чат.
+rem  Лечение автоматом: если история репозитория толще 100 МБ —
+rem  пересборка (старая уезжает в .git_old\, ничего не удаляется),
+rem  свежий снимок + усыновление станции, GitHub обновляется
+rem  с заменой (push --force — частный репозиторий, хозяин один).
 rem  v3.0 (19.11.2026, ночь): всё автоматом — усыновление.
 rem  Урок второго прогона: дом, GitHub и станция — три НЕСВЯЗАННЫЕ
 rem  истории, каждый общий файл = конфликт «оба добавили», а
@@ -13,7 +21,7 @@ rem  уникальные файлы дома остаются, коммит с�
 rem  Дальше все слияния идут по общей базе — конфликтов add/add
 rem  больше не бывает. Ручного труда: положить bundle в incoming\
 rem  и нажать кнопку.
-rem  Протокол: docs\SYNC_PROTOCOL_v1.md (v1.5, разделы 2, 6 и 8)
+rem  Протокол: docs\SYNC_PROTOCOL_v1.md (v1.6, разделы 2, 3 и 8)
 rem ============================================================
 
 :: ---------- 0a. Временная копия: кнопка сможет обновить себя в петле ----------
@@ -31,8 +39,16 @@ cd /d C:\Marfa
 
 echo ============================================================
 echo  МАРФА — синхронизация Z440 ^<-^> GitHub ^<-^> Архитектор
-echo  Петля: docs\SYNC_PROTOCOL_v1.md (v1.5, разделы 2 и 8)
+echo  Петля: docs\SYNC_PROTOCOL_v1.md (v1.6, разделы 2 и 8)
 echo ============================================================
+
+:: ---------- 0b-0. Толщина истории: тяжёлым сборкам в git не место ----------
+set "SURGERY=0"
+set "GSIZE=0"
+for /f "tokens=2" %%s in ('git count-objects -v 2^>nul ^| findstr /C:"size:"') do set /a GSIZE+=%%s
+for /f "tokens=2" %%s in ('git count-objects -v 2^>nul ^| findstr /C:"size-pack:"') do set /a GSIZE+=%%s
+if %GSIZE% GTR 102400 call :surgery
+if errorlevel 1 goto :fail
 
 :: ---------- 0b. Репозиторий дома: создать при первом запуске ----------
 call :ensure_repo
@@ -61,6 +77,10 @@ if errorlevel 1 (
 
 :: ---------- 2. GitHub: забрать свою историю ----------
 echo [2] GitHub: забираю историю github.com/kernedmd/marfa ...
+if "%SURGERY%"=="1" (
+  echo     история пересобрана — GitHub обновлю с заменой ^(push --force^) на шаге [6]
+  goto :skip_gh
+)
 call :clean_tree
 git fetch origin main >nul 2>&1
 if errorlevel 1 (
@@ -78,6 +98,8 @@ if errorlevel 1 (
     )
   )
 )
+:skip_gh
+
 
 :: ---------- 3. Bundle от архитектора ----------
 call :clean_tree
@@ -129,7 +151,11 @@ if errorlevel 1 (
 
 :: ---------- 5. Пуш в GitHub (провал не останавливает петлю) ----------
 echo [6] Пуш в github.com/kernedmd/marfa ...
-git push origin main
+if "%SURGERY%"=="1" (
+  git push --force origin main
+) else (
+  git push origin main
+)
 if errorlevel 1 (
   echo [!] Пуш не прошёл — резервная копия GitHub не обновлена, но петля жива:
   echo     ответный bundle для архитектора будет собран ниже всё равно.
@@ -153,6 +179,21 @@ echo  он заберёт его на станцию, прогонит тест�
 echo ============================================================
 pause
 goto :eof
+
+:surgery
+echo [1s] История репозитория потяжелела до ~%GSIZE% КБ — в ней застряли
+echo     тяжёлые сборки llama из первого снимка. Пересобираю историю (один раз):
+echo     старая уедет в .git_old\, файлы на диске не трогаются.
+set "SURGERY=1"
+for /f %%d in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"') do set OLDD=%%d
+if not exist .git_old mkdir .git_old
+powershell -NoProfile -Command "Move-Item -LiteralPath .git -Destination .git_old\%OLDD%" >nul 2>&1
+if exist .git (
+  echo [x] не смог убрать старую историю — покажи архитектору этот вывод
+  exit /b 1
+)
+echo     старая история: .git_old\%OLDD% ^(тяжёлая, можно удалить через неделю^)
+exit /b 0
 
 :import_bundle
 git fetch %1 main
@@ -212,7 +253,7 @@ exit /b 0
 
 :ensure_gitignore
 if not exist .gitignore type nul > .gitignore
-for %%e in ("models/" "downloads/" "*.gguf" "*.safetensors" "venv/" "python311/" "tools/" "data/" "logs/" ".env" ".env.*" "__pycache__/" "*.pyc" ".pytest_cache/" "incoming/" "outgoing/" "*.bundle" "_trash/" "llama.cpp/" "llama-cuda/" "llama-vulkan/" "node_modules/" "marfa/") do (
+for %%e in ("models/" "downloads/" "*.gguf" "*.safetensors" "venv/" "python311/" "tools/" "data/" "logs/" ".env" ".env.*" "__pycache__/" "*.pyc" ".pytest_cache/" "incoming/" "outgoing/" "*.bundle" "_trash/" "llama.cpp/" "llama-cuda/" "llama-vulkan/" ".git_old/" "node_modules/" "marfa/") do (
   findstr /x /c:%%e .gitignore >nul 2>&1 || echo %%~e>>.gitignore
 )
 exit /b 0

@@ -57,7 +57,7 @@ PATTERN_DIRS = {"__pycache__", ".pytest_cache"}
 # тяжёлое и рантайм — даже не сканируем
 SKIP_DIRS = {".git", "_trash", "models", "venv", "python311", "tools",
              "data", "logs", "llama.cpp", "downloads", "incoming",
-             "outgoing", "node_modules", "marfa"}
+             "outgoing", "node_modules", "marfa", ".git_old"}
 
 
 def home_dir() -> Path:

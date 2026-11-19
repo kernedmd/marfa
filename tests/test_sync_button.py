@@ -88,3 +88,23 @@ def test_self_update_via_temp_copy():
     t = _text()
     assert "MARFA_SYNC_RELAUNCH" in t
     assert "%TEMP%\\marfa_sync_run.bat" in t
+
+
+def test_fat_history_surgery():
+    """История толще 100 МБ — пересборка автоматом (v3.1).
+
+    Урок третьего прогона: тяжёлые сборки llama застряли в истории
+    первого снимка; rm --cached чистит только будущее, пуш падает,
+    bundle не пролезает в чат.
+    """
+    t = _text()
+    assert "git count-objects -v" in t            # измерение толщины истории
+    assert "GTR 102400" in t                      # порог: 100 МБ
+    assert "call :surgery" in t and "\n:surgery" in t
+    assert "Move-Item -LiteralPath .git" in t     # старая история -> .git_old\
+    assert ".git_old/" in t                       # и в игнор-списке кнопки
+    # пересборка не тянет старую историю с GitHub: пуш с заменой
+    assert "git push --force origin main" in t
+    assert 'if "%SURGERY%"=="1" (' in t           # флаг разведён по шагам
+    # ничего не удаляется насовсем — старая история сохранена
+    assert "можно удалить через неделю" in t
