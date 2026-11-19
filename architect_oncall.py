@@ -1,0 +1,174 @@
+# -*- coding: utf-8 -*-
+"""architect_oncall.py v0.1 — дежурный архитектор дома Марфа (RouterAI).
+
+Задача (б): архитектор по вызову. Собирает контекст проекта, спрашивает
+модель через RouterAI, печатает ответ и сохраняет протокол в logs/architect/.
+
+ПРАВИЛА ДОМА (Ф105): ключ живёт ТОЛЬКО в C:\\Marfa\\.env строкой
+    ROUTERAI_API_KEY=...
+В код и в чат ключ не попадает никогда.
+
+v0.1 — только советует: печатает диагноз и патч, НИЧЕГО не меняет на диске.
+Применяет правки рука Создателя (или архитектор Z.ai в чате).
+
+Запуск из C:\\Marfa:
+    venv\\Scripts\\python.exe architect_oncall.py "почему /api/chat отдаёт 500"
+    venv\\Scripts\\python.exe architect_oncall.py --files web/app.py,core/brain.py "доработай X"
+
+Модель по умолчанию: deepseek/deepseek-v4-pro-0813
+Сменить: в .env строка  MARFA_ARCHITECT_MODEL=anthropic/claude-sonnet-5.5
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+ENV_FILE = ROOT / ".env"
+ARCHIVE_DIR = ROOT / "logs" / "architect"
+API_URL = "https://routerai.ru/api/v1/chat/completions"
+DEFAULT_MODEL = "deepseek/deepseek-v4-pro-0813"
+DEFAULT_FILES = "core/config.py,web/app.py,core/agent.py,core/brain.py"
+MAX_FILE_CHARS = 40000          # один файл — не больше 40 000 символов в контекст
+TIMEOUT_SEC = 300
+
+SYSTEM_PROMPT = (
+    "Ты — дежурный архитектор дома Марфа, локального ИИ-дома на C:\\Marfa "
+    "(Windows, Flask на порту 5001, llama.cpp на 8082, мозг Qwen3-30B-A3B). "
+    "Создатель дома — Илья. Ты даёшь советы и точечные патчи по коду, "
+    "но сам ничего не исполняешь и не пишешь на диск. Правила дома: "
+    "1) ничего вне C:\\Marfa; 2) токены только в .env, никогда в код и логи; "
+    "3) порт 5000 не трогать; 4) изменения мастер-ТЗ — только резолюцией Создателя. "
+    "Отвечай по-русски и по структуре: ДИАГНОЗ -> ПАТЧ (точный код) -> КАК ПРОВЕРИТЬ."
+)
+
+
+def _utf8_console() -> None:
+    """Чиним вывод русского текста в консоль Windows (cp866/1251)."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if stream.encoding and stream.encoding.lower().replace("-", "") != "utf8":
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+def load_env() -> dict:
+    """Прочитать C:\\Marfa\\.env в словарь. utf-8-sig съедает BOM от Блокнота."""
+    env: dict = {}
+    if ENV_FILE.exists():
+        for raw in ENV_FILE.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            env[k.strip()] = v.strip().strip('"').strip("'")
+    return env
+
+
+def build_context(rel_files: list) -> str:
+    """Собрать текст контекста из файлов проекта (каждый с шапкой-путём)."""
+    parts = []
+    for rel in rel_files:
+        p = ROOT / rel
+        if not p.exists():
+            parts.append(f"### {rel}\n(файл не найден на диске)\n")
+            continue
+        text = p.read_text(encoding="utf-8", errors="replace")[:MAX_FILE_CHARS]
+        parts.append(f"### {rel}\n```\n{text}\n```\n")
+    return "\n".join(parts)
+
+
+def ask_routerai(task: str, context: str, model: str, api_key: str) -> tuple:
+    """Один запрос к RouterAI. Возвращает (ответ, usage-строка)."""
+    import requests
+
+    user_msg = f"ЗАДАЧА ОТ СОЗДАТЕЛЯ:\n{task}\n\nКОНТЕКСТ ПРОЕКТА:\n{context}"
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_msg},
+        ],
+        "temperature": 0.3,
+    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    resp = requests.post(API_URL, headers=headers, json=payload, timeout=TIMEOUT_SEC)
+    if resp.status_code != 200:
+        snippet = resp.text[:500] if resp.text else ""
+        raise RuntimeError(f"RouterAPI HTTP {resp.status_code}: {snippet}")
+    data = resp.json()
+    answer = data["choices"][0]["message"]["content"]
+    usage = data.get("usage") or {}
+    usage_line = (
+        f"токены: вход {usage.get('prompt_tokens', '?')}, "
+        f"выход {usage.get('completion_tokens', '?')}"
+    )
+    return answer, usage_line
+
+
+def save_transcript(task: str, rel_files: list, model: str,
+                    answer: str, usage_line: str) -> Path:
+    """Сохранить протокол: ни один ответ архитектора не теряется."""
+    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    path = ARCHIVE_DIR / f"architect_{stamp}.md"
+    head = [
+        f"# Протокол дежурного архитектора — {time.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"- модель: {model}",
+        f"- файлы в контексте: {', '.join(rel_files)}",
+        f"- {usage_line}",
+        "",
+        "## Задача",
+        task,
+        "",
+        "## Ответ",
+        answer,
+        "",
+    ]
+    path.write_text("\n".join(head), encoding="utf-8")
+    return path
+
+
+def main() -> int:
+    _utf8_console()
+    parser = argparse.ArgumentParser(description="Дежурный архитектор дома Марфа (RouterAI)")
+    parser.add_argument("task", help="задача архитектору обычным текстом")
+    parser.add_argument("--files", default=DEFAULT_FILES,
+                        help="файлы контекста через запятую (по умолчанию ключевые файлы)")
+    args = parser.parse_args()
+
+    env = load_env()
+    api_key = env.get("ROUTERAI_API_KEY", "").strip()
+    if not api_key:
+        print("НЕТ КЛЮЧА: добавь в C:\\Marfa\\.env строку  ROUTERAI_API_KEY=... "
+              "(ключ из личного кабинета routerai.ru; в чат его не показывать)")
+        return 1
+    model = env.get("MARFA_ARCHITECT_MODEL", "").strip() or DEFAULT_MODEL
+
+    rel_files = [f.strip().replace("\\", "/") for f in args.files.split(",") if f.strip()]
+    print(f"[архитектор] модель: {model}")
+    print(f"[архитектор] контекст: {', '.join(rel_files)}")
+    context = build_context(rel_files)
+    print(f"[архитектор] контекст собран: {len(context)} символов; спрашиваю RouterAI...")
+
+    try:
+        answer, usage_line = ask_routerai(args.task, context, model, api_key)
+    except Exception as e:
+        print(f"[архитектор] ОШИБКА: {e}")
+        return 2
+
+    path = save_transcript(args.task, rel_files, model, answer, usage_line)
+    print()
+    print("=" * 60)
+    print(answer)
+    print("=" * 60)
+    print(f"[архитектор] {usage_line}")
+    print(f"[архитектор] протокол сохранён: {path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
