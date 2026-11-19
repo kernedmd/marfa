@@ -29,13 +29,36 @@ def test_dirty_tree_committed_before_merges():
     assert t.count("call :clean_tree") >= 2
 
 
-def test_merge_failure_not_masked():
-    """Сбой приёма bundle — честная остановка, а не add+commit поверх конфликта."""
+def test_failures_still_honest():
+    """То, что автомат не осилил — честная остановка, а не маскировка."""
     t = _text()
     assert "git merge --abort" in t
-    assert "НЕ влился" in t
+    assert t.count("покажи архитектору") >= 2  # усыновление и авторазрешение
     # старый маскирующий фолбэк удалён
     assert "(завершение)" not in t
+
+
+def test_adoption_for_unrelated_histories():
+    """Несвязанные истории — усыновление автоматом (v3.0).
+
+    Урок второго прогона: дом/GitHub/станция — три несвязанные линии,
+    каждый общий файл = add/add, который -X theirs не решает.
+    """
+    t = _text()
+    assert "git merge-base HEAD FETCH_HEAD" in t  # связность проверяется ДО слияния
+    assert "усыновление" in t
+    assert "git merge --no-commit --allow-unrelated-histories FETCH_HEAD" in t
+    assert "git checkout FETCH_HEAD -- ." in t   # дерево архитектора целиком
+
+
+def test_related_conflicts_autoresolved():
+    """Конфликт при общей истории — «архитектор сильнее» без ручного труда."""
+    t = _text()
+    assert "git checkout --theirs -- ." in t
+    assert "авторазрешение" in t
+    # внутри :import_bundle порядок: «уже вросла» -> усыновление -> авторазрешение
+    sub = t[t.index(":import_bundle"):]
+    assert sub.index("уже вросла") < sub.index("усыновление") < sub.index("авторазрешение")
 
 
 def test_sentinel_after_import():
