@@ -12,7 +12,7 @@ r"""scripts/clean_home.py — анти-мусор дома: разбор нас�
      в docs\ (иначе остаётся: она единственная).
   3. Пустышки evolution\, growth\ (одни __init__.py) — в _trash.
   4. По всему дереву, кроме тяжёлых каталогов: __pycache__, *.pyc,
-     *.bak, *_broken*, .pytest_cache — в _trash.
+     *.bak, *_broken*, .pytest_cache, ручные копии «* — копия.*» — в _trash.
   5. Только ДОКЛАД, без переноса: *.bundle вне incoming\ и outgoing\
      (это история — перенеси в incoming\ или удали сам), вложенная
      копия marfa\.
@@ -52,7 +52,7 @@ ROOT_JUNK_FILES = [
 ]
 ROOT_JUNK_DIRS = ["_backup_heal"]
 TRIVIAL_DIRS = ["evolution", "growth"]
-PATTERN_FILES = ["*.pyc", "*.bak", "*_broken*"]
+PATTERN_FILES = ["*.pyc", "*.bak", "*_broken*", "* — копия.py", "* — копия.*", "* копия.py"]
 PATTERN_DIRS = {"__pycache__", ".pytest_cache"}
 # тяжёлое и рантайм — даже не сканируем
 SKIP_DIRS = {".git", "_trash", "models", "venv", "python311", "tools",

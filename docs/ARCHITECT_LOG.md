@@ -309,3 +309,26 @@
   torch+CUDA: torch_cuda.dll 1,3 ГБ). Правило для второго помощника:
   всё для Марфы — через C:\Marfa\venv\Scripts\python.exe -m pip install.
 - Ожидается от Создателя: outgoing\marfa-20261120-0346.bundle в чат.
+
+## 2026-11-20 04:3x (Мск) — приём 0346: консультантский скелет; 190 passed; кнопка v3.2 едет домой
+
+- Создатель прислал первый ТОНКИЙ bundle (778 КиБ). Merge чистый, общая
+  база 6496302. Приехало: 58 файлов, +4642 строки — результат «консультации
+  у внешней нейросети» (второго помощника нет, Создатель уточнил).
+- Состав приезжего: core/ autonomy+context+history+fix_chroma_v4;
+  scripts/ 00-06 установщики + auto_fixer, diag_venv, download_student;
+  tests/ 11 новых модулей (agent, autonomy, brain, context, guard, hands,
+  history, log_audit, memory, monitor_web + fake_llama_server);
+  web/ chat.html (корень и templates); docs/ ADR, BACKLOG, MASTER_TZ_v9_3,
+  RAM_AUDIT; requirements*.txt; start_marfa.json обновлён домом (мозг
+  8082 -ngl 0, глаза 8083 -ngl 99, панель flask 5001).
+- Станция: установлены flask, psutil, requests; chromadb не ставится на
+  Linux (маркер Windows) — память на JSON-фоллбэке, ADR-006 работает.
+  Итог: 190 passed (72 станции + 118 дома) — приезжий скелет живой,
+  станции не вредит, канон не тронут (BACKLOG_v9_4, MASTER_TZ, №22 на
+  местах; v9_3-доки приехали параллельными файлами).
+- Мусор: «web/app — копия.py» (ручная копия). clean_home.py научен маске
+  «* — копия.*» — уедет в _trash при следующем прогоне дома.
+- Ответный bundle несёт: кнопку v3.2 (шаг 3z — самообновление в одном
+  нажатии, автоуборка тяжёлых outgoing), протокол v1.7, журнал.
+  Ожидается от Создателя: один прогон кнопки + исходящий bundle в чат.
