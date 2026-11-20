@@ -108,3 +108,29 @@ def test_fat_history_surgery():
     assert 'if "%SURGERY%"=="1" (' in t           # флаг разведён по шагам
     # ничего не удаляется насовсем — старая история сохранена
     assert "можно удалить через неделю" in t
+
+
+def test_self_restart_one_click():
+    """Слияние принесло новую кнопку — прогон перезапускается ею же (v3.2).
+
+    Требование Создателя от 20.11.2026: «уже требую автоматизацию» —
+    ни второго нажатия, ни замены файла руками после слияния.
+    """
+    t = _text()
+    assert "rem BTN_VER" in t                     # версия кнопки — тег в файле
+    assert "marfa_sync_run.bat" in t              # рестарт через временную копию
+    assert "MARFA_SYNC_TURNS" in t                # предохранитель от зацикливания
+    assert 'if "%MARFA_SYNC_TURNS%"=="2" goto :no_selfupdate' in t
+    # рестарт только когда версии РАЗЛИЧАЮТСЯ (не на каждый чих)
+    assert 'if "%RUN_VER%"=="%TREE_VER%" goto :no_selfupdate' in t
+    # 3z стоит после приёма bundle и до чистки дома
+    assert t.index(":no_selfupdate") > t.index(":import_bundle")
+
+
+def test_fat_outgoing_bundles_autoremoved():
+    """Тяжёлые bundles (>100 МБ) эпохи жирной истории удаляются сами."""
+    t = _text()
+    assert "104857600" in t                       # порог: 100 МБ
+    assert 'del /q "outgoing\\%%~nxf"' in t
+    # чистка — до сборки нового bundle
+    assert t.index("104857600") < t.index("git bundle create")

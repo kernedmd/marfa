@@ -1,9 +1,15 @@
 @echo off
 chcp 65001 >nul
-title МАРФА — синхронизация дома с GitHub (одна кнопка, v3.1)
+title МАРФА — синхронизация дома с GitHub (одна кнопка, v3.2)
+rem BTN_VER 3.2
 
 rem ============================================================
-rem  v3.1 (20.11.2026): автолечение жирной истории.
+rem  v3.2 (20.11.2026): один прогон до конца + ноль ручного труда.
+rem  Требование Создателя: «уже требую автоматизацию». Если слияние
+rem  принесло НОВУЮ версию этой кнопки — прогон перезапускается ею
+rem  сам (шаг 3z): второе нажатие не нужно, замена файла руками не
+rem  нужна никогда. Тяжёлые bundles эпохи жирной истории (>100 МБ)
+rem  из outgoing\ кнопка удаляет сама. v3.1 (20.11.2026): автолечение
 rem  Урок третьего прогона: в первый снимок дома попали тяжёлые
 rem  сборки llama (llama-cuda ~700 МБ в истории git) — пуш в GitHub
 rem  падает (curl 55 + лимит 100 МБ), а bundle не пролезает в чат.
@@ -21,7 +27,7 @@ rem  уникальные файлы дома остаются, коммит с�
 rem  Дальше все слияния идут по общей базе — конфликтов add/add
 rem  больше не бывает. Ручного труда: положить bundle в incoming\
 rem  и нажать кнопку.
-rem  Протокол: docs\SYNC_PROTOCOL_v1.md (v1.6, разделы 2, 3 и 8)
+rem  Протокол: docs\SYNC_PROTOCOL_v1.md (v1.7, разделы 2, 3, 6 и 8)
 rem ============================================================
 
 :: ---------- 0a. Временная копия: кнопка сможет обновить себя в петле ----------
@@ -36,10 +42,11 @@ exit /b %ERRORLEVEL%
 
 :run
 cd /d C:\Marfa
+if not defined MARFA_SYNC_TURNS set "MARFA_SYNC_TURNS=1"
 
 echo ============================================================
 echo  МАРФА — синхронизация Z440 ^<-^> GitHub ^<-^> Архитектор
-echo  Петля: docs\SYNC_PROTOCOL_v1.md (v1.6, разделы 2 и 8)
+echo  Петля: docs\SYNC_PROTOCOL_v1.md (v1.7, разделы 2 и 8)
 echo ============================================================
 
 :: ---------- 0b-0. Толщина истории: тяжёлым сборкам в git не место ----------
@@ -115,6 +122,25 @@ if exist incoming\*.bundle (
   echo [3] Входящих bundle нет — синхронизирую локальное состояние
 )
 
+:: ---------- 3z. Самообновление кнопки: один прогон до конца ----------
+rem Если слияние принесло НОВУЮ версию кнопки — перезапускаемся ею
+rem сразу, в этом же прогоне (требование Создателя: без второго нажатия).
+rem Предохранитель MARFA_SYNC_TURNS=2: максимум один перезапуск за прогон.
+if not "%IMPORTED%"=="1" goto :no_selfupdate
+if "%MARFA_SYNC_TURNS%"=="2" goto :no_selfupdate
+set "RUN_VER=" & set "TREE_VER="
+for /f "delims=" %%a in ('findstr /C:"rem BTN_VER" "%TEMP%\marfa_sync_run.bat" 2^>nul') do set "RUN_VER=%%a"
+for /f "delims=" %%a in ('findstr /C:"rem BTN_VER" "scripts\80_sync_github.bat" 2^>nul') do set "TREE_VER=%%a"
+if not defined RUN_VER goto :no_selfupdate
+if not defined TREE_VER goto :no_selfupdate
+if "%RUN_VER%"=="%TREE_VER%" goto :no_selfupdate
+echo [3z] Слияние принесло новую версию кнопки — перезапускаюсь ею
+set /a MARFA_SYNC_TURNS+=1
+copy /y "scripts\80_sync_github.bat" "%TEMP%\marfa_sync_run.bat" >nul
+call "%TEMP%\marfa_sync_run.bat" %*
+exit /b %ERRORLEVEL%
+:no_selfupdate
+
 :: ---------- 3b. Чистка дома: наследие v9.3 уезжает в _trash ----------
 if exist scripts\clean_home.py (
   echo [4] Чистка дома ^(мусор ^> _trash, раздел 8 протокола^):
@@ -166,6 +192,11 @@ if errorlevel 1 (
 
 :: ---------- 6. Свежий bundle для архитектора ----------
 if not exist outgoing mkdir outgoing
+rem тяжёлые огрызки эпохи жирной истории кнопка убирает сама
+for %%f in (outgoing\*.bundle) do if %%~zf GTR 104857600 (
+  echo     [!] убираю тяжёлый мусор старой истории: outgoing\%%~nxf ^(%%~zf байт^)
+  del /q "outgoing\%%~nxf"
+)
 for /f %%t in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmm"') do set STAMP=%%t
 git bundle create "outgoing\marfa-%STAMP%.bundle" main >nul
 echo [7] Bundle готов: outgoing\marfa-%STAMP%.bundle
@@ -176,6 +207,7 @@ git log --oneline -3
 echo.
 echo  Положи outgoing\marfa-%STAMP%.bundle в чат архитектору —
 echo  он заберёт его на станцию, прогонит тесты и вернёт правки.
+echo  ^(_тяжёлые старые bundle из outgoing уже убраны автоматом_^)
 echo ============================================================
 pause
 goto :eof
