@@ -1,18 +1,20 @@
 # -*- coding: utf-8 -*-
-r"""МАРФА — server_sync.py: забор, распаковка и тесты на станции архитектора. v1.3
+r"""МАРФА — server_sync.py: забор, распаковка и тесты на станции архитектора. v1.4
 
 Станция = персистентная Linux-песочница архитектора (Z.ai) или любой сервер,
 где работает архитектор. Файлы станции переживают смену контекста — это
 долгосрочная память архитектора.
 
-Петля (docs/SYNC_PROTOCOL_v1.md):
-    Z440 --(80_sync_github.bat)--> GitHub + outgoing\marfa-*.bundle --(в чат)-->
-    станция: upload\*.bundle --(server_sync.py)--> рабочая копия marfa\ + тесты
-    + журнал ARCHITECT_LOG.md --(bundle)--> обратно Создателю.
+Петля (docs/SYNC_PROTOCOL_v1.md, v1.8):
+    Z440 --(80_sync_github.bat)--> GitHub --(прямой забор станции, без токена:
+    репозиторий публичный, резолюция Создателя от 20.11.2026)--> рабочая копия
+    marfa\ + тесты + журнал ARCHITECT_LOG.md --(bundle в чат)--> обратно
+    Создателю: скачать → incoming\ → кнопка.
 
 Что делает этот скрипт за один запуск:
-  0. Если в .env (или в переменных окружения) есть MARFA_GH_TOKEN — прямой
-     забор из GitHub (fetch + merge). Токен не печатается и не попадает
+  0. Прямой забор из GitHub: репозиторий публичный — токен НЕ нужен (v1.4,
+     резолюция Создателя от 20.11.2026); токен в .env остаётся опцией на
+     случай возврата приватности. Токен не печатается и не попадает
      в логи: всё, что вернул git, маскируется звёздочками.
   1. Находит в upload/ самый свежий *.bundle Создателя — забирает историю в git
      (повторно тот же вход не принимается — идемпотентность, маркер .sync_imports).
@@ -176,12 +178,18 @@ def ensure_repo():
 
 
 def github_fetch(env):
-    """Шаг 0: прямой забор из GitHub, если на сервере есть токен (Ф105: .env)."""
+    """Шаг 0: прямой забор из GitHub (v1.4).
+
+    Репозиторий публичный (резолюция Создателя от 20.11.2026) — токен НЕ
+    нужен: станция забирает историю дома сама, без участия Создателя.
+    Токен в .env остаётся опцией (вернули приватность — канал живёт дальше).
+    """
     token = token_of(env)
-    if not token:
-        return None  # канал выключен — это норма, работаем через bundle
     repo = env.get("MARFA_GH_REPO", DEFAULT_REPO).strip("/")
-    url = "https://x-access-token:%s@github.com/%s.git" % (token, repo)
+    if token:
+        url = "https://x-access-token:%s@github.com/%s.git" % (token, repo)
+    else:
+        url = "https://github.com/%s.git" % repo  # публичный режим, без секретов
     before = head_rev()
     code, out = git("fetch", url, "main", timeout=300)
     out = mask(out)
@@ -192,7 +200,7 @@ def github_fetch(env):
     n = count_since(before)
     if n == "0":
         return "GitHub %s: уже актуально" % repo
-    return "GitHub %s: +%s коммит(ов) — прямой забор" % (repo, n)
+    return "GitHub %s: +%s коммит(ов) — прямой забор (публичный режим)" % (repo, n)
 
 
 def github_push(env):

@@ -84,10 +84,17 @@ def test_heavy_llama_builds_out_of_git():
 
 
 def test_self_update_via_temp_copy():
-    """Кнопка работает с временной копии — петля может обновить её саму."""
+    """Кнопка работает с временной копии — петля может обновить её саму.
+
+    v3.3: самодиагностика ПО ПУТИ (%~f0), а не по переменной окружения —
+    переменная жила между нажатиями в одном окне cmd, и второй запуск
+    шёл прямо из дерева, который слияние переписывало на ходу.
+    """
     t = _text()
-    assert "MARFA_SYNC_RELAUNCH" in t
+    assert 'if /i "%~f0"=="%TEMP%\\marfa_sync_run.bat" goto :run' in t
     assert "%TEMP%\\marfa_sync_run.bat" in t
+    # рестарты через cmd /c: свежее окружение, счётчик честно обнуляется
+    assert t.count('cmd /c ""%TEMP%\\marfa_sync_run.bat""') == 2  # 0a и 3z
 
 
 def test_fat_history_surgery():
@@ -134,3 +141,15 @@ def test_fat_outgoing_bundles_autoremoved():
     assert 'del /q "outgoing\\%%~nxf"' in t
     # чистка — до сборки нового bundle
     assert t.index("104857600") < t.index("git bundle create")
+
+
+def test_ingrown_bundles_autoremoved():
+    """Вросшие и принятые bundles убираются из incoming сами (v3.3).
+
+    Урок прогона 04:17: пять отработанных bundles копились в incoming.
+    """
+    t = _text()
+    sub = t[t.index(":import_bundle"):]
+    assert sub.count("del /q %1") >= 3          # вросла + усыновление + слияние
+    # удаление только после успеха; сбой приёма — файл остаётся для разбора
+    assert sub.index("уже вросла") < sub.index("del /q %1")

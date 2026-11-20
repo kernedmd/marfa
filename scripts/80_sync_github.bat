@@ -1,9 +1,16 @@
 @echo off
 chcp 65001 >nul
-title МАРФА — синхронизация дома с GitHub (одна кнопка, v3.2)
-rem BTN_VER 3.2
+title МАРФА — синхронизация дома с GitHub (одна кнопка, v3.3)
+rem BTN_VER 3.3
 
 rem ============================================================
+rem  v3.3 (20.11.2026): incoming не копится + кнопка неуязвима к окну.
+rem  Урок прогона 04:17: в одном окне cmd переменная запуска жила
+rem  между нажатиями — кнопка шла прямо из дерева, который слияние
+rem  мог переписать на ходу, а самообновление 3z стопорилось. Теперь
+rem  кнопка опознаёт себя по пути (%~f0), счётчик перезапусков
+rem  обнуляется на каждом нажатии, а вросшие/принятые bundles
+rem  удаляются из incoming\ — папка не копится.
 rem  v3.2 (20.11.2026): один прогон до конца + ноль ручного труда.
 rem  Требование Создателя: «уже требую автоматизацию». Если слияние
 rem  принесло НОВУЮ версию этой кнопки — прогон перезапускается ею
@@ -27,17 +34,20 @@ rem  уникальные файлы дома остаются, коммит с�
 rem  Дальше все слияния идут по общей базе — конфликтов add/add
 rem  больше не бывает. Ручного труда: положить bundle в incoming\
 rem  и нажать кнопку.
-rem  Протокол: docs\SYNC_PROTOCOL_v1.md (v1.7, разделы 2, 3, 6 и 8)
+rem  Протокол: docs\SYNC_PROTOCOL_v1.md (v1.8, разделы 2, 3, 6 и 8)
 rem ============================================================
 
 :: ---------- 0a. Временная копия: кнопка сможет обновить себя в петле ----------
-if defined MARFA_SYNC_RELAUNCH goto :run
+rem Самодиагностика ПО ПУТИ, без переменной окружения: переменная жила
+rem между нажатиями в одном окне cmd — второй запуск шёл прямо из дерева,
+rem который слияние переписывало на ходу, а 3z в том же окне не срабатывал.
+if /i "%~f0"=="%TEMP%\marfa_sync_run.bat" goto :run
 del /q "%TEMP%\marfa_sync_run.bat" >nul 2>&1
 copy /y "%~f0" "%TEMP%\marfa_sync_run.bat" >nul 2>&1
 if not exist "%TEMP%\marfa_sync_run.bat" goto :run
 echo [0] Работаю с временной копии — репозиторий может обновить кнопку сам
-set "MARFA_SYNC_RELAUNCH=1"
-call "%TEMP%\marfa_sync_run.bat" %*
+set "MARFA_SYNC_TURNS=1"
+cmd /c ""%TEMP%\marfa_sync_run.bat""
 exit /b %ERRORLEVEL%
 
 :run
@@ -46,7 +56,7 @@ if not defined MARFA_SYNC_TURNS set "MARFA_SYNC_TURNS=1"
 
 echo ============================================================
 echo  МАРФА — синхронизация Z440 ^<-^> GitHub ^<-^> Архитектор
-echo  Петля: docs\SYNC_PROTOCOL_v1.md (v1.7, разделы 2 и 8)
+echo  Петля: docs\SYNC_PROTOCOL_v1.md (v1.8, разделы 2 и 8)
 echo ============================================================
 
 :: ---------- 0b-0. Толщина истории: тяжёлым сборкам в git не место ----------
@@ -137,7 +147,7 @@ if "%RUN_VER%"=="%TREE_VER%" goto :no_selfupdate
 echo [3z] Слияние принесло новую версию кнопки — перезапускаюсь ею
 set /a MARFA_SYNC_TURNS+=1
 copy /y "scripts\80_sync_github.bat" "%TEMP%\marfa_sync_run.bat" >nul
-call "%TEMP%\marfa_sync_run.bat" %*
+cmd /c ""%TEMP%\marfa_sync_run.bat""
 exit /b %ERRORLEVEL%
 :no_selfupdate
 
@@ -231,7 +241,12 @@ exit /b 0
 git fetch %1 main
 if errorlevel 1 ( echo [x] fetch не удался — bundle битый? & exit /b 1 )
 git merge-base --is-ancestor FETCH_HEAD HEAD >nul 2>&1
-if not errorlevel 1 ( echo     история архитектора уже вросла в дом & exit /b 0 )
+if not errorlevel 1 (
+  echo     история архитектора уже вросла в дом
+  del /q %1 >nul 2>&1
+  echo     [i] %~nx1 убран из incoming — уже в истории дома
+  exit /b 0
+)
 git merge-base HEAD FETCH_HEAD >nul 2>&1
 if errorlevel 1 (
   rem несвязанные истории: разовое УСЫНОВЛЕНИЕ — дерево архитектора
@@ -247,6 +262,7 @@ if errorlevel 1 (
     exit /b 1
   )
   echo     усыновление выполнено: версии архитектора приняты, твоё уникальное цело
+  del /q %1 >nul 2>&1
   exit /b 0
 )
 git merge FETCH_HEAD --no-edit -X theirs -m "приём: архитектор %~nx1"
@@ -261,6 +277,7 @@ if errorlevel 1 (
     exit /b 1
   )
 )
+del /q %1 >nul 2>&1
 exit /b 0
 
 :clean_tree
