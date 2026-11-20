@@ -184,6 +184,25 @@ def test_sentinel_nested_folder_points_exactly(tmp_path, monkeypatch):
     assert str(nested) in str(ei.value)    # не «где-то там», а точный путь
 
 
+# ---------- демо без sounddevice: инструкция, а не traceback ----------
+
+def test_demo_missing_sounddevice_speaks_russian(monkeypatch, capsys):
+    """Урок первого демо на Z440: голый «No module named 'sounddevice'».
+
+    Теперь демо само печатает команду установки (и зеркало tuna)
+    и выходит кодом 1 — без ледяного traceback.
+    """
+    import sensors.ears as ears
+    monkeypatch.setitem(sys.modules, "sounddevice", None)  # import -> ImportError
+    with pytest.raises(SystemExit) as ei:
+        ears.demo(1.0)
+    out = capsys.readouterr().out
+    assert ei.value.code == 1
+    assert "pip install sounddevice" in out      # точная команда
+    assert "tuna" in out                        # запасное зеркало
+    assert "venv" in out                        # правильный питон
+
+
 # ---------- интеграция: живая модель (станция/дом, если есть) ----------
 
 @pytest.mark.parametrize("model_dir", [

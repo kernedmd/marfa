@@ -195,7 +195,21 @@ def demo(seconds: float = 60.0) -> None:
     Позови Марфу вслух — увидишь строку [ИМЯ!] ... и слово, которое
     сработало. Выход: Ctrl+C или по таймауту.
     """
-    import sounddevice  # ставится отдельно: pip install sounddevice
+    try:
+        import sounddevice  # ставится отдельно: pip install sounddevice
+    except ImportError:
+        # Урок первого демо на Z440 (20.11.2026): голый traceback
+        # «No module named 'sounddevice'» — не наш стиль. Говорим,
+        # ЧТО не хватает и КАК поставить, прямо в консоль.
+        print("=" * 60)
+        print("НЕ ХВАТАЕТ ОДНОЙ ДЕТАЛИ: sounddevice — обёртка микрофона.")
+        print("Ставится одной командой (в venv Марфы):")
+        print(r"  C:\Marfa\venv\Scripts\python.exe -m pip install sounddevice")
+        print("Если pypi.org не отвечает — через зеркало tuna:")
+        print(r"  C:\Marfa\venv\Scripts\python.exe -m pip install sounddevice"
+              " -i https://pypi.tuna.tsinghua.edu.cn/simple")
+        print("Потом запусти демо ещё раз.")
+        raise SystemExit(1)
 
     s = NameSentinel()
     print("=" * 60)
@@ -213,13 +227,22 @@ def demo(seconds: float = 60.0) -> None:
             print("[%s]         речь:   «%s»"
                   % (dt.datetime.now().strftime("%H:%M:%S"), out["text"]))
 
-    with sounddevice.RawInputStream(samplerate=s.sample_rate, blocksize=4000,
-                                    dtype="int16", channels=1, callback=callback):
-        import time
-        try:
-            time.sleep(seconds)
-        except KeyboardInterrupt:
-            pass
+    try:
+        with sounddevice.RawInputStream(samplerate=s.sample_rate, blocksize=4000,
+                                        dtype="int16", channels=1, callback=callback):
+            import time
+            try:
+                time.sleep(seconds)
+            except KeyboardInterrupt:
+                pass
+    except Exception as e:
+        # микрофона нет / занят / нет прав — PortAudio говорит технично,
+        # а Создателю нужен человеческий ответ
+        print("=" * 60)
+        print("МИКРОФОН НЕ ПОДКЛЮЧЁН или занят: %s" % e)
+        print("Проверь, что микрофон вставлен и выбран устройством ввода")
+        print("по умолчанию: Параметры -> Система -> Звук -> Вход.")
+        raise SystemExit(1)
     print("Демо закончено. Лог: %s" % config.EARS_LOG_FILE)
 
 
