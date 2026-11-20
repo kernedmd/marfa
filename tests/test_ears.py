@@ -14,7 +14,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from sensors.ears import NameSentinel, heard_wake, levenshtein, normalize
+from sensors.ears import (NameSentinel, heard_wake, levenshtein,
+                         model_files_ok, normalize)
 
 
 # ---------- normalize: канон услышанного ----------
@@ -139,6 +140,48 @@ def test_sentinel_logs_to_jsonl(monkeypatch, tmp_path):
     log = (tmp_path / "ears.jsonl").read_text(encoding="utf-8").strip()
     rec = json.loads(log.splitlines()[-1])
     assert rec["event"] == "wake" and rec["sensor"] == "ears"
+
+
+# ---------- маркер здоровой папки модели ----------
+
+def test_model_files_ok_marker(tmp_path):
+    # маркер — am/final.mdl (есть в любой модели alphacephei)
+    assert model_files_ok(tmp_path) is False
+    (tmp_path / "am").mkdir()
+    assert model_files_ok(tmp_path) is False
+    (tmp_path / "am" / "final.mdl").write_text("stub")
+    assert model_files_ok(tmp_path) is True
+
+
+# ---------- диагноз поломанной папки: по-русски и ДО vosk ----------
+
+def test_sentinel_broken_folder_speaks_russian(tmp_path, monkeypatch):
+    """Папка есть, файлов нет — ошибка объясняет, что делать.
+
+    Урок первого живого прогона на Z440: vosk на такую папку отвечал
+    голым «Failed to create a model». Диагноз ставим ДО импорта vosk —
+    поэтому подменяем vosk на сломанный: если порядок нарушится, тест упадёт.
+    """
+    empty = tmp_path / "vosk-model-small-ru-0.22"
+    empty.mkdir()
+    monkeypatch.setitem(sys.modules, "vosk", None)  # import vosk -> ImportError
+    with pytest.raises(FileNotFoundError) as ei:
+        NameSentinel(empty)
+    msg = str(ei.value)
+    assert "ФАЙЛОВ модели" in msg
+    assert "85_fix_ears" in msg            # ошибка называет кнопку-лекаря
+
+
+def test_sentinel_nested_folder_points_exactly(tmp_path, monkeypatch):
+    """Вложенная распаковка — ошибка называет точный путь вложенной папки."""
+    nested = tmp_path / "vosk-model-small-ru-0.22" / "vosk-model-small-ru-0.22"
+    (nested / "am").mkdir(parents=True)
+    (nested / "am" / "final.mdl").write_text("stub")
+    monkeypatch.setitem(sys.modules, "vosk", None)
+    with pytest.raises(FileNotFoundError) as ei:
+        NameSentinel(nested.parent)
+    assert "ВЛОЖЕННО" in str(ei.value)
+    assert str(nested) in str(ei.value)    # не «где-то там», а точный путь
 
 
 # ---------- интеграция: живая модель (станция/дом, если есть) ----------

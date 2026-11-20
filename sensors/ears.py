@@ -20,6 +20,8 @@ heard_wake): тестируются без модели и без микрофо
   C:\Marfa\venv\Scripts\python.exe -m pip install sounddevice
   C:\Marfa\venv\Scripts\python.exe sensors\ears.py --check    # без микрофона
   C:\Marfa\venv\Scripts\python.exe sensors\ears.py --demo 60  # позови Марфу
+Лечится кнопкой scripts\85_fix_ears.bat (модель легла криво —
+вложенная распаковка архива с сайта).
 """
 from __future__ import annotations
 
@@ -78,6 +80,18 @@ def heard_wake(text: str,
     return None
 
 
+def model_files_ok(model_dir) -> bool:
+    """Есть ли в папке НАСТОЯЩИЕ файлы vosk-модели.
+
+    Маркер — am/final.mdl (акустическая модель): он есть и в small,
+    и в больших моделях alphacephei. Папка без него — не модель,
+    а след неудачной распаковки. vosk про такую папку молчит
+    по-английски («Failed to create a model») — проверяем сами,
+    до него, и говорим по-русски.
+    """
+    return (Path(model_dir) / "am" / "final.mdl").is_file()
+
+
 class NameSentinel:
     """Сторож имени: кормим звуком чанками, получаем события.
 
@@ -91,13 +105,31 @@ class NameSentinel:
                  sample_rate: int = config.EARS_SAMPLE_RATE,
                  wake_words: tuple[str, ...] = config.EARS_WAKE_WORDS,
                  max_dist: int = config.EARS_WAKE_MAX_DIST) -> None:
-        import vosk  # лениво: тесты логики живут без модели
-
         self.model_dir = Path(model_dir or config.EARS_MODEL_DIR)
         if not self.model_dir.is_dir():
             raise FileNotFoundError(
                 "модель ушей не найдена: %s (скачай vosk-model-small-ru-0.22 "
                 "с alphacephei.com/vosk/models в C:\\Marfa\\models\\)" % self.model_dir)
+        if not model_files_ok(self.model_dir):
+            # Урок первого живого прогона на Z440 (20.11.2026): папка была,
+            # а модели в ней не было — vosk ответил голым английским
+            # «Folder does not contain model files». Говорим точно.
+            nested = self.model_dir / self.model_dir.name
+            if model_files_ok(nested):
+                raise FileNotFoundError(
+                    "модель ушей лежит ВЛОЖЕННО: сторож смотрит в %s, а файлы "
+                    "модели нашлись в %s (классика «Извлечь всё» в Проводнике: "
+                    "внутри архива ещё одна папка с тем же именем). Подними "
+                    "содержимое вложенной папки на уровень выше или нажми "
+                    "scripts\\85_fix_ears.bat — она чинит сама"
+                    % (self.model_dir, nested))
+            raise FileNotFoundError(
+                "папка модели ушей есть, а ФАЙЛОВ модели в ней нет: %s (ждал "
+                "am\\final.mdl и соседей conf, graph, ivector). Похоже, архив "
+                "не распакован или распакован не туда. Нажми "
+                "scripts\\85_fix_ears.bat — она чинит сама" % self.model_dir)
+        import vosk  # лениво: тесты логики живут без модели
+
         self.sample_rate = sample_rate
         self.wake_words = wake_words
         self.max_dist = max_dist
