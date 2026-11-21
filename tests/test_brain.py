@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """Тесты мозга (ТЗ 3.2, ADR-002): клиент 8082, строгий JSON, fallback."""
+import json
+
 import pytest
 
 from core import config, brain
@@ -120,3 +122,55 @@ def test_usage_tokens(client, srv):
     # usage берём из сырого ответа сервера: проверим через chat с прямым _post
     raw = client._post("/v1/chat/completions", {"messages": [], "max_tokens": 5})
     assert client.usage_tokens(raw) == max(1, len('{"answer": "1234567890123"}') // 3)
+
+
+# ---------- №9: темперамент из доктрины Создателя ----------
+
+@pytest.fixture()
+def doctrine_home(tmp_path, monkeypatch):
+    """Доктрина в tmp: тесты не трогают чужие файлы."""
+    monkeypatch.setattr(config, "DOCTRINE_FILE", tmp_path / "creator_doctrine.json")
+    yield tmp_path
+
+
+def _write_mood(path, mood):
+    path.write_text(json.dumps({"doctrine": "тест", "mood": mood},
+                               ensure_ascii=False), encoding="utf-8")
+
+
+def test_mood_changes_chat_sampling(client, srv, doctrine_home):
+    """Доктрина с настроением — мозг говорит с новой температурой и top_p."""
+    _write_mood(config.DOCTRINE_FILE, {"temperature": 0.6, "top_p": 0.8})
+    srv.reply_content = "живее!"
+    client.chat([{"role": "user", "content": "привет"}])
+    call = srv.calls[-1]
+    assert call["temperature"] == 0.6
+    assert call["top_p"] == 0.8
+
+
+def test_mood_changes_ask_json_sampling(client, srv, doctrine_home):
+    _write_mood(config.DOCTRINE_FILE, {"temperature": 0.5})
+    client.ask_json("вопрос")
+    assert srv.calls[-1]["temperature"] == 0.5
+
+
+def test_mood_broken_falls_back_to_default(client, srv, doctrine_home):
+    """Брак (temperature вне здравых границ) — характер по умолчанию 0.3."""
+    _write_mood(config.DOCTRINE_FILE, {"temperature": 99})
+    client.chat([{"role": "user", "content": "привет"}])
+    call = srv.calls[-1]
+    assert call["temperature"] == 0.3
+    assert "top_p" not in call
+
+
+def test_mood_missing_file_is_default(client, srv, doctrine_home):
+    """Нет файла доктрины — дефолт, никаких выдумок о характере."""
+    client.chat([{"role": "user", "content": "привет"}])
+    assert srv.calls[-1]["temperature"] == 0.3
+
+
+def test_explicit_temperature_beats_mood(client, srv, doctrine_home):
+    """Явный аргумент (выжимки просят холодную голову) сильнее настроения."""
+    _write_mood(config.DOCTRINE_FILE, {"temperature": 0.6})
+    client.chat([{"role": "user", "content": "сожми"}], temperature=0.2)
+    assert srv.calls[-1]["temperature"] == 0.2

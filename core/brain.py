@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import urllib.request
+from pathlib import Path
 from typing import Optional
 
 from core import config
@@ -18,6 +19,43 @@ from core import config
 
 class BrainError(Exception):
     """Мозг не ответил или ответил не-JSON. Наверх уходит как честная ошибка."""
+
+
+# ---------------------------------------------------------------
+# №9 «Темперамент из доктрины»: настроение Марфы читается из
+# data/creator_doctrine.json (поле mood), а не зашито в код.
+# Создатель может сделать её живее (temperature выше) или строже
+# (ниже) правкой одного файла — без правки кода дома.
+# Нет файла / нет поля / брак — характер по умолчанию: 0.3.
+# ---------------------------------------------------------------
+DEFAULT_TEMPERATURE = 0.3
+
+
+def mood_params() -> dict:
+    """Темперамент из доктрины Создателя. Валидно — берём, брак — молча дефолт.
+
+    Формат в creator_doctrine.json:
+        {"doctrine": "...", "mood": {"temperature": 0.6, "top_p": 0.8}}
+    Границы здравого смысла: temperature 0.05..2.0, top_p 0.05..1.0 —
+    всё, что вне, считаем опечаткой и игнорируем ЦЕЛИКОМ (полумеры
+    из битого файла опаснее дефолта).
+    """
+    try:
+        raw = Path(config.DOCTRINE_FILE).read_text(encoding="utf-8")
+        mood = (json.loads(raw) or {}).get("mood")
+        if not isinstance(mood, dict):
+            return {}
+        t = float(mood.get("temperature", DEFAULT_TEMPERATURE))
+        if not (0.05 <= t <= 2.0):
+            return {}
+        out = {"temperature": t}
+        if "top_p" in mood:
+            p = float(mood["top_p"])
+            if 0.05 <= p <= 1.0:
+                out["top_p"] = p
+        return out
+    except Exception:   # нет файла, битый JSON, не те типы — дефолт
+        return {}
 
 
 class BrainClient:
@@ -56,11 +94,20 @@ class BrainClient:
 
     # ---------- обычный чат ----------
 
-    def chat(self, messages: list, gen_tokens: Optional[int] = None) -> str:
-        """Чат без JSON-дисциплины. max_tokens не выше бюджета генерации (0.3)."""
+    def chat(self, messages: list, gen_tokens: Optional[int] = None,
+             temperature: Optional[float] = None) -> str:
+        """Чат без JSON-дисциплины. max_tokens не выше бюджета генерации (0.3).
+
+        Температура: явный аргумент > настроение из доктрины (№9) > 0.3.
+        """
         cap = config.GENERATION_BUDGET_TOKENS
         mt = cap if gen_tokens is None else min(int(gen_tokens), cap)
-        payload = {"messages": messages, "temperature": 0.3, "max_tokens": mt}
+        mood = mood_params()
+        temp = (float(temperature) if temperature is not None
+                else mood.get("temperature", DEFAULT_TEMPERATURE))
+        payload = {"messages": messages, "temperature": temp, "max_tokens": mt}
+        if temperature is None and "top_p" in mood:
+            payload["top_p"] = mood["top_p"]
         data = self._post("/v1/chat/completions", payload)
         return data["choices"][0]["message"]["content"]
 
@@ -83,13 +130,16 @@ class BrainClient:
             {"role": "user", "content": user_text},
         ]
         attempts = max(1, retries)
+        mood = mood_params()   # №9: характер — из доктрины Создателя
         for _ in range(attempts):
             payload = {
                 "messages": messages,
-                "temperature": 0.3,
+                "temperature": mood.get("temperature", DEFAULT_TEMPERATURE),
                 "max_tokens": config.GENERATION_BUDGET_TOKENS,
                 "response_format": {"type": "json_object"},
             }
+            if "top_p" in mood:
+                payload["top_p"] = mood["top_p"]
             data = self._post("/v1/chat/completions", payload)
             raw = data["choices"][0]["message"]["content"]
             try:
