@@ -23,6 +23,7 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SCHEDULE_STATE_FILE", tmp_path / "data" / "schedule_state.json")
     monkeypatch.setattr(config, "LIBRARIAN_STATE_FILE", tmp_path / "data" / "librarian_state.json")
     monkeypatch.setattr(config, "DRIVE_STATUS_FILE", tmp_path / "data" / "drive_status.json")
+    monkeypatch.setattr(config, "DOCTOR_STATE_FILE", tmp_path / "data" / "doctor_state.json")
     monkeypatch.setattr(config, "EARS_STATUS_FILE", tmp_path / "data" / "ears_status.json")
     monkeypatch.setattr(config, "EARS_LOG_FILE", tmp_path / "logs" / "ears_log.jsonl")
     monkeypatch.setattr(config, "EVOLUTION_DIR", tmp_path / "data" / "evolution")

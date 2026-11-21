@@ -59,12 +59,18 @@ def default_jobs() -> list[dict]:
         stats = Memory().compress_old(days=7)
         return "сжато %d воспоминаний" % stats["compressed"]
 
+    def _doctor_tick() -> str:
+        from core import doctor
+        return doctor.tick_auto()
+
     return [
         job("plan", "daily", at="08:00", what="план дня (Ф71)", run=_plan),
         job("diary", "daily", at="21:00", what="вечерний дневник (№8)",
             run=_diary_day),
         job("queue", "interval", every=60,
             what="очередь и вопросы (Ф74)", run=_questions.tick),
+        job("doctor", "interval", every=300,
+            what="автодоктор: осмотр и лечение дома (№21)", run=_doctor_tick),
         job("librarian", "interval", every=3600,
             what="библиотекарь: чтение дома", run=_librarian.tick),
         job("memory-compress", "weekly", weekday="sun", at="23:00",

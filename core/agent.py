@@ -233,6 +233,14 @@ class Agent:
             return Reply("Вот о чём я подумала:\n\n" + thought,
                          "python", "reflection")
 
+        # №21 доктор: осмотр дома текстом — без мозга и без лечения.
+        # Лечение — у кнопки 84 (с подтверждением) и автодоктора
+        # (слуга, мёртвый два осмотра подряд, поднимается сам).
+        if low in ("доктор", "осмотри дом", "осмотр"):
+            from core import doctor as _doctor
+            return Reply(_doctor.render(_doctor.check_all()),
+                         "python", "doctor")
+
         # Круг Д: библиотекарь — Марфа читает дом (механика, без LLM)
         if low in ("почитай", "прочитай", "что почитать"):
             from core.librarian import Librarian
