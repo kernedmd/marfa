@@ -90,10 +90,24 @@ def test_remember_empty_rejected(mem):
 
 import datetime as dt
 import json as _json
+import time as _time
 
 
 def _age_records(mem, days_old: float) -> None:
-    """Помолодить/постареть записи JSON-фоллбэка: сдвиг created_at назад."""
+    """Постареть записи: created_at назад, expire_at вперёд (TTL старушек не ест).
+
+    Урок станции 21.11: на Z440 стоит ChromaDB — Memory живёт на ней,
+    а не на JSON-фоллбэке песочницы. Стареть записи тест обязан уметь
+    на любом бэкенде (chroma.update сливает метаданные — проверено).
+    """
+    shift = days_old * 86400
+    if mem.backend is not None:      # ChromaDB: created_at/expire_at — метаданные
+        now = _time.time()
+        for r in mem.backend.all_records():
+            mem.backend.update(r["id"], {
+                "created_at": float(r.get("created_at", now)) - shift,
+                "expire_at": float(r.get("expire_at") or now) + shift})
+        return
     p = mem.fallback.path
     items = _json.loads(p.read_text(encoding="utf-8"))
     for r in items:

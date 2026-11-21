@@ -219,8 +219,11 @@ def _run_serve(monkeypatch, tmp_path, sd_module, sentinel=None,
                         tmp_path / "ears_status.json")
     if sentinel is not None:
         monkeypatch.setattr(ears, "NameSentinel", sentinel)
-    if sd_module is not None:
-        monkeypatch.setitem(sys.modules, "sounddevice", sd_module)
+    # None = «пакета нет»: None в sys.modules роняет import sounddevice
+    # ImportError'ом на ЛЮБОЙ машине — даже там, где пакет стоит в venv.
+    # Урок станции 21.11: настоящий sounddevice без микрофона провёл
+    # службу до честного «no_mic» — и тест «нет пакета» провалился.
+    monkeypatch.setitem(sys.modules, "sounddevice", sd_module)
 
     calls = {"n": 0}
 
