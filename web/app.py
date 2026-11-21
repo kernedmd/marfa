@@ -20,6 +20,7 @@ from core.dialog import DialogStore, _safe_session
 from core.questions import QuestionBank
 from safety.log_audit import audit
 from sensors.monitor import RAMMonitor
+from web.markdown_render import to_safe_html
 
 app = Flask(__name__)
 PORT_WEB = config.PORT_WEB
@@ -31,16 +32,21 @@ PANEL_HTML = """<!DOCTYPE html>
 <meta charset="utf-8">
 <title>Марфа — панель дома</title>
 <style>
-  body { font-family: system-ui, sans-serif; background: #10141c; color: #e8eaf0;
-         max-width: 720px; margin: 40px auto; padding: 0 16px; }
-  h1 { font-size: 22px; } h2 { font-size: 17px; margin-top: 28px; color: #9fc1ff; }
-  .card { background: #181e2a; border: 1px solid #2a3244; border-radius: 10px;
+  body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text);
+         max-width: 720px; margin: 40px auto; padding: 0 16px;
+         --bg:#10141c; --card:#181e2a; --border:#2a3244; --text:#e8eaf0; --h:#9fc1ff; }
+  body.light { --bg:#f4f6fa; --card:#ffffff; --border:#d0d7de; --text:#1f2328; --h:#3b5b8f; }
+  h1 { font-size: 22px; } h2 { font-size: 17px; margin-top: 28px; color: var(--h); }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
           padding: 14px 18px; margin: 10px 0; }
   .ok { color: #7fd88f; } .warn { color: #e6c86e; } .crit { color: #ff7f7f; }
-  a { color: #9fc1ff; }
+  a { color: var(--h); }
+  #theme { float: right; padding: 6px 12px; font-size: 13px; background: var(--card); color: var(--text);
+           border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
 </style>
 </head>
 <body>
+<button id="theme" onclick="toggleTheme()" title="сменить оформление">день</button>
 <h1>Марфа — панель дома</h1>
 
 <h2>Память RAM (Ф97)</h2>
@@ -138,6 +144,16 @@ function answer(qid) {
     body: JSON.stringify({id: qid, text: text})
   }).then(() => location.reload());
 }
+function applyTheme(t) {
+  document.body.className = (t === "light") ? "light" : "";
+  const b = document.getElementById("theme");
+  if (b) b.textContent = (t === "light") ? "ночь" : "день";
+  localStorage.setItem("marfa-theme", t);
+}
+function toggleTheme() {
+  applyTheme(document.body.className === "light" ? "dark" : "light");
+}
+applyTheme(localStorage.getItem("marfa-theme") || "dark");
 </script>
 </body>
 </html>
@@ -169,6 +185,23 @@ def _ears_state() -> dict:
 @app.get("/health")
 def health():
     return jsonify({"status": "ok", "port": PORT_WEB})
+
+
+@app.get("/api/health")
+def api_health():
+    """№13: живой статус-виджет — все три службы одной точкой.
+
+    Шапка чата опрашивает раз в 30 с: панель (сама), мозг (8082),
+    глаза (8083, кэшированный пинг — мёртвый порт не тормозит страницу).
+    """
+    from core.eyes import health_cached
+    return jsonify({
+        "status": "ok",
+        "port": PORT_WEB,
+        "panel": True,
+        "brain": _brain_health()["healthy"],
+        "eyes": health_cached(),
+    })
 
 
 @app.get("/api/status")
@@ -206,17 +239,28 @@ def api_chat():
         return jsonify({"reply": "Ошибка: " + str(e)}), 500
     DIALOGS.append(session, "user", text)          # ходы — после ответа:
     DIALOGS.append(session, "assistant", reply.text)  # неудача не портит память
-    return jsonify({"reply": reply.text, "session": session})
+    # №12: готовый безопасный HTML — панель не доверяет мозгу ни байтом
+    return jsonify({"reply": reply.text, "html": to_safe_html(reply.text),
+                    "session": session})
 
 
 @app.get("/api/dialog/<session>")
 def api_dialog(session):
-    """История сессии для страницы чата (переживает F5)."""
+    """История сессии для страницы чата (переживает F5).
+
+    №12: ответам Марфы прилагается безопасный HTML (сервер экранировал
+    всё до разметки); ходы Ильи остаются текстом — их и рендерить нечем.
+    """
     try:
         sid = _safe_session(session)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    return jsonify({"session": sid, "turns": DIALOGS.turns(sid)})
+    turns = DIALOGS.turns(sid)
+    return jsonify({"session": sid, "turns": [
+        {"role": t["role"], "text": t["text"],
+         "html": to_safe_html(t["text"]) if t["role"] == "assistant" else ""}
+        for t in turns
+    ]})
 
 
 # ---------- Круг Д: стремление ----------

@@ -4,21 +4,44 @@
     <meta charset="UTF-8">
     <title>Марфа</title>
     <style>
-        body { font-family: Arial; background: #0d1117; color: #c9d1d9; margin: 0; display: flex; flex-direction: column; height: 100vh; }
-        header { padding: 15px; background: #161b22; border-bottom: 1px solid #30363d; font-size: 18px; font-weight: bold; }
+        body { font-family: Arial; background: var(--bg); color: var(--text); margin: 0; display: flex; flex-direction: column; height: 100vh;
+               --bg:#0d1117; --hdr:#161b22; --card:#21262d; --border:#30363d; --text:#c9d1d9; --input:#0d1117; }
+        body.light { --bg:#f6f8fa; --hdr:#eaeef2; --card:#ffffff; --border:#d0d7de; --text:#1f2328; --input:#ffffff; }
+        header { padding: 15px; background: var(--hdr); border-bottom: 1px solid var(--border); font-size: 18px; font-weight: bold;
+                 display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+        .widgets { font-size: 13px; font-weight: normal; display: flex; align-items: center; gap: 6px; }
+        .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #6e7681; }
+        .dot.ok { background: #2ea043; } .dot.down { background: #d29922; }
+        #theme { padding: 6px 12px; font-size: 13px; font-weight: normal; background: var(--card); color: var(--text);
+                 border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
         #chat { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
         .msg { padding: 10px 15px; border-radius: 10px; max-width: 70%; line-height: 1.4; white-space: pre-wrap; }
         .user { background: #1f6feb; color: white; align-self: flex-end; }
-        .ai { background: #21262d; border: 1px solid #30363d; align-self: flex-start; }
-        #input-area { padding: 15px; background: #161b22; display: flex; gap: 10px; }
-        input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #30363d; background: #0d1117; color: white; outline: none; }
+        .ai { background: var(--card); border: 1px solid var(--border); color: var(--text); align-self: flex-start; }
+        .ai code { background: rgba(110,118,129,0.3); border-radius: 4px; padding: 1px 5px; font-family: Consolas, monospace; font-size: 0.95em; }
+        .ai pre { background: var(--input); border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+                  overflow-x: auto; white-space: pre-wrap; margin: 6px 0; }
+        .ai pre code { background: none; padding: 0; }
+        .ai h3, .ai h4, .ai h5 { margin: 8px 0 4px; }
+        .ai p { margin: 4px 0; }
+        .ai ul, .ai ol { margin: 4px 0; padding-left: 22px; }
+        #input-area { padding: 15px; background: var(--hdr); display: flex; gap: 10px; }
+        input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--input); color: var(--text); outline: none; }
         button { padding: 12px 20px; background: #238636; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
         button:hover { background: #2ea043; }
         .meta { font-size: 11px; color: #6e7681; align-self: center; }
     </style>
 </head>
 <body>
-    <header>Марфа</header>
+    <header>
+        <span>Марфа</span>
+        <span class="widgets">
+            <span class="dot" id="w-panel" title="панель"></span>панель
+            <span class="dot" id="w-brain" title="мозг 8082"></span>мозг
+            <span class="dot" id="w-eyes" title="глаза 8083"></span>глаза
+            <button id="theme" onclick="toggleTheme()" title="сменить оформление">день</button>
+        </span>
+    </header>
     <div id="chat"><div class="msg ai">Привет! Я Марфа. Спрашивай что угодно.</div></div>
     <div id="input-area">
         <input id="inp" placeholder="Напиши Марфе..." onkeydown="if(event.key==='Enter') send()">
@@ -39,14 +62,42 @@
                             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         }
 
-        function add(role, text) {
+        function add(role, text, html) {
             const c = document.getElementById('chat');
             const d = document.createElement('div');
             d.className = 'msg ' + (role === 'user' ? 'user' : 'ai');
-            d.textContent = text;              // textContent — не innerHTML
+            // №12: ответы Марфы — готовый HTML с сервера (сервер экранировал
+            // всё до разметки); всё остальное — textContent, не innerHTML
+            if (role === 'ai' && html) d.innerHTML = html;
+            else d.textContent = text;
             c.appendChild(d);
             c.scrollTop = c.scrollHeight;
         }
+
+        // №13: живой статус-виджет — три точки в шапке, опрос раз в 30 с
+        function widget(id, ok) {
+            const el = document.getElementById(id);
+            if (el) el.className = 'dot ' + (ok ? 'ok' : 'down');
+        }
+        function refreshWidgets() {
+            fetch('/api/health').then(r => r.json()).then(h => {
+                widget('w-panel', h.panel); widget('w-brain', h.brain); widget('w-eyes', h.eyes);
+            }).catch(() => {});
+        }
+        setInterval(refreshWidgets, 30000);
+        refreshWidgets();
+
+        // №16: день/ночь — выбор живёт в localStorage, обе страницы помнят
+        function applyTheme(t) {
+            document.body.className = (t === 'light') ? 'light' : '';
+            const b = document.getElementById('theme');
+            if (b) b.textContent = (t === 'light') ? 'ночь' : 'день';
+            localStorage.setItem('marfa-theme', t);
+        }
+        function toggleTheme() {
+            applyTheme(document.body.className === 'light' ? 'dark' : 'light');
+        }
+        applyTheme(localStorage.getItem('marfa-theme') || 'dark');
 
         // при входе: поднять прошлый разговор из дома
         fetch('/api/dialog/' + encodeURIComponent(SID))
@@ -54,7 +105,7 @@
             .then(d => {
                 if (d.turns && d.turns.length) {
                     document.getElementById('chat').innerHTML = '';
-                    d.turns.forEach(t => add(t.role, t.text));
+                    d.turns.forEach(t => add(t.role, t.text, t.html));
                     add('meta', '— разговор продолжается, Марфа помнит —');
                 }
             }).catch(() => {});
@@ -72,7 +123,7 @@
                     body: JSON.stringify({text: t, session: SID})
                 });
                 const d = await r.json();
-                add('ai', d.reply || 'Нет ответа');
+                add('ai', d.reply || 'Нет ответа', d.html);
             } catch(e) {
                 add('ai', 'Ошибка: ' + e);
             }

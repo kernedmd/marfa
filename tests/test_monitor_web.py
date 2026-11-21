@@ -2,9 +2,11 @@
 """Тесты Ф97 «монитор»: пороги 85/92, журнал переходов, панель web 5001."""
 import json
 import pytest
+from pathlib import Path
 from unittest.mock import patch
 
 from core import config
+from core.dialog import DialogStore
 from sensors.monitor import RAMMonitor, classify
 from web.app import app, PORT_WEB
 
@@ -132,3 +134,77 @@ def test_brain_health_reported_down(client, home):
 def test_port_web_is_not_forbidden():
     assert PORT_WEB == 5001
     assert PORT_WEB != config.PORT_FORBIDDEN
+
+
+# ---------- №13: живой статус-виджет ----------
+
+def test_api_health_all_three_services(client, home):
+    """/api/health отдаёт все три службы одной точкой — как требует №13."""
+    with patch("core.brain.BrainClient.health", return_value=True), \
+         patch("core.eyes.health_cached", return_value=False):
+        data = client.get("/api/health").get_json()
+    assert data["panel"] is True            # панель отвечает — она жива
+    assert data["brain"] is True            # мозг поднят
+    assert data["eyes"] is False            # глаза честно молчат (не врёт)
+
+
+def test_api_health_brain_down(client, home):
+    with patch("core.brain.BrainClient.health", return_value=False), \
+         patch("core.eyes.health_cached", return_value=True):
+        data = client.get("/api/health").get_json()
+    assert data["brain"] is False and data["eyes"] is True
+
+
+def test_chat_page_has_widget_dots(client, home):
+    """Шапка чата: три точки (панель/мозг/глаза) и опрос раз в 30 с."""
+    html = client.get("/chat").data.decode("utf-8")
+    for w in ("w-panel", "w-brain", "w-eyes"):
+        assert w in html
+    assert "setInterval(refreshWidgets, 30000)" in html
+
+
+# ---------- №16: день/ночь ----------
+
+def test_day_night_toggle_on_both_pages(client, home):
+    """Переключатель на обеих страницах, выбор в localStorage."""
+    chat = client.get("/chat").data.decode("utf-8")
+    assert "marfa-theme" in chat and "toggleTheme" in chat and "body.light" in chat
+    panel = client.get("/").data.decode("utf-8")
+    assert "marfa-theme" in panel and "toggleTheme" in panel and "body.light" in panel
+
+
+# ---------- №12: Markdown в ответах ----------
+
+def test_api_chat_returns_safe_html(client, home, monkeypatch):
+    """/api/chat прикладывает готовый HTML: жирный — <b>, тег мозга — мёртв."""
+    import web.app as webapp
+    from core.agent import Reply
+
+    class FakeAgent:
+        def handle(self, text, history=None):
+            return Reply("итог: **42** и <script>хрень</script>")
+
+    monkeypatch.setattr(webapp, "Agent", lambda: FakeAgent())
+    monkeypatch.setattr(webapp, "DIALOGS", DialogStore(home / "data" / "dialog"))
+    data = client.post("/api/chat", json={"text": "вопрос", "session": "md1"}).get_json()
+    assert data["reply"].startswith("итог")
+    assert "<b>42</b>" in data["html"]
+    assert "<script>" not in data["html"]
+    assert "&lt;script&gt;" in data["html"]
+
+
+def test_api_dialog_html_only_for_marfa(client, home, monkeypatch):
+    """История: HTML — только ответам Марфы, ходы Ильи — чистый текст."""
+    import web.app as webapp
+    monkeypatch.setattr(webapp, "DIALOGS", DialogStore(home / "data" / "dialog"))
+    webapp.DIALOGS.append("md2", "user", "моя **реплика**")
+    webapp.DIALOGS.append("md2", "assistant", "ответ со **списком**:\n- пункт")
+    turns = client.get("/api/dialog/md2").get_json()["turns"]
+    assert turns[0]["html"] == ""                       # Илья — текстом
+    assert "<b>списком</b>" in turns[1]["html"]
+    assert "<li>пункт</li>" in turns[1]["html"]
+
+
+def test_stale_chat_copy_removed():
+    """Раздел 8 протокола: у страницы чата одно имя, одно место."""
+    assert not (Path(__file__).resolve().parents[1] / "web" / "chat.html").exists()
