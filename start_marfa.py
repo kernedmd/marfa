@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 r"""start_marfa.py — №22: автозапуск дома одной командой (роадмап 30 фишек).
 
-Поднимает всех слуг дома: мозг 8082 + глаза 8083 + панель 5001.
+Поднимает всех слуг дома: мозг 8082 + глаза 8083 + панель 5001 + уши (служба).
 Запуск из корня дома:
     venv\Scripts\python.exe start_marfa.py
-    venv\Scripts\python.exe start_marfa.py --в-планировщик   # + старт при входе в Windows
+    venv\Scripts\python.exe start_marfa.py --в-планировщик   # автомат навсегда
 
 Как это работает:
 - конфиг — start_marfa.json рядом со скриптом; при первом запуске создаётся
-  сам (шаблон). Все три команды вписаны из живой кнопки Создателя
+  сам (шаблон). Все команды вписаны из живой кнопки Создателя
   (Старт_Марфа.bat от 17.11.2026): мозг Qwen3-30B-A3B Q4_K_M на CPU,
   глаза Qwen2.5-VL-3B + mmproj на CUDA, панель Flask 5001.
   Сменил модель или квант — правь start_marfa.json;
@@ -17,6 +17,14 @@ r"""start_marfa.py — №22: автозапуск дома одной кома�
   а Создатель видит логи каждого;
 - глаза: холодный старт CUDA ~50 с — ждём до 90 с; панель — до 15 с;
   мозг на CPU разогревается минутами — не ждём, проверь позже «статус»;
+- уши — не HTTP-слуга, а вечная служба (sensors\ears.py --service):
+  живость — по статус-файлу data\ears_status.json (сердцебиение ≤2 мин
+  назад). Нет микрофона/модели — служба не умирает, ждёт и пишет честный
+  статус; воткнешь микрофон — ухо проснётся само;
+- --в-планировщик вписывает в планировщик Windows ДВЕ задачи:
+  «Марфа» — поднять дом при входе в систему;
+  «Марфа-синхронизация» — scripts\80_sync_github.bat /auto каждые 2 часа
+  ( петля дом<-^>GitHub<-^>архитектор ходит сама, без нажатий);
 - журнал старта — logs/startup.log.
 
 Живость: мозг и глаза — llama-server, /health; панель — /api/status.
@@ -26,6 +34,7 @@ r"""start_marfa.py — №22: автозапуск дома одной кома�
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import subprocess
 import sys
@@ -37,6 +46,8 @@ import requests
 HOME = Path(__file__).resolve().parent
 CONFIG_FILE = HOME / "start_marfa.json"
 LOG_FILE = HOME / "logs" / "startup.log"
+EARS_STATUS_FILE = HOME / "data" / "ears_status.json"  # пишет служба ушей
+EARS_FRESH_SECS = 120        # сердцебиение свежее этого — ухо живо
 
 # (имя, порт, путь здоровья, поле конфига, сколько секунд ждать старта)
 SERVICES = [
@@ -60,6 +71,7 @@ TEMPLATE = {
         "venv\\Scripts\\python.exe -m flask --app web.app run "
         "--host 127.0.0.1 --port 5001"
     ),
+    "ears_cmd": "venv\\Scripts\\python.exe sensors\\ears.py --service",
 }
 
 
@@ -108,17 +120,44 @@ def _wait(port: int, path: str, timeout: float, poll: float = 2.0) -> bool:
 
 
 def register_scheduler() -> bool:
-    """Вписать дом в автозагрузку Windows: задача «Марфа» при входе."""
-    cmd = [
-        "schtasks", "/Create", "/F",
-        "/TN", "Марфа",
-        "/TR", '"%s" "%s"' % (sys.executable, str(Path(__file__).resolve())),
-        "/SC", "ONLOGON",
+    r"""Вписать дом в автозагрузку Windows — обе задачи (Требование Создателя:
+    «всё, что мы делаем, запускается автоматом»).
+
+    «Марфа»               — поднять дом при входе в Windows (start_marfa.py);
+    «Марфа-синхронизация» — scripts\80_sync_github.bat /auto каждые 2 часа:
+    петля дом<-^>GitHub<-^>архитектор ходит сама, без нажатий кнопки.
+    """
+    tasks = [
+        ("Марфа",
+         ["schtasks", "/Create", "/F",
+          "/TN", "Марфа",
+          "/TR", '"%s" "%s"' % (sys.executable, str(Path(__file__).resolve())),
+          "/SC", "ONLOGON"]),
+        ("Марфа-синхронизация",
+         ["schtasks", "/Create", "/F",
+          "/TN", "Марфа-синхронизация",
+          "/TR", '"%s" /auto'
+          % str(HOME / "scripts" / "80_sync_github.bat"),
+          "/SC", "HOURLY", "/MO", "2"]),
     ]
+    ok_all = True
+    for _name, cmd in tasks:
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            ok_all = ok_all and r.returncode == 0
+        except Exception:
+            ok_all = False
+    return ok_all
+
+
+def _ears_alive() -> bool:
+    """Живость ушей: служба пишет сердцебиение в data\\ears_status.json;
+    свежее %d с — ухо слушает. Файла/свежести нет — не живо.""" % EARS_FRESH_SECS
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        return r.returncode == 0
-    except Exception:
+        rec = json.loads(EARS_STATUS_FILE.read_text(encoding="utf-8"))
+        ts = dt.datetime.fromisoformat(rec["ts"])
+        return (dt.datetime.now() - ts).total_seconds() <= EARS_FRESH_SECS
+    except (OSError, ValueError, KeyError):
         return False
 
 
@@ -132,7 +171,8 @@ def main(argv=None) -> int:
 
     if args.scheduler:
         ok = register_scheduler()
-        print("планировщик: " + ("дом вписан в автозагрузку (задача «Марфа»)"
+        print("планировщик: " + ("дом вписан в автозагрузку — «Марфа» (при входе) "
+                                 "и «Марфа-синхронизация» (каждые 2 часа)"
                                  if ok else "не удалось — запусти от администратора"))
         _log("планировщик: " + ("ок" if ok else "сбой"))
         return 0 if ok else 1
@@ -165,6 +205,19 @@ def main(argv=None) -> int:
             started.append(name)
         else:
             print("   НЕ ожил за %d с — посмотри его консоль" % wait_secs)
+
+    # -- уши: четвёртый слуга, не HTTP — живость по статус-файлу ----------
+    # старые конфиги без ears_cmd получают команду по умолчанию (апгрейд на лету)
+    ears_cmd = (cfg.get("ears_cmd") or TEMPLATE["ears_cmd"]).strip()
+    if _ears_alive():
+        print("уши: уже жив — слушают, не трогаю")
+        skipped.append("уши")
+    else:
+        print("уши: поднимаю службу слуха...")
+        _spawn(ears_cmd)
+        print("   ухо без микрофона не умирает: пишет статус и ждёт, пока воткнёшь")
+        started.append("уши")
+
     _log("старт: подняты %s; уже жили %s" % (started or "—", skipped or "—"))
 
     if first_run_brain_empty:

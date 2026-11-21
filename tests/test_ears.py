@@ -203,6 +203,154 @@ def test_demo_missing_sounddevice_speaks_russian(monkeypatch, capsys):
     assert "venv" in out                        # правильный питон
 
 
+# ---------- служба ушей: вечный сторож для автозапуска ----------
+
+class _Stop(BaseException):
+    """Разрыв бесконечного цикла службы в тестах (как Ctrl+C — его служба
+    пропускает мимо всех except Exception)."""
+
+
+def _run_serve(monkeypatch, tmp_path, sd_module, sentinel=None,
+               stop_after=2):
+    """serve() с подменённым миром; сон выбрасывает _Stop после N вызовов."""
+    import sensors.ears as ears
+
+    monkeypatch.setattr(ears.config, "EARS_STATUS_FILE",
+                        tmp_path / "ears_status.json")
+    if sentinel is not None:
+        monkeypatch.setattr(ears, "NameSentinel", sentinel)
+    if sd_module is not None:
+        monkeypatch.setitem(sys.modules, "sounddevice", sd_module)
+
+    calls = {"n": 0}
+
+    def fake_sleep(secs):
+        calls["n"] += 1
+        if calls["n"] >= stop_after:
+            raise _Stop()
+
+    monkeypatch.setattr(ears.time, "sleep", fake_sleep)
+    try:
+        ears.serve(retry_secs=0.01, heartbeat=0.01)
+    except _Stop:
+        pass
+    status = tmp_path / "ears_status.json"
+    rec = json.loads(status.read_text(encoding="utf-8")) if status.exists() else {}
+    return rec, calls["n"]
+
+
+class _FakeStream:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class _SdOk:
+    """Фальшивый sounddevice: поток открывается и живёт."""
+
+    RawInputStream = staticmethod(lambda **kw: _FakeStream())
+
+
+class _SdNoMic:
+    """Фальшивый sounddevice: как Z440 без микрофона («Error querying device -1»)."""
+
+    class PortAudioError(Exception):
+        pass
+
+    @staticmethod
+    def RawInputStream(**kw):
+        raise _SdNoMic.PortAudioError("Error querying device -1")
+
+
+class _SentinelOk:
+    sample_rate = 16000
+    model_dir = Path("stub-model")
+
+    def __init__(self, *a, **k):
+        pass
+
+
+def test_service_no_mic_reports_and_retries(monkeypatch, tmp_path):
+    """Урок Z440: микрофона нет — служба НЕ умирает, пишет статус и ждёт."""
+    rec, sleeps = _run_serve(monkeypatch, tmp_path, _SdNoMic(),
+                             sentinel=_SentinelOk, stop_after=3)
+    assert rec["state"] == "no_mic"
+    assert "device -1" in rec["error"]          # диагноз сохранён
+    assert sleeps >= 3                          # цикл ждал и пробовал снова
+
+
+def test_service_no_model_reports_and_retries(monkeypatch, tmp_path):
+    """Модели нет — честный статус, служба жива (кнопка 85 чинит параллельно)."""
+
+    def no_model(*a, **k):
+        raise FileNotFoundError("модель ушей не найдена: stub")
+
+    rec, sleeps = _run_serve(monkeypatch, tmp_path, _SdOk(),
+                             sentinel=no_model, stop_after=2)
+    assert rec["state"] == "no_model"
+    assert sleeps >= 2
+
+
+def test_service_no_sounddevice_reports(monkeypatch, tmp_path):
+    """sounddevice не поставлен — статус с командой установки, не traceback."""
+    rec, sleeps = _run_serve(monkeypatch, tmp_path, None,
+                             sentinel=_SentinelOk, stop_after=2)
+    assert rec["state"] == "no_sounddevice"
+    assert "pip install sounddevice" in rec["error"]
+    assert sleeps >= 2
+
+
+def test_service_streams_and_heartbeats(monkeypatch, tmp_path):
+    """Ухо живо: статус ok, сердце бьётся (каждый heartbeat — свежий ts)."""
+    rec, sleeps = _run_serve(monkeypatch, tmp_path, _SdOk(),
+                             sentinel=_SentinelOk, stop_after=3)
+    assert rec["state"] == "ok"                  # сердцебиение дошло до файла
+    assert rec.get("last_wake", "") == ""         # имени ещё не слышали
+
+
+def test_service_wake_updates_last_wake(monkeypatch, tmp_path):
+    """Слышала имя — статус запоминает, что и когда (для панели и статуса дома)."""
+    import sensors.ears as ears
+
+    monkeypatch.setattr(ears.config, "EARS_STATUS_FILE",
+                        tmp_path / "ears_status.json")
+    monkeypatch.setitem(sys.modules, "sounddevice", _SdOk())
+
+    class SentinelWithSpeech:
+        sample_rate = 16000
+        model_dir = Path("stub-model")
+
+        def feed(self, chunk):
+            return {"event": "wake", "text": "марфа включи свет", "word": "марфа"}
+
+    monkeypatch.setattr(ears, "NameSentinel", SentinelWithSpeech)
+
+    captured = {}
+
+    class SdCallback(_SdOk):
+        @staticmethod
+        def RawInputStream(**kw):
+            captured.update(kw)      # ловим callback потока
+            return _FakeStream()
+
+    monkeypatch.setitem(sys.modules, "sounddevice", SdCallback())
+
+    def fake_sleep(secs):
+        captured["callback"](b"\x00" * 3200, 0, None, None)  # кадр с именем
+        raise _Stop()
+
+    monkeypatch.setattr(ears.time, "sleep", fake_sleep)
+    try:
+        ears.serve(retry_secs=0.01, heartbeat=0.01)
+    except _Stop:
+        pass
+    rec = json.loads((tmp_path / "ears_status.json").read_text(encoding="utf-8"))
+    assert rec["state"] == "ok"
+    assert "марфа включи свет" in rec["last_wake"]
+
+
 # ---------- интеграция: живая модель (станция/дом, если есть) ----------
 
 @pytest.mark.parametrize("model_dir", [

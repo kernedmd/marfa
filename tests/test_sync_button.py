@@ -89,12 +89,31 @@ def test_self_update_via_temp_copy():
     v3.3: самодиагностика ПО ПУТИ (%~f0), а не по переменной окружения —
     переменная жила между нажатиями в одном окне cmd, и второй запуск
     шёл прямо из дерева, который слияние переписывало на ходу.
+    v3.4: оба рестарта тащат за собой аргументы (%*) — /auto от
+    планировщика доживает до конца прогона.
     """
     t = _text()
     assert 'if /i "%~f0"=="%TEMP%\\marfa_sync_run.bat" goto :run' in t
     assert "%TEMP%\\marfa_sync_run.bat" in t
-    # рестарты через cmd /c: свежее окружение, счётчик честно обнуляется
-    assert t.count('cmd /c ""%TEMP%\\marfa_sync_run.bat""') == 2  # 0a и 3z
+    # рестарты через cmd /c: свежее окружение + аргументы на борту
+    assert t.count('cmd /c ""%TEMP%\\marfa_sync_run.bat" %*"') == 2  # 0a и 3z
+
+
+def test_auto_mode_for_scheduler():
+    """v3.4: /auto — режим для задачи «Марфа-синхронизация» (каждые 2 часа).
+
+    Планировщик зовёт кнопку без человека: пауз быть не должно, а аргумент
+    обязан пережить оба рестарта кнопки (0a и 3z).
+    """
+    t = _text()
+    # аргумент разбирается после :run — в потомке, у которого %1 есть
+    assert 'if /i "%~1"=="/auto" set "MARFA_SYNC_AUTO=1"' in t
+    # обе паузы (успех и :fail) уважают автоматный режим
+    assert t.count("if not defined MARFA_SYNC_AUTO pause") == 2
+    # голых pause не осталось — планировщик не зависнет в невидимом окне
+    bare = [ln for ln in t.splitlines()
+            if ln.strip() == "pause"]
+    assert not bare
 
 
 def test_fat_history_surgery():

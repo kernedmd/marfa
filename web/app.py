@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import json
 from flask import Flask, jsonify, request
 
 from core import config
@@ -44,6 +45,9 @@ PANEL_HTML = """<!DOCTYPE html>
 <h2>Мозг (30B, порт 8082)</h2>
 <div class="card" id="brain">проверяю...</div>
 
+<h2>Уши (сторож имени «Марфа»)</h2>
+<div class="card" id="ears">прислушиваюсь...</div>
+
 <h2>СТРАЖ (аудит логов, Ф81)</h2>
 <div class="card" id="guard">проверяю цепочку...</div>
 
@@ -64,6 +68,24 @@ fetch("/api/status").then(r => r.json()).then(s => {
   document.getElementById("brain").innerHTML = b.healthy
     ? "<b class='ok'>жив</b> (" + b.url + ")"
     : "<b class='crit'>не отвечает</b> (" + b.url + ") — грузится или выключен";
+  const e = s.ears;
+  if (e.state === "ok") {
+    document.getElementById("ears").innerHTML =
+      "<b class='ok'>слушают</b>" +
+      (e.last_wake ? " — последний зов: " + e.last_wake : " — имени ещё не слышали");
+  } else if (e.state === "no_mic") {
+    document.getElementById("ears").innerHTML =
+      "<b class='warn'>ждут микрофон</b> — воткни или выбери устройством ввода";
+  } else if (e.state === "no_model") {
+    document.getElementById("ears").innerHTML =
+      "<b class='warn'>модель ушей не найдена</b> — нажми scripts\\85_fix_ears.bat";
+  } else if (e.state === "no_sounddevice") {
+    document.getElementById("ears").innerHTML =
+      "<b class='warn'>нет sounddevice</b> — pip install sounddevice в venv Марфы";
+  } else {
+    document.getElementById("ears").innerHTML =
+      "<b class='crit'>служба ушей не отвечает</b> — поднимается со стартом дома";
+  }
   document.getElementById("guard").innerHTML =
     "вердикт: <b class='" + (s.guard_audit_verdict === "OK" ? "ok" : "crit") + "'>" +
     s.guard_audit_verdict + "</b>";
@@ -83,6 +105,21 @@ def _brain_health() -> dict:
         return {"healthy": False, "url": config.BRAIN_URL}
 
 
+def _ears_state() -> dict:
+    """Состояние ушей — из статус-файла службы (data\\ears_status.json).
+
+    Файла нет — служба ещё не поднималась (или дом только что встал):
+    честный state=down, панель не врёт и не падает.
+    """
+    try:
+        rec = json.loads(Path(config.EARS_STATUS_FILE).read_text(encoding="utf-8"))
+        return {"state": rec.get("state", "down"),
+                "last_wake": rec.get("last_wake", ""),
+                "ts": rec.get("ts", "")}
+    except (OSError, ValueError):
+        return {"state": "down", "last_wake": "", "ts": ""}
+
+
 @app.get("/health")
 def health():
     return jsonify({"status": "ok", "port": PORT_WEB})
@@ -94,6 +131,7 @@ def api_status():
     return jsonify({
         "ram": ram,
         "brain": _brain_health(),
+        "ears": _ears_state(),
         "guard_audit_verdict": audit()["verdict"],
     })
 

@@ -18,6 +18,7 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "MONITOR_STATUS_FILE", tmp_path / "data" / "monitor_status.json")
     monkeypatch.setattr(config, "MONITOR_LOG_FILE", tmp_path / "logs" / "monitor_log.jsonl")
     monkeypatch.setattr(config, "GUARD_LOG_FILE", tmp_path / "logs" / "guard_log.jsonl")
+    monkeypatch.setattr(config, "EARS_STATUS_FILE", tmp_path / "data" / "ears_status.json")
     config.ensure_dirs()
     yield tmp_path
 
@@ -84,6 +85,7 @@ def test_panel_renders(client, home):
     assert "Память RAM (Ф97)" in html
     assert "5000 не трогаем" in html
     assert "44 из 64" in html
+    assert "Уши (сторож имени «Марфа»)" in html   # карточка ушей на панели
 
 
 def test_api_status(client, home):
@@ -93,6 +95,31 @@ def test_api_status(client, home):
     assert data["ram"]["level"] in ("OK", "WARN", "CRIT")
     assert "brain" in data and data["brain"]["healthy"] in (True, False)
     assert data["guard_audit_verdict"] in ("OK", "TAMPERED")
+    assert data["ears"]["state"] == "down"          # службы ещё нет — честно
+
+
+def test_api_status_reports_ears_states(client, home):
+    """Карточка ушей читает статус-файл службы: панель не врёт."""
+    from web.app import _ears_state
+    # служба ждёт микрофон (Z440 без микрофона)
+    config.EARS_STATUS_FILE.write_text(
+        json.dumps({"ts": "2026-11-20T12:00:00", "sensor": "ears",
+                    "state": "no_mic", "error": "Error querying device -1"}),
+        encoding="utf-8")
+    r = client.get("/api/status")
+    assert r.get_json()["ears"]["state"] == "no_mic"
+    # ухо живо и слышало зов
+    config.EARS_STATUS_FILE.write_text(
+        json.dumps({"ts": "2026-11-20T12:01:00", "sensor": "ears",
+                    "state": "ok",
+                    "last_wake": "11:59 | марфа включи свет"}),
+        encoding="utf-8")
+    data = client.get("/api/status").get_json()["ears"]
+    assert data["state"] == "ok"
+    assert "марфа включи свет" in data["last_wake"]
+    # мусор в файле — панель не падает, честный down
+    config.EARS_STATUS_FILE.write_text("не json", encoding="utf-8")
+    assert _ears_state()["state"] == "down"
 
 
 def test_brain_health_reported_down(client, home):

@@ -15,10 +15,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import start_marfa as sm  # noqa: E402
 
 
-def _cfg(tmp_path, brain="", eyes="run eyes", panel="run panel"):
+def _cfg(tmp_path, brain="", eyes="run eyes", panel="run panel",
+         ears="run ears"):
     p = tmp_path / "start_marfa.json"
     p.write_text(json.dumps({"brain_cmd": brain, "eyes_cmd": eyes,
-                             "panel_cmd": panel}, ensure_ascii=False),
+                             "panel_cmd": panel, "ears_cmd": ears},
+                            ensure_ascii=False),
                  encoding="utf-8")
     return p
 
@@ -62,7 +64,8 @@ def test_wait_timeout(monkeypatch):
 
 # ---------- main ----------
 
-def _run_main(monkeypatch, tmp_path, alive_ports, cfg_brain=""):
+def _run_main(monkeypatch, tmp_path, alive_ports, cfg_brain="",
+              ears_alive=False):
     """main() с подменёнными швами; возвращает (код, вывод, список spawn)."""
     spawned, logged = [], []
     monkeypatch.setattr(sm, "_alive",
@@ -70,6 +73,7 @@ def _run_main(monkeypatch, tmp_path, alive_ports, cfg_brain=""):
     monkeypatch.setattr(sm, "_spawn", lambda cmd: spawned.append(cmd))
     monkeypatch.setattr(sm, "_wait", lambda p, path, t, poll=2.0: True)
     monkeypatch.setattr(sm, "_log", lambda line: logged.append(line))
+    monkeypatch.setattr(sm, "_ears_alive", lambda: ears_alive)
     cfg = _cfg(tmp_path, brain=cfg_brain)
     import io
     import contextlib
@@ -81,27 +85,28 @@ def _run_main(monkeypatch, tmp_path, alive_ports, cfg_brain=""):
 
 def test_main_all_alive(monkeypatch, tmp_path):
     rc, out, spawned, logged = _run_main(monkeypatch, tmp_path,
-                                         {8082, 8083, 5001})
+                                         {8082, 8083, 5001}, ears_alive=True)
     assert rc == 0
     assert not spawned
-    assert out.count("уже жив") == 3
+    assert out.count("уже жив") == 4          # мозг, глаза, панель, уши
+    assert "уши: уже жив" in out
     assert logged and "уже жили" in logged[0]
 
 
 def test_main_starts_eyes_only(monkeypatch, tmp_path):
-    """Мозг и панель живы, глаза нет — поднимаются только глаза."""
+    """Мозг и панель живы, глаза и уши нет — поднимаются глаза и уши."""
     rc, out, spawned, _ = _run_main(monkeypatch, tmp_path, {8082, 5001})
     assert rc == 0
-    assert spawned == ["run eyes"]
+    assert spawned == ["run eyes", "run ears"]
     assert "ожил" in out
 
 
 def test_main_brain_without_cmd(monkeypatch, tmp_path):
     """Мозг не жив и команды нет — честная подсказка, дом не блокируется."""
     rc, out, spawned, _ = _run_main(monkeypatch, tmp_path, {8083, 5001},
-                                    cfg_brain="")
+                                    cfg_brain="", ears_alive=True)
     assert rc == 0
-    assert not spawned                      # глаза и панель уже живы
+    assert not spawned                      # глаза, панель и уши уже живы
     assert "впиши" in out and "brain_cmd" in out
     assert "МОЗГ" in out
 
@@ -109,15 +114,58 @@ def test_main_brain_without_cmd(monkeypatch, tmp_path):
 def test_main_brain_cmd_used(monkeypatch, tmp_path):
     """Мозг не жив, команда вписана — поднимается и не ждётся (CPU)."""
     rc, out, spawned, _ = _run_main(monkeypatch, tmp_path, {8083, 5001},
-                                    cfg_brain="run brain")
+                                    cfg_brain="run brain", ears_alive=True)
     assert rc == 0
-    assert "run brain" in spawned
+    assert spawned == ["run brain"]
     assert "разогревается" in out
+
+
+# ---------- уши: четвёртый слуга ----------
+
+def test_main_ears_default_for_old_config(monkeypatch, tmp_path):
+    """Старый конфиг без ears_cmd — уши всё равно поднимаются (апгрейд на лету)."""
+    p = tmp_path / "start_marfa.json"
+    p.write_text(json.dumps({"brain_cmd": "", "eyes_cmd": "run eyes",
+                             "panel_cmd": "run panel"}, ensure_ascii=False),
+                 encoding="utf-8")
+    spawned, logged = [], []
+    monkeypatch.setattr(sm, "_alive", lambda port, path: True)
+    monkeypatch.setattr(sm, "_spawn", lambda cmd: spawned.append(cmd))
+    monkeypatch.setattr(sm, "_log", lambda line: logged.append(line))
+    monkeypatch.setattr(sm, "_ears_alive", lambda: False)
+    import io
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = sm.main(["--config", str(p)])
+    assert rc == 0
+    assert sm.TEMPLATE["ears_cmd"] in spawned     # команда по умолчанию
+    assert "службу слуха" in buf.getvalue()
+
+
+def test_ears_alive_by_heartbeat(monkeypatch, tmp_path):
+    """Живость ушей — по свежести сердцебиения в статус-файле."""
+    import datetime as dt
+    f = tmp_path / "ears_status.json"
+    monkeypatch.setattr(sm, "EARS_STATUS_FILE", f)
+    assert sm._ears_alive() is False               # файла нет
+    fresh = {"ts": dt.datetime.now().isoformat(timespec="seconds"),
+             "state": "ok"}
+    f.write_text(json.dumps(fresh), encoding="utf-8")
+    assert sm._ears_alive() is True                # сердце только что
+    stale = {"ts": (dt.datetime.now()
+                    - dt.timedelta(seconds=sm.EARS_FRESH_SECS + 10)).isoformat(),
+             "state": "ok"}
+    f.write_text(json.dumps(stale), encoding="utf-8")
+    assert sm._ears_alive() is False               # сердце замерло
+    f.write_text("не json вовсе", encoding="utf-8")
+    assert sm._ears_alive() is False               # мусор в файле — не живо
 
 
 # ---------- планировщик ----------
 
 def test_register_scheduler_ok(monkeypatch):
+    """Две задачи: дом при входе + синхронизация каждые 2 часа (/auto)."""
     seen = []
 
     class R:
@@ -129,9 +177,15 @@ def test_register_scheduler_ok(monkeypatch):
 
     monkeypatch.setattr(sm.subprocess, "run", fake_run)
     assert sm.register_scheduler() is True
-    assert seen[0][0].lower().endswith("schtasks") or "schtasks" in seen[0][0].lower()
-    assert "/SC" in seen[0] and "ONLOGON" in seen[0]
-    assert "Марфа" in seen[0]
+    assert len(seen) == 2
+    house, sync = seen
+    # дом при входе в Windows
+    assert "schtasks" in house[0].lower()
+    assert "/SC" in house and "ONLOGON" in house and "Марфа" in house
+    # петля синхронизации — сама, каждые 2 часа, без pause
+    assert "/SC" in sync and "HOURLY" in sync and "/MO" in sync
+    assert "Марфа-синхронизация" in sync
+    assert "80_sync_github.bat" in sync[6] and "/auto" in sync[6]
 
 
 def test_register_scheduler_fail(monkeypatch):

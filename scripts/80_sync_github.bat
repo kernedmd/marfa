@@ -1,9 +1,14 @@
 @echo off
 chcp 65001 >nul
-title МАРФА — синхронизация дома с GitHub (одна кнопка, v3.3)
-rem BTN_VER 3.3
+title МАРФА — синхронизация дома с GitHub (одна кнопка, v3.4)
+rem BTN_VER 3.4
 
 rem ============================================================
+rem  v3.4 (20.11.2026): режим /auto для планировщика — задача
+rem  «Марфа-синхронизация» (региструется start_marfa.py
+rem  --в-планировщик) сама зовёт эту кнопку каждые 2 часа: без
+rem  пауз, аргумент /auto переживает оба рестарта кнопки.
+rem  Требование Создателя: «всё, что мы делаем, запускается автоматом».
 rem  v3.3 (20.11.2026): incoming не копится + кнопка неуязвима к окну.
 rem  Урок прогона 04:17: в одном окне cmd переменная запуска жила
 rem  между нажатиями — кнопка шла прямо из дерева, который слияние
@@ -47,12 +52,14 @@ copy /y "%~f0" "%TEMP%\marfa_sync_run.bat" >nul 2>&1
 if not exist "%TEMP%\marfa_sync_run.bat" goto :run
 echo [0] Работаю с временной копии — репозиторий может обновить кнопку сам
 set "MARFA_SYNC_TURNS=1"
-cmd /c ""%TEMP%\marfa_sync_run.bat""
+rem /auto (планировщик) передаётся дальше — пауз не будет и в потомках
+cmd /c ""%TEMP%\marfa_sync_run.bat" %*"
 exit /b %ERRORLEVEL%
 
 :run
 cd /d C:\Marfa
 if not defined MARFA_SYNC_TURNS set "MARFA_SYNC_TURNS=1"
+if /i "%~1"=="/auto" set "MARFA_SYNC_AUTO=1"
 
 echo ============================================================
 echo  МАРФА — синхронизация Z440 ^<-^> GitHub ^<-^> Архитектор
@@ -147,7 +154,7 @@ if "%RUN_VER%"=="%TREE_VER%" goto :no_selfupdate
 echo [3z] Слияние принесло новую версию кнопки — перезапускаюсь ею
 set /a MARFA_SYNC_TURNS+=1
 copy /y "scripts\80_sync_github.bat" "%TEMP%\marfa_sync_run.bat" >nul
-cmd /c ""%TEMP%\marfa_sync_run.bat""
+cmd /c ""%TEMP%\marfa_sync_run.bat" %*"
 exit /b %ERRORLEVEL%
 :no_selfupdate
 
@@ -219,7 +226,7 @@ echo  Положи outgoing\marfa-%STAMP%.bundle в чат архитектор�
 echo  он заберёт его на станцию, прогонит тесты и вернёт правки.
 echo  ^(_тяжёлые старые bundle из outgoing уже убраны автоматом_^)
 echo ============================================================
-pause
+if not defined MARFA_SYNC_AUTO pause
 goto :eof
 
 :surgery
@@ -311,5 +318,5 @@ exit /b 0
 echo ============================================================
 echo  ОСТАНОВКА ПО ОШИБКЕ. Протокол: docs\SYNC_PROTOCOL_v1.md
 echo ============================================================
-pause
+if not defined MARFA_SYNC_AUTO pause
 exit /b 1

@@ -20,6 +20,7 @@ heard_wake): тестируются без модели и без микрофо
   C:\Marfa\venv\Scripts\python.exe -m pip install sounddevice
   C:\Marfa\venv\Scripts\python.exe sensors\ears.py --check    # без микрофона
   C:\Marfa\venv\Scripts\python.exe sensors\ears.py --demo 60  # позови Марфу
+  C:\Marfa\venv\Scripts\python.exe sensors\ears.py --service  # вечная служба (автозапуск)
 Лечится кнопкой scripts\85_fix_ears.bat (модель легла криво —
 вложенная распаковка архива с сайта).
 """
@@ -29,6 +30,7 @@ import datetime as dt
 import json
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -90,6 +92,27 @@ def model_files_ok(model_dir) -> bool:
     до него, и говорим по-русски.
     """
     return (Path(model_dir) / "am" / "final.mdl").is_file()
+
+
+def _write_status(state: str, error: str = "",
+                 last_wake: str = "") -> None:
+    r"""Сердцебиение службы ушей: data\ears_status.json.
+
+    Панель и старт дома смотрят сюда: живо ли ухо и что оно слышало
+    последним. Ошибки записи (диск/права) — не повод рвать слух.
+    """
+    rec = {"ts": dt.datetime.now().isoformat(timespec="seconds"),
+           "sensor": "ears", "state": state}
+    if error:
+        rec["error"] = error[:300]
+    if last_wake:
+        rec["last_wake"] = last_wake
+    try:
+        Path(config.EARS_STATUS_FILE).parent.mkdir(parents=True, exist_ok=True)
+        Path(config.EARS_STATUS_FILE).write_text(
+            json.dumps(rec, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
 
 
 class NameSentinel:
@@ -246,11 +269,88 @@ def demo(seconds: float = 60.0) -> None:
     print("Демо закончено. Лог: %s" % config.EARS_LOG_FILE)
 
 
+def serve(retry_secs: float = config.EARS_RETRY_SECS,
+          heartbeat: float = 30.0) -> None:
+    r"""СЛУЖБА УШЕЙ: вечный сторож имени для автозапуска дома.
+
+    Отличие от демо: никогда не сдаётся.
+      - микрофона нет / занят — пишет честный статус (нет микрофона),
+        ждёт и пробует снова: воткнул микрофон — ухо проснулось само,
+        дом перезапускать не надо;
+      - модели нет — то же самое (кнопка 85_fix_ears чинит параллельно);
+      - sounddevice не поставлен — то же самое;
+      - пока слушает — пишет сердцебиение в статус-файл: панель и
+        «статус дома» видят живое ухо (data\ears_status.json).
+    Выход — только Ctrl+C или смерть процесса. Лог всех событий —
+    logs\ears_log.jsonl (правило 6.6).
+    """
+    print("=" * 60)
+    print("МАРФА — служба ушей (сторож имени, вечный режим)")
+    print("=" * 60)
+    while True:
+        # -- деталь за деталью: чего не хватает — честно в статус и ждём --
+        try:
+            import sounddevice
+        except ImportError:
+            print("[%s] sounddevice не поставлен — ставь: pip install sounddevice"
+                  % dt.datetime.now().strftime("%H:%M:%S"))
+            _write_status("no_sounddevice", error="pip install sounddevice")
+            time.sleep(retry_secs)
+            continue
+        try:
+            s = NameSentinel()
+        except FileNotFoundError as e:
+            # модель не найдена/лежит криво — кнопка 85_fix_ears чинит,
+            # служба ждёт и подхватит, как только файлы встанут на место
+            print("[%s] %s" % (dt.datetime.now().strftime("%H:%M:%S"), e))
+            _write_status("no_model", error=str(e))
+            time.sleep(retry_secs)
+            continue
+
+        last_wake = ""
+
+        def callback(indata, frames, time_info, status):
+            nonlocal last_wake
+            out = s.feed(bytes(indata))
+            if out["event"] == "wake":
+                last_wake = ("%s | %s"
+                             % (dt.datetime.now().strftime("%H:%M:%S"),
+                                out["text"]))
+                print("[%s] [ИМЯ!] услышал: «%s» (сработало: %s)"
+                      % (dt.datetime.now().strftime("%H:%M:%S"),
+                         out["text"], out["word"]))
+                _write_status("ok", last_wake=last_wake)
+
+        try:
+            with sounddevice.RawInputStream(samplerate=s.sample_rate,
+                                            blocksize=4000, dtype="int16",
+                                            channels=1, callback=callback):
+                print("[%s] УХО ЖИВО: слушаю микрофон (%d Гц, модель %s)"
+                      % (dt.datetime.now().strftime("%H:%M:%S"),
+                         s.sample_rate, s.model_dir.name))
+                _write_status("ok", last_wake=last_wake)   # ухо открылось
+                while True:
+                    time.sleep(heartbeat)
+                    _write_status("ok", last_wake=last_wake)  # сердцебиение
+        except Exception as e:
+            # микрофон выдернули / занят / прав нет — не умираем: ждём и пробуем снова
+            print("[%s] микрофон недоступен: %s — жду %.0f с и пробую снова"
+                  % (dt.datetime.now().strftime("%H:%M:%S"), e, retry_secs))
+            _write_status("no_mic", error=str(e))
+            time.sleep(retry_secs)
+
+
 if __name__ == "__main__":
     arg = sys.argv[1] if len(sys.argv) > 1 else ""
     if arg == "--check":
         print(check(Path(sys.argv[2]) if len(sys.argv) > 2 else None))
     elif arg == "--demo":
         demo(float(sys.argv[2]) if len(sys.argv) > 2 else 60.0)
+    elif arg == "--service":
+        # вечная служба для автозапуска дома (start_marfa.py её поднимает)
+        try:
+            serve()
+        except KeyboardInterrupt:
+            print("служба ушей остановлена (Ctrl+C)")
     else:
         print(__doc__)
