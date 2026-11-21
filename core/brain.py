@@ -95,10 +95,13 @@ class BrainClient:
     # ---------- обычный чат ----------
 
     def chat(self, messages: list, gen_tokens: Optional[int] = None,
-             temperature: Optional[float] = None) -> str:
+             temperature: Optional[float] = None,
+             top_p: Optional[float] = None) -> str:
         """Чат без JSON-дисциплины. max_tokens не выше бюджета генерации (0.3).
 
         Температура: явный аргумент > настроение из доктрины (№9) > 0.3.
+        top_p (фикс сэмплинга Qwen3, живой язык): явный аргумент >
+        настроение из доктрины > параметр не шлётся вовсе.
         """
         cap = config.GENERATION_BUDGET_TOKENS
         mt = cap if gen_tokens is None else min(int(gen_tokens), cap)
@@ -106,8 +109,10 @@ class BrainClient:
         temp = (float(temperature) if temperature is not None
                 else mood.get("temperature", DEFAULT_TEMPERATURE))
         payload = {"messages": messages, "temperature": temp, "max_tokens": mt}
-        if temperature is None and "top_p" in mood:
-            payload["top_p"] = mood["top_p"]
+        top_p_val = (float(top_p) if top_p is not None
+                     else mood.get("top_p"))
+        if top_p_val is not None:
+            payload["top_p"] = top_p_val
         data = self._post("/v1/chat/completions", payload)
         return data["choices"][0]["message"]["content"]
 
