@@ -198,14 +198,40 @@ class Agent:
                     return Reply("Вот что помню:\n" + lines, "python", "recall")
                 return Reply("пока ничего не вспомнила по этому", "python", "recall")
 
-        # №8: вечерний дневник — механический каркас фактов дня (гейт §5:
-        # без LLM-саммари до вердикта батареи)
+        # №8: вечерний дневник. Гейт §5 (вердикт батареи 21.11.2026):
+        # есть резолюция Создателя — Марфа пишет «Живой рассказ» сама,
+        # по механическим фактам и с фиксом сэмплинга Qwen3.
         if low in ("подведи день", "подвести день", "дневник"):
             try:
-                text = diary.Diary().build_day()
+                text = diary.Diary().build_day(
+                    brain=self.brain if hasattr(self.brain, "chat") else None)
             except Exception as e:
                 return Reply("дневник не собрался: " + str(e), "python", "diary")
             return Reply("Вот дневник за сегодня:\n\n" + text, "python", "diary")
+
+        # Гейт §5, рефлексия: Марфа читает свои дневники и думает.
+        # Без резолюции честно говорит, чем включается.
+        if low in ("поразмышляй", "размышляй", "о чём думаешь", "о чем думаешь"):
+            if diary.resolution() is None:
+                return Reply("живой язык ещё не включён — кнопка 89 "
+                             "(scripts\\89_live_voice.bat), один раз",
+                             "python", "reflection")
+            d = diary.Diary()
+            if d.last_diary() is None:
+                return Reply("дневников ещё нет — сначала «подведи день», "
+                             "будет о чём думать", "python", "reflection")
+            try:
+                thought = d.reflect(
+                    brain=self.brain if hasattr(self.brain, "chat") else None)
+            except Exception as e:
+                return Reply("рефлексия не собралась: " + str(e),
+                             "python", "reflection")
+            if thought is None:
+                return Reply("мозг молчал — думать не стала, выдумывать "
+                             "не буду. Мысли копятся в data\\diary\\reflections.md",
+                             "python", "reflection")
+            return Reply("Вот о чём я подумала:\n\n" + thought,
+                         "python", "reflection")
 
         # Круг Д: библиотекарь — Марфа читает дом (механика, без LLM)
         if low in ("почитай", "прочитай", "что почитать"):
