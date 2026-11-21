@@ -7,13 +7,14 @@
         body { font-family: Arial; background: #0d1117; color: #c9d1d9; margin: 0; display: flex; flex-direction: column; height: 100vh; }
         header { padding: 15px; background: #161b22; border-bottom: 1px solid #30363d; font-size: 18px; font-weight: bold; }
         #chat { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
-        .msg { padding: 10px 15px; border-radius: 10px; max-width: 70%; line-height: 1.4; }
+        .msg { padding: 10px 15px; border-radius: 10px; max-width: 70%; line-height: 1.4; white-space: pre-wrap; }
         .user { background: #1f6feb; color: white; align-self: flex-end; }
         .ai { background: #21262d; border: 1px solid #30363d; align-self: flex-start; }
         #input-area { padding: 15px; background: #161b22; display: flex; gap: 10px; }
         input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #30363d; background: #0d1117; color: white; outline: none; }
         button { padding: 12px 20px; background: #238636; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
         button:hover { background: #2ea043; }
+        .meta { font-size: 11px; color: #6e7681; align-self: center; }
     </style>
 </head>
 <body>
@@ -24,26 +25,57 @@
         <button onclick="send()">Отправить</button>
     </div>
     <script>
+        // №11: имя сессии живёт в localStorage — F5 не рвёт разговор.
+        // Сама история ходов — в доме (data/dialog/): переживает и рестарт панели.
+        let SID = localStorage.getItem('marfa-session');
+        if (!SID) {
+            SID = 's' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+            localStorage.setItem('marfa-session', SID);
+        }
+
+        // XSS-гигиена (№12 из роадмапа-30): ВСЁ показываемое — через esc()
+        function esc(s) {
+            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        function add(role, text) {
+            const c = document.getElementById('chat');
+            const d = document.createElement('div');
+            d.className = 'msg ' + (role === 'user' ? 'user' : 'ai');
+            d.textContent = text;              // textContent — не innerHTML
+            c.appendChild(d);
+            c.scrollTop = c.scrollHeight;
+        }
+
+        // при входе: поднять прошлый разговор из дома
+        fetch('/api/dialog/' + encodeURIComponent(SID))
+            .then(r => r.json())
+            .then(d => {
+                if (d.turns && d.turns.length) {
+                    document.getElementById('chat').innerHTML = '';
+                    d.turns.forEach(t => add(t.role, t.text));
+                    add('meta', '— разговор продолжается, Марфа помнит —');
+                }
+            }).catch(() => {});
+
         async function send() {
             const i = document.getElementById('inp');
             const t = i.value.trim();
             if(!t) return;
-            const c = document.getElementById('chat');
-            c.innerHTML += `<div class="msg user">${t}</div>`;
+            add('user', t);
             i.value = '';
-            c.scrollTop = c.scrollHeight;
             try {
                 const r = await fetch('/api/chat', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({text: t})
+                    body: JSON.stringify({text: t, session: SID})
                 });
                 const d = await r.json();
-                c.innerHTML += `<div class="msg ai">${d.reply || 'Нет ответа'}</div>`;
+                add('ai', d.reply || 'Нет ответа');
             } catch(e) {
-                c.innerHTML += `<div class="msg ai">Ошибка: ${e}</div>`;
+                add('ai', 'Ошибка: ' + e);
             }
-            c.scrollTop = c.scrollHeight;
         }
     </script>
 </body>

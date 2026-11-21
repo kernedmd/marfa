@@ -245,7 +245,10 @@ class Agent:
 
     # ---------- главная точка ----------
 
-    def handle(self, user_text: str, reply_to=None) -> Reply:
+    def handle(self, user_text: str, reply_to=None,
+               history: Optional[list] = None) -> Reply:
+        """Главная точка дома. №10: history — прошлые ходы разговора
+        (DialogStore.render_messages), мозг видит диалог целиком."""
         hit, gate_reply = creator_gate.check(user_text)   # калитка Создателя
         if hit:
             return Reply(gate_reply, "python", "creator_gate")
@@ -254,7 +257,8 @@ class Agent:
             return fast
         try:
             decision = self.brain.ask_json(
-                user_text, system_extra=self._system_extra(user_text))
+                user_text, system_extra=self._system_extra(user_text),
+                history=history)
         except Exception as e:
             return Reply("мозг недоступен: " + str(e), "fallback", None)
         if isinstance(decision, dict) and isinstance(decision.get("action"), dict):

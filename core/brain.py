@@ -113,11 +113,15 @@ class BrainClient:
 
     # ---------- строгий JSON (ADR-002) ----------
 
-    def ask_json(self, user_text: str, system_extra: str = "", retries: int = 2) -> dict:
+    def ask_json(self, user_text: str, system_extra: str = "", retries: int = 2,
+                 history: Optional[list] = None) -> dict:
         """Спросить мозг и получить dict. Брак -> повтор с укором -> фоллбэк/ошибка.
 
         ADR-002: JSON, завёрнутый в посторонний текст, НЕ спасается регулярками —
         только честный повтор. Выдумывать ответ вместо мозга запрещено.
+        №10: history — прошлые ходы [{role, content}], вставляются ПОСЛЕ
+        системного промпта и ДО нового сообщения: префиксный KV-кэш цел,
+        разговор не рвётся.
         """
         messages = [
             {"role": "system", "content": (
@@ -127,8 +131,12 @@ class BrainClient:
                 "{\"action\": {\"tool\": \"...\", \"args\": {...}}}. "
                 "Не пиши ничего вне JSON. Если пользователь просто здоровается, "
                 "поздоровайся в ответ внутри JSON.\n" + system_extra)},
-            {"role": "user", "content": user_text},
         ]
+        for t in (history or []):   # только user/assistant, мусор — мимо
+            if isinstance(t, dict) and t.get("role") in ("user", "assistant") \
+                    and isinstance(t.get("content"), str) and t["content"].strip():
+                messages.append({"role": t["role"], "content": t["content"]})
+        messages.append({"role": "user", "content": user_text})
         attempts = max(1, retries)
         mood = mood_params()   # №9: характер — из доктрины Создателя
         for _ in range(attempts):

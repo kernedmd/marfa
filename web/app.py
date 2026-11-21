@@ -15,11 +15,13 @@ from flask import Flask, jsonify, request
 from core import config
 from core.agent import Agent
 from core.brain import BrainClient
+from core.dialog import DialogStore, _safe_session
 from safety.log_audit import audit
 from sensors.monitor import RAMMonitor
 
 app = Flask(__name__)
 PORT_WEB = config.PORT_WEB
+DIALOGS = DialogStore()          # №10/№11: память разговора живёт в доме
 
 PANEL_HTML = """<!DOCTYPE html>
 <html lang="ru">
@@ -143,15 +145,34 @@ def panel():
 
 @app.post("/api/chat")
 def api_chat():
+    """№10/№11: разговор с сессией. Панель держит имя сессии в localStorage,
+    дом — ходы в data/dialog/: F5 и рестарт панели разговор не рвут."""
     data = request.get_json(force=True, silent=True) or {}
-    text = data.get("text", "").strip()
+    text = (data.get("text") or "").strip()
     if not text:
         return jsonify({"error": "empty"}), 400
     try:
-        reply = Agent().handle(text)
-        return jsonify({"reply": reply.text})
+        session = _safe_session(str(data.get("session") or "default"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    history = DialogStore.render_messages(DIALOGS.turns(session))
+    try:
+        reply = Agent().handle(text, history=history)
     except Exception as e:
         return jsonify({"reply": "Ошибка: " + str(e)}), 500
+    DIALOGS.append(session, "user", text)          # ходы — после ответа:
+    DIALOGS.append(session, "assistant", reply.text)  # неудача не портит память
+    return jsonify({"reply": reply.text, "session": session})
+
+
+@app.get("/api/dialog/<session>")
+def api_dialog(session):
+    """История сессии для страницы чата (переживает F5)."""
+    try:
+        sid = _safe_session(session)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"session": sid, "turns": DIALOGS.turns(sid)})
 
 
 @app.get("/chat")
