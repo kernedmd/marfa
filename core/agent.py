@@ -142,12 +142,14 @@ def _house_state() -> str:
         "глаза: сенсор зрения 8083 жив, команда «посмотри» — опишу экран"
         if eyes.health_cached()
         else "глаза: сенсор 8083 не запущен (зрения сейчас нет)")
+    from core.uptime import started_hhmm
     return (
         "Состояние дома: мозг " + config.BRAIN_MODEL_NAME + " на " + config.BRAIN_URL +
         ", панель " + str(config.PORT_WEB) +
         ", контекст " + str(config.CONTEXT_TOKENS) +
         ", квант " + config.DEFAULT_QUANT +
-        ", RAM-бюджет " + str(config.RAM_BUDGET_GB) + " ГБ; " + eyes_note
+        ", RAM-бюджет " + str(config.RAM_BUDGET_GB) + " ГБ; " + eyes_note +
+        "; я не сплю с " + started_hhmm()
     )
 
 
@@ -232,6 +234,22 @@ class Agent:
                              "python", "reflection")
             return Reply("Вот о чём я подумала:\n\n" + thought,
                          "python", "reflection")
+
+        # №23 «сохрани себя»: бэкап души дома одной фразой
+        if low in ("сохрани себя", "бэкап", "backup"):
+            from core import backup as _backup
+            try:
+                report = _backup.create_backup()
+            except Exception as e:
+                return Reply("бэкап не собрался: " + str(e),
+                             "python", "backup")
+            return Reply(_backup.render(report), "python", "backup")
+
+        # №25 uptime: сколько панель не спит (мозг старше — его часы
+        # в его консоли, тут честно про моё бодрствование)
+        if low in ("сколько ты не спала", "ты не спала", "uptime"):
+            from core.uptime import uptime_text
+            return Reply(uptime_text(), "python", "uptime")
 
         # №21 доктор: осмотр дома текстом — без мозга и без лечения.
         # Лечение — у кнопки 84 (с подтверждением) и автодоктора

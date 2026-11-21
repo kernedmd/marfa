@@ -63,10 +63,16 @@ def default_jobs() -> list[dict]:
         from core import doctor
         return doctor.tick_auto()
 
+    def _backup() -> str:
+        from core import backup
+        return backup.tick()
+
     return [
         job("plan", "daily", at="08:00", what="план дня (Ф71)", run=_plan),
         job("diary", "daily", at="21:00", what="вечерний дневник (№8)",
             run=_diary_day),
+        job("backup", "daily", at="23:30", what="бэкап души дома (№23)",
+            run=_backup),
         job("queue", "interval", every=60,
             what="очередь и вопросы (Ф74)", run=_questions.tick),
         job("doctor", "interval", every=300,
