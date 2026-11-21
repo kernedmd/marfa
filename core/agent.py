@@ -207,6 +207,17 @@ class Agent:
                 return Reply("дневник не собрался: " + str(e), "python", "diary")
             return Reply("Вот дневник за сегодня:\n\n" + text, "python", "diary")
 
+        # Круг Д: библиотекарь — Марфа читает дом (механика, без LLM)
+        if low in ("почитай", "прочитай", "что почитать"):
+            from core.librarian import Librarian
+            report = Librarian().read_one()
+            if not report:
+                return Reply("вся полка прочитана — нового ничего нет",
+                             "python", "librarian")
+            return Reply("Прочитала %s — %d кусков легло в память. "
+                         "Спроси — расскажу." % (report["file"], report["chunks"]),
+                         "python", "librarian")
+
         # Круг Д: инициатива — Марфа сама хочет знать
         if low in ("вопросы", "что хотела спросить", "что хотела спросить?"):
             from core.questions import QuestionBank
