@@ -51,3 +51,14 @@ def test_hang_is_survivable():
     t = _text()
     assert "НЕ закрывать" in t
     assert "панель задач" in t
+
+
+def test_bat_line_endings_pinned():
+    """Урок первой поставки кнопки 86: файл, скачанный напрямую с LF-концами
+    строк, cmd.exe рубит посреди строк ('xist', 'ace.log' — десинх парсера
+    UTF-8+LF). .gitattributes прибивает *.bat к CRLF: любая доставка кнопки
+    через git (checkout, bundle) получает виндовые концы строк автоматом.
+    Прямые ссылки из песочницы архитектору конвертировать руками."""
+    ga = ROOT / ".gitattributes"
+    assert ga.is_file(), ".gitattributes пропал: концы строк кнопок не закреплены"
+    assert "*.bat text eol=crlf" in ga.read_text(encoding="utf-8")
