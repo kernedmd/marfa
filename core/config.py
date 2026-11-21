@@ -146,6 +146,7 @@ EVOLUTION_DIR = DATA_DIR / "evolution"                # журнал уроко�
 DIARY_DIR = DATA_DIR / "diary"                        # №8: вечерние дневники
 DRIVE_STATUS_FILE = DATA_DIR / "drive_status.json"    # служба стремления: сердце
 DRIVE_INTERVAL_SECS = 60      # такт службы: раз в минуту (Ф74)
+DOCTOR_STATE_FILE = DATA_DIR / "doctor_state.json"    # №21: память автодоктора
 
 # ---------------------------------------------------------------
 # ЖИВОЙ ЯЗЫК (гейт §5 — вердикт батареи 21.11.2026: факты 13/13,
