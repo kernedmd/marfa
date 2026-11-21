@@ -38,6 +38,15 @@ from core import config, creator_gate, diary, eyes, hands
 from core.brain import BrainClient
 from core.memory import Memory
 
+
+def _lesson(kind: str, text: str) -> None:
+    """Урок эволюционеру: что-то пошло не так. Никогда не рвёт ответ."""
+    try:
+        from evolution.journal import log_lesson
+        log_lesson(kind, text)
+    except Exception:
+        pass
+
 FALLBACK_DOCTRINE = (
     "Я — Марфа, дом Ильи. Файл доктрины не найден — работаю на каркасном минимуме, "
     "без фантазий о своих правилах."
@@ -248,8 +257,10 @@ class Agent:
             if tool == "check_brackets":
                 return Reply(hands.check_brackets(args.get("text", "")),
                              "brain", "check_brackets")
+            _lesson("неизвестный-инструмент", "мозг позвал «%s»" % tool)
             return Reply("неизвестный инструмент: " + tool, "brain", tool or None)
         except PermissionError as e:
+            _lesson("страж-отказ", "%s: %s" % (tool, e))
             return Reply("СТРАЖ отказал: " + str(e), "brain", tool or None)
 
     # ---------- главная точка ----------
@@ -269,6 +280,7 @@ class Agent:
                 user_text, system_extra=self._system_extra(user_text),
                 history=history)
         except Exception as e:
+            _lesson("мозг-недоступен", str(e))
             return Reply("мозг недоступен: " + str(e), "fallback", None)
         if isinstance(decision, dict) and isinstance(decision.get("action"), dict):
             return self._act(decision["action"])

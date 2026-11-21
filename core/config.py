@@ -137,6 +137,17 @@ PLAN_HOUR = 8              # план дня в 08:00
 MAX_FEATURES_PER_WEEK = 5  # не более 3-5 фишек в неделю (Раздел 5)
 
 # ---------------------------------------------------------------
+# СТРЕМЛЕНИЕ (Круг Д): расписание, вопросы, библиотекарь, служба
+# ---------------------------------------------------------------
+QUESTIONS_FILE = DATA_DIR / "questions.json"          # банк вопросов Илье
+SCHEDULE_STATE_FILE = DATA_DIR / "schedule_state.json"  # Ф75: что уже отработало
+LIBRARIAN_STATE_FILE = DATA_DIR / "librarian_state.json"  # что прочитано
+EVOLUTION_DIR = DATA_DIR / "evolution"                # журнал уроков
+DIARY_DIR = DATA_DIR / "diary"                        # №8: вечерние дневники
+DRIVE_STATUS_FILE = DATA_DIR / "drive_status.json"    # служба стремления: сердце
+DRIVE_INTERVAL_SECS = 60      # такт службы: раз в минуту (Ф74)
+
+# ---------------------------------------------------------------
 # Fallback GigaChat (ТЗ 3.2): включается только когда 30B упала
 # ---------------------------------------------------------------
 FALLBACK_ENABLED = os.environ.get("MARFA_FALLBACK", "0") == "1"
