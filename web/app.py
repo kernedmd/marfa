@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import datetime as dt
 import json
 from flask import Flask, jsonify, request
 
@@ -16,6 +17,7 @@ from core import config
 from core.agent import Agent
 from core.brain import BrainClient
 from core.dialog import DialogStore, _safe_session
+from core.questions import QuestionBank
 from safety.log_audit import audit
 from sensors.monitor import RAMMonitor
 
@@ -49,6 +51,9 @@ PANEL_HTML = """<!DOCTYPE html>
 
 <h2>Уши (сторож имени «Марфа»)</h2>
 <div class="card" id="ears">прислушиваюсь...</div>
+
+<h2>Стремление (план, вопросы, чтение)</h2>
+<div class="card" id="drive">спрашиваю у дома...</div>
 
 <h2>СТРАЖ (аудит логов, Ф81)</h2>
 <div class="card" id="guard">проверяю цепочку...</div>
@@ -94,6 +99,45 @@ fetch("/api/status").then(r => r.json()).then(s => {
 }).catch(e => {
   document.getElementById("ram").textContent = "статус недоступен: " + e;
 });
+fetch("/api/drive").then(r => r.json()).then(d => {
+  const el = document.getElementById("drive");
+  const alive = d.drive_alive;
+  let html = alive
+    ? "<b class='ok'>жива</b> — план, дневник, вопросы, чтение"
+    : "<b class='crit'>служба не отвечает</b> — поднимется со стартом дома";
+  if (d.plan && d.plan.open) {
+    html += "<br>План на " + d.plan.date + ": открыто " + d.plan.open + " из " + d.plan.total;
+  }
+  if (d.questions && d.questions.length) {
+    html += "<br><b>Хочет спросить:</b>";
+    d.questions.forEach(q => {
+      html += "<br>• " + q.text.replace(/</g, '&lt;') +
+              " <input id='ans-" + q.id + "' placeholder='ответ...' size='12'>" +
+              " <button onclick=\"answer('" + q.id + "')\">ответить</button>";
+    });
+  } else {
+    html += "<br>Открытых вопросов нет";
+  }
+  if (d.last_diary) {
+    html += "<br>Последний дневник: " + d.last_diary;
+  }
+  const lessons = d.lessons_7d || 0;
+  if (lessons) {
+    html += "<br>Уроков за неделю: " + lessons;
+  }
+  el.innerHTML = html;
+}).catch(e => {
+  document.getElementById("drive").textContent = "стремление недоступно: " + e;
+});
+function answer(qid) {
+  const inp = document.getElementById("ans-" + qid);
+  const text = (inp && inp.value || "").trim();
+  if (!text) return;
+  fetch("/api/questions/answer", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({id: qid, text: text})
+  }).then(() => location.reload());
+}
 </script>
 </body>
 </html>
@@ -173,6 +217,64 @@ def api_dialog(session):
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     return jsonify({"session": sid, "turns": DIALOGS.turns(sid)})
+
+
+# ---------- Круг Д: стремление ----------
+
+def _drive_alive() -> bool:
+    """Сердце службы стремления свежее (3 такта)?"""
+    try:
+        rec = json.loads(Path(config.DRIVE_STATUS_FILE).read_text(encoding="utf-8"))
+        ts = dt.datetime.fromisoformat(rec["ts"])
+        return (dt.datetime.now() - ts).total_seconds() <= 180
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+@app.get("/api/drive")
+def api_drive():
+    """Карточка стремления: план дня, вопросы, дневник, уроки."""
+    from core.autonomy import DayPlanner
+    from core.diary import Diary
+    from evolution.journal import digest as journal_digest
+
+    plan = DayPlanner().load_plan() or {}
+    tasks = [t for t in plan.get("tasks", []) if isinstance(t, dict)]
+    open_n = sum(1 for t in tasks if t.get("status") != "done")
+    try:
+        lessons = sum(journal_digest(7).values())
+    except Exception:
+        lessons = 0
+    return jsonify({
+        "drive_alive": _drive_alive(),
+        "plan": {"date": plan.get("date", ""), "total": len(tasks),
+                 "open": open_n,
+                 "titles": [t.get("title", "") for t in tasks
+                            if t.get("status") != "done"][:8]},
+        "questions": QuestionBank().open_items(),
+        "last_diary": Diary().last_diary(),
+        "lessons_7d": lessons,
+    })
+
+
+@app.post("/api/questions/answer")
+def api_questions_answer():
+    """Илья отвечает на вопрос Марфы — ответ сразу в память."""
+    data = request.get_json(force=True, silent=True) or {}
+    qid = str(data.get("id") or "").strip()
+    text = str(data.get("text") or "").strip()
+    if not qid or not text:
+        return jsonify({"error": "нужны id и text"}), 400
+    item = QuestionBank().answer(qid, text)
+    if item is None:
+        return jsonify({"error": "вопрос не найден или уже закрыт"}), 404
+    try:
+        from core.memory import Memory
+        Memory().remember("Илья ответил на «%s»: %s" % (item["text"], text),
+                          tags=["ответ"], importance=3.5)
+    except Exception:
+        pass                      # память спотыкается — ответ всё равно принят
+    return jsonify({"ok": True, "question": item["text"], "answer": text})
 
 
 @app.get("/chat")

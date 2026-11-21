@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 r"""start_marfa.py — №22: автозапуск дома одной командой (роадмап 30 фишек).
 
-Поднимает всех слуг дома: мозг 8082 + глаза 8083 + панель 5001 + уши (служба).
+Поднимает всех слуг дома: мозг 8082 + глаза 8083 + панель 5001 + уши
+(служба) + стремление (служба: план дня, дневник, вопросы, чтение).
 Запуск из корня дома:
     venv\Scripts\python.exe start_marfa.py
     venv\Scripts\python.exe start_marfa.py --в-планировщик   # автомат навсегда
@@ -48,6 +49,8 @@ CONFIG_FILE = HOME / "start_marfa.json"
 LOG_FILE = HOME / "logs" / "startup.log"
 EARS_STATUS_FILE = HOME / "data" / "ears_status.json"  # пишет служба ушей
 EARS_FRESH_SECS = 120        # сердцебиение свежее этого — ухо живо
+DRIVE_STATUS_FILE = HOME / "data" / "drive_status.json"  # служба стремления
+DRIVE_FRESH_SECS = 180      # 3 такта по 60 с — сердце стремления живо
 
 # (имя, порт, путь здоровья, поле конфига, сколько секунд ждать старта)
 SERVICES = [
@@ -72,6 +75,7 @@ TEMPLATE = {
         "--host 127.0.0.1 --port 5001"
     ),
     "ears_cmd": "venv\\Scripts\\python.exe sensors\\ears.py --service",
+    "drive_cmd": "venv\\Scripts\\python.exe -m core.drive --service",
 }
 
 
@@ -161,6 +165,17 @@ def _ears_alive() -> bool:
         return False
 
 
+def _drive_alive() -> bool:
+    """Живость стремления: сердцебиение в data\\drive_status.json;
+    свежее %d с (3 такта) — расписание и инициатива работают.""" % DRIVE_FRESH_SECS
+    try:
+        rec = json.loads(DRIVE_STATUS_FILE.read_text(encoding="utf-8"))
+        ts = dt.datetime.fromisoformat(rec["ts"])
+        return (dt.datetime.now() - ts).total_seconds() <= DRIVE_FRESH_SECS
+    except (OSError, ValueError, KeyError):
+        return False
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="автозапуск дома Марфы")
     ap.add_argument("--config", default=str(CONFIG_FILE),
@@ -217,6 +232,18 @@ def main(argv=None) -> int:
         _spawn(ears_cmd)
         print("   ухо без микрофона не умирает: пишет статус и ждёт, пока воткнёшь")
         started.append("уши")
+
+    # -- стремление: пятый слуга — расписание и инициатива (Круг Д) -----
+    # план в 08:00, дневник в 21:00, вопросы раз в минуту, чтение раз в час
+    drive_cmd = (cfg.get("drive_cmd") or TEMPLATE["drive_cmd"]).strip()
+    if _drive_alive():
+        print("стремление: уже жив — расписание крутится, не трогаю")
+        skipped.append("стремление")
+    else:
+        print("стремление: поднимаю службу (план, дневник, вопросы, чтение)...")
+        _spawn(drive_cmd)
+        print("   тик раз в минуту; упавшая работа — урок, служба не сдаётся")
+        started.append("стремление")
 
     _log("старт: подняты %s; уже жили %s" % (started or "—", skipped or "—"))
 

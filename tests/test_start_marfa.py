@@ -65,7 +65,7 @@ def test_wait_timeout(monkeypatch):
 # ---------- main ----------
 
 def _run_main(monkeypatch, tmp_path, alive_ports, cfg_brain="",
-              ears_alive=False):
+              ears_alive=False, drive_alive=False):
     """main() с подменёнными швами; возвращает (код, вывод, список spawn)."""
     spawned, logged = [], []
     monkeypatch.setattr(sm, "_alive",
@@ -74,6 +74,7 @@ def _run_main(monkeypatch, tmp_path, alive_ports, cfg_brain="",
     monkeypatch.setattr(sm, "_wait", lambda p, path, t, poll=2.0: True)
     monkeypatch.setattr(sm, "_log", lambda line: logged.append(line))
     monkeypatch.setattr(sm, "_ears_alive", lambda: ears_alive)
+    monkeypatch.setattr(sm, "_drive_alive", lambda: drive_alive)
     cfg = _cfg(tmp_path, brain=cfg_brain)
     import io
     import contextlib
@@ -85,26 +86,37 @@ def _run_main(monkeypatch, tmp_path, alive_ports, cfg_brain="",
 
 def test_main_all_alive(monkeypatch, tmp_path):
     rc, out, spawned, logged = _run_main(monkeypatch, tmp_path,
-                                         {8082, 8083, 5001}, ears_alive=True)
+                                         {8082, 8083, 5001}, ears_alive=True,
+                                         drive_alive=True)
     assert rc == 0
     assert not spawned
-    assert out.count("уже жив") == 4          # мозг, глаза, панель, уши
+    assert out.count("уже жив") == 5          # мозг, глаза, панель, уши, стремление
     assert "уши: уже жив" in out
+    assert "стремление: уже жив" in out
     assert logged and "уже жили" in logged[0]
 
 
 def test_main_starts_eyes_only(monkeypatch, tmp_path):
     """Мозг и панель живы, глаза и уши нет — поднимаются глаза и уши."""
-    rc, out, spawned, _ = _run_main(monkeypatch, tmp_path, {8082, 5001})
+    rc, out, spawned, _ = _run_main(monkeypatch, tmp_path, {8082, 5001},
+                                    drive_alive=True)
     assert rc == 0
     assert spawned == ["run eyes", "run ears"]
     assert "ожил" in out
 
 
+def test_main_starts_drive_too(monkeypatch, tmp_path):
+    """Ничего нет — поднимаются и глаза, и уши, и стремление."""
+    rc, out, spawned, _ = _run_main(monkeypatch, tmp_path, set())
+    assert rc == 0
+    assert "run drive" not in spawned
+    assert spawned[-1].endswith("core.drive --service")   # стремление пятым
+
+
 def test_main_brain_without_cmd(monkeypatch, tmp_path):
     """Мозг не жив и команды нет — честная подсказка, дом не блокируется."""
     rc, out, spawned, _ = _run_main(monkeypatch, tmp_path, {8083, 5001},
-                                    cfg_brain="", ears_alive=True)
+                                    cfg_brain="", ears_alive=True, drive_alive=True)
     assert rc == 0
     assert not spawned                      # глаза, панель и уши уже живы
     assert "впиши" in out and "brain_cmd" in out
@@ -114,7 +126,7 @@ def test_main_brain_without_cmd(monkeypatch, tmp_path):
 def test_main_brain_cmd_used(monkeypatch, tmp_path):
     """Мозг не жив, команда вписана — поднимается и не ждётся (CPU)."""
     rc, out, spawned, _ = _run_main(monkeypatch, tmp_path, {8083, 5001},
-                                    cfg_brain="run brain", ears_alive=True)
+                                    cfg_brain="run brain", ears_alive=True, drive_alive=True)
     assert rc == 0
     assert spawned == ["run brain"]
     assert "разогревается" in out
