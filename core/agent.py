@@ -34,7 +34,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from core import config, creator_gate, eyes, hands
+from core import config, creator_gate, diary, eyes, hands
 from core.brain import BrainClient
 from core.memory import Memory
 
@@ -187,6 +187,15 @@ class Agent:
                     lines = "\n".join("- " + r["text"] for r in found)
                     return Reply("Вот что помню:\n" + lines, "python", "recall")
                 return Reply("пока ничего не вспомнила по этому", "python", "recall")
+
+        # №8: вечерний дневник — механический каркас фактов дня (гейт §5:
+        # без LLM-саммари до вердикта батареи)
+        if low in ("подведи день", "подвести день", "дневник"):
+            try:
+                text = diary.Diary().build_day()
+            except Exception as e:
+                return Reply("дневник не собрался: " + str(e), "python", "diary")
+            return Reply("Вот дневник за сегодня:\n\n" + text, "python", "diary")
 
         # Г-2, глаза дома: дескриптор экрана от сенсора 8083, мозг молчит.
         # Граница слова обязательна: «посмотрим» — не команда глазам.
