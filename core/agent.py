@@ -30,6 +30,7 @@ from __future__ import annotations
 import ast
 import json
 import operator as _op
+import re
 import time
 from pathlib import Path
 from typing import Optional
@@ -205,6 +206,40 @@ class Agent:
             except Exception as e:
                 return Reply("дневник не собрался: " + str(e), "python", "diary")
             return Reply("Вот дневник за сегодня:\n\n" + text, "python", "diary")
+
+        # Круг Д: инициатива — Марфа сама хочет знать
+        if low in ("вопросы", "что хотела спросить", "что хотела спросить?"):
+            from core.questions import QuestionBank
+            items = QuestionBank().open_items()
+            if not items:
+                return Reply("пока всё понятно — открытых вопросов нет",
+                             "python", "questions")
+            lines = ["%d. %s" % (i + 1, it["text"]) for i, it in enumerate(items)]
+            return Reply("Хотела спросить:\n" + "\n".join(lines)
+                         + "\n\n(ответь: «ответ <номер>: ...»)",
+                         "python", "questions")
+
+        m = re.match(r"^ответ\s+(\d+)\s*[:.,-]?\s+(.+)$", t.strip())
+        if m:
+            from core.questions import QuestionBank
+            n, text = int(m.group(1)), m.group(2).strip()
+            bank = QuestionBank()
+            items = bank.open_items()
+            if not (1 <= n <= len(items)):
+                return Reply("вопроса №%d нет — скажи «вопросы», посмотрю "
+                             "список заново" % n, "python", "questions")
+            item = bank.answer(items[n - 1]["id"], text)
+            if item is None:
+                return Reply("не записалось — вопрос уже закрыт?", "python", "questions")
+            if self.memory is not None:
+                try:
+                    self.memory.remember(
+                        "Илья ответил на «%s»: %s" % (item["text"], text),
+                        tags=["ответ"], importance=3.5)
+                except Exception:
+                    pass
+            return Reply("Запомнила: «%s» → %s" % (item["text"], text),
+                         "python", "questions")
 
         # Г-2, глаза дома: дескриптор экрана от сенсора 8083, мозг молчит.
         # Граница слова обязательна: «посмотрим» — не команда глазам.
