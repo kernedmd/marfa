@@ -49,7 +49,11 @@ def _beat(path, age_secs=0):
 
 # ---------- осмотр ----------
 
-def test_check_all_dead_ports_seen_honestly(home):
+def test_check_all_dead_ports_seen_honestly(home, monkeypatch):
+    # Урок станции 21.11: порты — достояние МАШИНЫ, не теста. На живом
+    # доме панель реально отвечает (и это хорошо) — тест «все мертвы»
+    # не имеет права надеяться на глухую машину архитектора.
+    monkeypatch.setattr(doctor, "_http_ok", lambda url: False)
     report = doctor.check_all(now=NOW)
     assert report["ok"] is False
     assert report["checks"]["brain"]["ok"] is False
@@ -130,6 +134,8 @@ def test_heal_without_config_is_honest(home, monkeypatch):
 
 def test_tick_auto_first_sight_marks_but_not_heals(home, monkeypatch):
     _mk_start_config(home)
+    # порты — машины, не теста (урок станции: панель была жива в 19:36)
+    monkeypatch.setattr(doctor, "_http_ok", lambda url: False)
     spawned = []
     monkeypatch.setattr(doctor, "_spawn", lambda cmd: spawned.append(cmd))
     note = doctor.tick_auto(now=NOW)
