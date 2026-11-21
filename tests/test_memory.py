@@ -84,3 +84,68 @@ def test_importance_boosts_recall(mem):
 def test_remember_empty_rejected(mem):
     with pytest.raises(ValueError):
         mem.remember("   ")
+
+
+# ---------- №7: сжатие памяти (механика, гейт §5 — без LLM) ----------
+
+import datetime as dt
+import json as _json
+
+
+def _age_records(mem, days_old: float) -> None:
+    """Помолодить/постареть записи JSON-фоллбэка: сдвиг created_at назад."""
+    p = mem.fallback.path
+    items = _json.loads(p.read_text(encoding="utf-8"))
+    for r in items:
+        r["created_at"] -= days_old * 86400
+        r["expire_at"] += days_old * 86400      # TTL не должен съесть старушек
+    p.write_text(_json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def test_compress_old_makes_digests(mem):
+    for i in range(6):                          # старый день, шесть мелочей
+        mem.remember("Мелочь дня %d: принесли корм для тестов. Съедено." % i)
+    _age_records(mem, days_old=10)
+    mem.remember("свежая мысль о кванте")       # молодая — не трогаем
+
+    stats = mem.compress_old(days=7)
+    assert stats["compressed"] == 6
+    assert stats["digests"] == 1
+
+    texts = [r["text"] for r in mem._records()]
+    assert any(t.startswith("Выжимка памяти за") for t in texts)
+    assert any("корм для тестов" in t for t in texts)   # фразы уцелели в выжимке
+    assert not any(t.startswith("Мелочь дня") for t in texts)  # оригиналы ушли
+    assert any("свежая мысль" in t for t in texts)      # свежее на месте
+
+
+def test_compress_recall_still_finds(mem):
+    """Дорога домой: после сжатия recall всё находит — ничего не потеряно."""
+    for i in range(5):
+        mem.remember("Заметка %d: температура серверной стойки в норме." % i)
+    _age_records(mem, days_old=9)
+    mem.compress_old(days=7)
+    got = mem.recall("температура серверной")
+    assert got and "температура серверной" in got[0]["text"]
+
+
+def test_compress_protects_important_and_library(mem):
+    mem.remember("важное решение Ильи о бюджете", importance=5)
+    mem.remember("Глава книги про зодиак", tags=["библиотека"])
+    for i in range(5):
+        mem.remember("старая мелочь %d" % i)
+    _age_records(mem, days_old=12)
+    stats = mem.compress_old(days=7)
+    texts = [r["text"] for r in mem._records()]
+    assert any("важное решение Ильи" in t for t in texts)
+    assert any("Глава книги про зодиак" in t for t in texts)
+    assert stats["compressed"] == 5            # только мелочь
+
+
+def test_compress_small_group_stays(mem):
+    """Группа меньше пяти не дробится — крохи хуже целого."""
+    mem.remember("одинокая старая мысль")
+    _age_records(mem, days_old=10)
+    stats = mem.compress_old(days=7, min_group=5)
+    assert stats["compressed"] == 0
+    assert any("одинокая старая мысль" in r["text"] for r in mem._records())

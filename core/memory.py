@@ -10,6 +10,7 @@ ChromaDB, а если она не поднялась (нет пакета/сбо
 from __future__ import annotations
 from typing import Optional
 from pathlib import Path
+import datetime as dt
 import json
 import time
 import uuid
@@ -48,6 +49,14 @@ def _norm(text: str) -> str:
 
 def _tokens(text: str) -> set[str]:
     return set(_norm(text).split()) - {"", "и", "в", "на", "с", "по", "the", "a", "of"}
+
+
+def _sentence(text: str, max_chars: int = 90) -> str:
+    """Первая фраза воспоминания — строка выжимки (№7)."""
+    text = re.sub(r"\s+", " ", (text or "").strip())
+    m = re.search(r"^(.+?[.!?…])(\s|$)", text)
+    sent = m.group(1) if m else text
+    return sent[:max_chars].rstrip() + ("…" if len(sent) > max_chars else "")
 
 
 def _cosine_tokens(a: set[str], b: set[str]) -> float:
@@ -244,6 +253,53 @@ class Memory:
                 self.forget(rec["id"])
                 gone += 1
         return gone
+
+    # ---------- №7: сжатие памяти (механическое, гейт §5 — без LLM) ----------
+
+    def compress_old(self, days: int = 7, min_group: int = 5,
+                     now: Optional[float] = None) -> dict:
+        """Старые воспоминания — уплотнить в выжимки по дням.
+
+        Честная механика (доктрина §5: до вердикта батареи больной мозг
+        не переписывает память): выжимка — первые фразы, ничего не
+        выдумывается. Не трогаем: важное (importance >= 4), библиотеку,
+        уже готовые выжимки. Группы меньше min_group остаются как есть —
+        дробить память на крохи хуже, чем держать.
+        """
+        now = now if now is not None else self._now()
+        horizon = now - days * 86400
+        protected = {"выжимка", "библиотека"}
+        by_day: dict[str, list[dict]] = {}
+        for rec in self._records():
+            if not self._alive(rec):
+                continue
+            if set(rec.get("tags") or []) & protected:
+                continue
+            if float(rec.get("importance", 1)) >= 4:
+                continue
+            if float(rec.get("created_at", now)) > horizon:
+                continue
+            day = dt.datetime.fromtimestamp(float(rec["created_at"])).strftime("%d.%m.%Y")
+            by_day.setdefault(day, []).append(rec)
+
+        stats = {"compressed": 0, "digests": 0, "days": []}
+        for day, recs in sorted(by_day.items()):
+            if len(recs) < min_group:
+                continue
+            recs = sorted(recs, key=lambda r: -float(r.get("importance", 1)))
+            lines = ["- " + _sentence(r["text"]) for r in recs[:15]]
+            if len(recs) > 15:
+                lines.append("- … и ещё %d короче" % (len(recs) - 15))
+            digest = ("Выжимка памяти за %s (%d воспоминаний):\n%s"
+                      % (day, len(recs), "\n".join(lines)))
+            self.remember(digest, tags=["выжимка"], importance=3,
+                          ttl_hours=24 * 90)
+            for r in recs:
+                self.forget(r["id"])
+            stats["compressed"] += len(recs)
+            stats["digests"] += 1
+            stats["days"].append(day)
+        return stats
 
     def link(self, id_a: str, id_b: str) -> bool:
         """Граф связей: двусторонняя ссылка между воспоминаниями."""
