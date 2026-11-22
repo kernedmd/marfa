@@ -64,6 +64,8 @@ from pathlib import Path
 from typing import Optional
 
 from core import config, creator_gate, diary, eyes, hands, identity, progress
+from core import uptime as _uptime   # H7 аудита: момент рождения процесса — импорт модуля
+                                    # (панель поднимает агента на старте), а не первый запрос
 from core.brain import BrainClient
 from core.memory import Memory
 
@@ -336,6 +338,14 @@ class Agent:
             if not report:
                 return Reply("вся полка прочитана — нового ничего нет",
                              "python", "librarian")
+            if not report.get("ok", True):
+                return Reply("читала %s, но память не приняла ни одного "
+                             "куска — не пометила прочитанным, попробую ещё "
+                             "через час" % report["file"],
+                             "python", "librarian")
+            if not report["chunks"]:
+                return Reply("Прочитала %s — файл пустой, двигаюсь дальше по полке."
+                             % report["file"], "python", "librarian")
             return Reply("Прочитала %s — %d кусков легло в память. "
                          "Спроси — расскажу." % (report["file"], report["chunks"]),
                          "python", "librarian")
@@ -536,6 +546,13 @@ class Agent:
         except PermissionError as e:
             _lesson("страж-отказ", "%s: %s" % (tool, e))
             return Reply("СТРАЖ отказал: " + str(e), "brain", tool or None)
+        except Exception as e:
+            # Броня инструментов (K3/M1 аудита): ANY-краш руки не должен
+            # долетать до панели 500-й — Создатель видит честный отказ,
+            # урок летит архитектору
+            _lesson("инструмент-упал", "%s: %s: %s" % (tool, type(e).__name__, e))
+            return Reply("инструмент %s споткнулся: %s — расскажи архитектору"
+                         % (tool or "?", e), "brain", tool or None)
 
     # ---------- главная точка ----------
 

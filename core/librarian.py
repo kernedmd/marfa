@@ -61,7 +61,9 @@ def chunk_text(text: str, chunk_chars: int = CHUNK_CHARS) -> list[str]:
         while len(c) > chunk_chars * 2 and len(final) < MAX_CHUNKS_PER_FILE:
             final.append(c[:chunk_chars * 2])
             c = c[chunk_chars * 2:]
-        final.append(c)
+        # H8 аудита: лимит — потолок для ВСЕХ кусков, хвост не добавляет 41-й
+        if len(final) < MAX_CHUNKS_PER_FILE:
+            final.append(c)
     return [c for c in final if c.strip()]
 
 
@@ -120,17 +122,26 @@ class Librarian:
         from core.memory import Memory
         mem = Memory()
         chunks = chunk_text(text)
+        stored = 0
         for c in chunks:
             try:
                 mem.remember(c, tags=["библиотека", tag], importance=2.5,
                              ttl_hours=TTL_HOURS)
+                stored += 1
             except Exception:
                 pass                        # память спотыкается — читаем дальше
+
+        # H9 аудита: все куски упали — файл НЕ помечаем прочитанным,
+        # повтор через час; молча терять полку нельзя
+        if chunks and stored == 0:
+            return {"file": rel, "chunks": len(chunks), "stored": 0, "ok": False}
 
         state = self._load()
         state["files"][rel] = {"mtime": mtime, "chunks": len(chunks)}
         self._save(state)
-        return {"file": rel, "chunks": len(chunks)}
+        # пустой файл (M5): помечаем, чтобы полка шла дальше, — но честно
+        # отчитываемся нулём кусков
+        return {"file": rel, "chunks": len(chunks), "stored": stored, "ok": True}
 
 
 def tick() -> str:
@@ -138,4 +149,9 @@ def tick() -> str:
     report = Librarian().read_one()
     if not report:
         return "полка прочитана — тишина"
+    if not report.get("ok", True):
+        return ("память не приняла %s — не пометила прочитанным, "
+                "повторю через час" % report["file"])
+    if not report["chunks"]:
+        return "прочитано %s: файл пустой — двигаюсь дальше" % report["file"]
     return "прочитано %s: %d кусков" % (report["file"], report["chunks"])

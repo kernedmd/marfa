@@ -10,7 +10,9 @@
 - состояние в data/schedule_state.json — «что уже отработано»;
   перезапуск службы не гонит одну работу дважды в один день;
 - работа упала — ошибка честно пишется в результат и в журнал уроков
-  (evolution), расписание не останавливается;
+  (evolution), расписание не останавливается; упавшая работа НЕ
+  помечается выполненной: interval повторит себя своим интервалом,
+  daily/weekly — через паузу 30 минут (K7 аудита 22.11);
 - время — местные часы дома (Z440 живёт по времени Создателя).
 """
 from __future__ import annotations
@@ -26,10 +28,22 @@ from core import config
 _WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4,
              "sat": 5, "sun": 6}
 
+RETRY_DELAY_SEC = 30 * 60      # K7: пауза между попытками упавшей daily/weekly работы
+
+_bad_spec_seen: set[tuple] = set()   # урок о кривой работе — раз за процесс (не спамим каждую минуту)
+
 
 def _parse_hhmm(s: str) -> tuple[int, int]:
-    h, m = s.split(":")
-    return int(h), int(m)
+    """ЧЧ:ММ с валидацией (M9 аудита): «8», «08:00:00», «25:00» —
+    честный ValueError, а не падение расписания на ровном месте."""
+    parts = str(s).split(":")
+    if len(parts) != 2 or not parts[0].strip().isdigit() \
+            or not parts[1].strip().isdigit():
+        raise ValueError("время расписания — ЧЧ:ММ, получено «%s»" % s)
+    h, m = int(parts[0]), int(parts[1])
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        raise ValueError("время вне суток: «%s»" % s)
+    return h, m
 
 
 def job(job_id: str, kind: str, what: str, run: Callable[[], object], **kw):
@@ -126,23 +140,51 @@ class Scheduler:
     # ---------- пора ли ----------
 
     def _due(self, j: dict, now: dt.datetime, state: dict) -> bool:
+        # успех и провалы живут в состоянии РАЗДЕЛЬНО (K7 аудита):
+        # state[id] — только удачные прогоны; провалы — под ключом «id!fail»
         last = self._last_ts(state, j["id"])
-        if j["kind"] == "daily":
-            h, m = _parse_hhmm(j["at"])
-            slot = now.replace(hour=h, minute=m, second=0, microsecond=0)
-            return now >= slot and (last is None or last.date() < now.date())
-        if j["kind"] == "weekly":
-            wd = _WEEKDAYS[j["weekday"]]
-            h, m = _parse_hhmm(j["at"])
-            days_ahead = (wd - now.weekday()) % 7
-            slot = (now + dt.timedelta(days=days_ahead)).replace(
-                hour=h, minute=m, second=0, microsecond=0)
-            # ближайшее прошедшее вхождение: сегодня или в течение недели назад
-            if slot > now:
-                slot -= dt.timedelta(days=7)
-            return now >= slot and (last is None or last < slot)
-        if j["kind"] == "interval":
-            return last is None or (now - last).total_seconds() >= j["every"]
+        fail = self._last_ts(state, j["id"] + "!fail")
+        if last is not None and last > now:
+            last = None            # M11: часы прыгнули назад — считаем, что не было
+        if fail is not None and fail > now:
+            fail = None
+        try:
+            if j["kind"] == "daily":
+                h, m = _parse_hhmm(j["at"])
+                slot = now.replace(hour=h, minute=m, second=0, microsecond=0)
+                due = now >= slot and (last is None or last.date() < now.date())
+                if due and fail is not None \
+                        and (now - fail).total_seconds() < RETRY_DELAY_SEC:
+                    return False    # недавно падала — пауза между попытками
+                return due
+            if j["kind"] == "weekly":
+                wd = _WEEKDAYS[j["weekday"]]
+                h, m = _parse_hhmm(j["at"])
+                days_ahead = (wd - now.weekday()) % 7
+                slot = (now + dt.timedelta(days=days_ahead)).replace(
+                    hour=h, minute=m, second=0, microsecond=0)
+                # ближайшее прошедшее вхождение: сегодня или в течение недели назад
+                if slot > now:
+                    slot -= dt.timedelta(days=7)
+                due = now >= slot and (last is None or last < slot)
+                if due and fail is not None \
+                        and (now - fail).total_seconds() < RETRY_DELAY_SEC:
+                    return False
+                return due
+            if j["kind"] == "interval":
+                # последняя попытка любого исхода — свой интервал и есть
+                # политика повтора
+                refs = [x for x in (last, fail) if x is not None]
+                ref = max(refs) if refs else None
+                return ref is None or (now - ref).total_seconds() >= j["every"]
+        except (ValueError, KeyError, TypeError) as e:
+            # M9/M10: кривая работа (время, weekday, every) — урок ОДИН раз
+            # на уникальную ошибку, расписание живо, работа не готова к запуску
+            key = (str(self.state_path), j["id"], type(e).__name__, str(e)[:200])
+            if key not in _bad_spec_seen:
+                _bad_spec_seen.add(key)
+                _log_lesson(j, e)
+            return False
         return False
 
     def due(self, now: Optional[dt.datetime] = None,
@@ -180,10 +222,17 @@ class Scheduler:
             try:
                 note = self._invoke(j["run"], now)
                 rec.update(ok=True, note=str(note)[:300] if note else "ок")
+                # K7 аудита: только УСПЕШНЫЙ прогон помечается выполненным;
+                # успех стирает память о провалах
+                state[j["id"]] = now.isoformat(timespec="seconds")
+                state.pop(j["id"] + "!fail", None)
             except Exception as e:   # работа упала — расписание живо
                 rec.update(ok=False, error=str(e)[:300])
                 _log_lesson(j, e)
-            state[j["id"]] = now.isoformat(timespec="seconds")
+                # K7: провал ≠ «сегодня сделано». Работа повторится:
+                # interval — своим интервалом, daily/weekly — через паузу
+                # RETRY_DELAY_SEC (не каждую минуту — не заваливаем уроками)
+                state[j["id"] + "!fail"] = now.isoformat(timespec="seconds")
             results.append(rec)
         if results:
             self._save_state(state)

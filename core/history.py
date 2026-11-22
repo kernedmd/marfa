@@ -17,9 +17,13 @@ from core import config
 
 
 def _first_sentence(text: str, max_chars: int = 120) -> str:
-    """Первая законченная фраза — минимальная честная выжимка."""
+    """Первая законченная фраза — минимальная честная выжимка.
+
+    M6 аудита: точка в КОНЦЕ строки («Привет.») — тоже конец фразы:
+    раньше требовался пробел после знака, и однопредложенческий текст
+    не резался вовсе (в dialog.py — тот же фикс)."""
     text = re.sub(r"\s+", " ", text.strip())
-    m = re.search(r"^(.+?[.!?…])\s", text)
+    m = re.search(r"^(.+?[.!?…])(?:\s|$)", text)
     sent = m.group(1) if m else text
     return sent[:max_chars].rstrip() + ("…" if len(sent) > max_chars else "")
 
@@ -33,11 +37,16 @@ class HistoryCompressor:
         self.budget = budget          # 1000 (0.3)
         self.keep_recent = keep_recent  # сколько последних ходов держать дословно
         self.turns: list[dict] = []   # {role, text, ts}
-        self.last_summary: str = ""   # сводка старых ходов (переиспользуется между render)
+        self.last_summary: str = ""   # сводка старых ходов (кэш между render, H3)
+        self._sum_cache_key: tuple = ()   # отпечаток ходов, из которых собрана сводка
         self.last_stats: dict = {}
 
     # ---------- накопление ----------
     def add_turn(self, role: str, text: str) -> None:
+        # как dialog.append: системную роль в историю не пишем — она
+        # не должна попадать ни в промпт, ни в офлайн-выжимку
+        if role not in ("user", "assistant"):
+            raise ValueError("роль хода: user или assistant")
         text = (text or "").strip()
         if text:
             self.turns.append({"role": role, "text": text,
@@ -90,18 +99,33 @@ class HistoryCompressor:
             tail_lines.insert(0, line)   # chronological порядок в итоге
             tail_tok += need
             tail_src += 1
-        # Крайний случай: даже новейший ход сам длиннее резерва — сжимаем его выжимкой
-        if not tail_lines:
+        # Крайний случай: новейший ход сам длиннее ВСЕГО бюджета — его
+        # выжимка (гарантия docstring: newest никогда не выбрасывается).
+        # K6 аудита: прежняя ветка `if not tail_lines` была МЁРТВОЙ — цикл
+        # всегда добавлял первый ход (`and tail_lines` пропускал перебор),
+        # огромный ход попадал в tail, а _fit отрезал его до голого
+        # заголовка «Последние ходы:» — пользователь видел пустую историю
+        if tail_tok > self.budget and len(tail_lines) == 1:
             newest = self.turns[-1]
-            tail_lines = [f"{newest['role']}: {_first_sentence(newest['text'])}"]
-            tail_tok = config.token_estimate(tail_lines[0])
+            line = f"{newest['role']}: {_first_sentence(newest['text'])}"
+            tail_lines = [line]
+            tail_tok = config.token_estimate(line) + 1
 
-        # 2) Сводка более старых ходов на остаток бюджета
+        # 2) Сводка более старых ходов на остаток бюджета.
+        #    H3 аудита: сводка кэшируется по отпечатку старых ходов —
+        #    два render подряд не дёргают мозг дважды (сам вызов _brain_summary
+        #    дорогой: это второй поход к 30B на каждое сообщение)
         old = self.turns[:-tail_src]
         summary_budget = self.budget - tail_tok
         summary = None
         if prefer_brain:
-            summary = self._brain_summary(old)
+            key = tuple((t["role"], t["text"]) for t in old)
+            if key and key == self._sum_cache_key and self.last_summary:
+                summary = self.last_summary          # кэш жив — мозг спит
+            else:
+                summary = self._brain_summary(old)
+                if summary:
+                    self._sum_cache_key, self.last_summary = key, summary
         if summary is None:
             summary = self._offline_summary(old)
         summary = self._fit(summary, summary_budget)
@@ -111,10 +135,13 @@ class HistoryCompressor:
         text = "\n".join(p for p in parts if p)
         text = self._fit(text, self.budget)
 
-        dropped = len(self.turns) - len(old) - len(tail_lines)
+        # M7 аудита: dropped считается ПОСЛЕ обрезки — сколько ходов
+        # реально представлено в тексте, а не «сколько было в списках»
+        kept_tail = sum(1 for ln in tail_lines if ln in text)
+        dropped = len(self.turns) - len(old) - kept_tail
         self.last_stats = {
             "tokens": config.token_estimate(text),
-            "kept_verbatim": len(tail_lines),
+            "kept_verbatim": kept_tail,
             "summarized": len(old),
             "dropped": max(0, dropped),
         }

@@ -42,9 +42,12 @@ def _safe_session(session_id: str) -> str:
 
 
 def _first_sentence(text: str, max_chars: int = 100) -> str:
-    """Первая законченная фраза — честная офлайн-выжимка (как Ф53)."""
+    """Первая законченная фраза — честная офлайн-выжимка (как Ф53).
+
+    M6 аудита: точка в конце строки — тоже конец фразы (без требования
+    пробела после знака), синхронизировано с history.py и memory._sentence."""
     text = re.sub(r"\s+", " ", (text or "").strip())
-    m = re.search(r"^(.+?[.!?…])\s", text)
+    m = re.search(r"^(.+?[.!?…])(?:\s|$)", text)
     sent = m.group(1) if m else text
     return sent[:max_chars].rstrip() + ("…" if len(sent) > max_chars else "")
 
