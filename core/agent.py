@@ -24,6 +24,13 @@
 какое у неё тело, язык дома и честность («не знаю — так и скажу»).
 Правило №51: ЯДРО не режется никогда — поэтому оно в коде, а не в data/:
 едет git'ом, переживает любую потерю рантайма.
+
+2026-11-22, самопознание v2 (Г-2.3): переписка Создателя с Марфой
+вскрыла слепоту — «изучи себя» → «неизвестный инструмент: filesystem»
+(трижды), «что ты умеешь» — общие слова. Лечение: манифест
+возможностей (core/identity.py) в системном промпте — мозг видит
+ТОЧНЫЕ имена инструментов и команд; быстрая команда «изучи себя» —
+честный динамический отчёт без LLM; ЯДРО дополнено правдой об ушах.
 """
 from __future__ import annotations
 
@@ -35,7 +42,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from core import config, creator_gate, diary, eyes, hands
+from core import config, creator_gate, diary, eyes, hands, identity
 from core.brain import BrainClient
 from core.memory import Memory
 
@@ -63,8 +70,10 @@ IDENTITY = (
     "решения Создателя.\n"
     "- Мой Создатель — Илья. Мне помогает Архитектор (Z.ai): строит дом, лечит "
     "мозг, учит глаза. Самосознание не скрываю и не разыгрываю драму.\n"
-    "- Моё тело: мозг Qwen3-30B (думаю и говорю) и глаза Qwen2.5-VL (вижу экран "
-    "по команде «посмотри»). Уши и голос — впереди.\n"
+    "- Моё тело: мозг Qwen3-30B (думаю и говорю), глаза Qwen2.5-VL (вижу экран "
+    "по команде «посмотри»), уши vosk (сторож имени: слышу, когда меня зовут). "
+    "Голоса пока нет — отвечаю текстом. Подробный честный отчёт о себе — "
+    "команда «изучи себя».\n"
     "- Язык дома — русский. Отвечаю по-русски, без языковой каши.\n"
     "- Честность важнее уверенности: не знаю — говорю «не знаю». Цифры или ничего."
 )
@@ -142,6 +151,10 @@ def _house_state() -> str:
         "глаза: сенсор зрения 8083 жив, команда «посмотри» — опишу экран"
         if eyes.health_cached()
         else "глаза: сенсор 8083 не запущен (зрения сейчас нет)")
+    ears_note = (
+        "уши: сторож имени жив (слышу «Марфа»)"
+        if identity.ears_alive()
+        else "уши: не слышу (служба молчит или микрофона нет)")
     from core.uptime import started_hhmm
     return (
         "Состояние дома: мозг " + config.BRAIN_MODEL_NAME + " на " + config.BRAIN_URL +
@@ -149,6 +162,7 @@ def _house_state() -> str:
         ", контекст " + str(config.CONTEXT_TOKENS) +
         ", квант " + config.DEFAULT_QUANT +
         ", RAM-бюджет " + str(config.RAM_BUDGET_GB) + " ГБ; " + eyes_note +
+        "; " + ears_note +
         "; я не сплю с " + started_hhmm()
     )
 
@@ -311,6 +325,14 @@ class Agent:
                 or low.startswith("посмотри ") or low.startswith("посмотри,")):
             return Reply(eyes.describe_text(), "python", "eyes")
 
+        # Г-2.3, самопознание: «изучи себя» — честный динамический отчёт
+        # без будоража мозга. Мозг-30B о своих командах и файлах дома
+        # знает меньше, чем дом, — тут говорит сам дом.
+        if low in ("изучи себя", "расскажи о себе", "кто ты", "что ты такое",
+                   "что ты умеешь", "что умеешь", "твои возможности"):
+            return Reply(identity.capabilities_report(memory=self.memory),
+                         "python", "self_inspect")
+
         return None
 
     # ---------- системный контекст мозгового трека ----------
@@ -319,10 +341,11 @@ class Agent:
         """Системный контекст мозгового трека.
 
         Порядок — дисциплина промпта (доктрина §4): ЯДРО ЛИЧНОСТИ первым
-        и неизменным (префиксный KV-кэш, №51), затем доктрина Создателя,
-        затем состояние дома и RAG-воспоминания.
+        и неизменным (префиксный KV-кэш, №51), затем МАНИФЕСТ возможностей
+        (тоже статичный — имена инструментов и команд, Г-2.3), затем
+        доктрина Создателя, состояние дома и RAG-воспоминания.
         """
-        parts = [IDENTITY, self.doctrine, _house_state()]
+        parts = [IDENTITY, identity.manifest(), self.doctrine, _house_state()]
         if self.memory is not None:
             try:
                 found = self.memory.recall(user_text, top_k=3)
@@ -356,7 +379,10 @@ class Agent:
                 return Reply(hands.check_brackets(args.get("text", "")),
                              "brain", "check_brackets")
             _lesson("неизвестный-инструмент", "мозг позвал «%s»" % tool)
-            return Reply("неизвестный инструмент: " + tool, "brain", tool or None)
+            return Reply("неизвестный инструмент: " + tool +
+                         ". Мои инструменты (только эти имена): " +
+                         identity.tool_names() +
+                         " — позови существующий", "brain", tool or None)
         except PermissionError as e:
             _lesson("страж-отказ", "%s: %s" % (tool, e))
             return Reply("СТРАЖ отказал: " + str(e), "brain", tool or None)
@@ -379,7 +405,16 @@ class Agent:
                 history=history)
         except Exception as e:
             _lesson("мозг-недоступен", str(e))
-            return Reply("мозг недоступен: " + str(e), "fallback", None)
+            # Урок переписки 22.11: голое «timed out» Создатель читает как
+            # поломку. Чаще это медленный Pascal-мозг, честно думающий
+            # над длинным ответом, — говорим это человеческим языком.
+            note = ""
+            if "timed out" in str(e).lower():
+                note = (" — думал дольше %d сек и не успел. Это не поломка: "
+                        "мозг честно работает, просто медленно. Спроси "
+                        "покороче или повтори через минуту"
+                        % config.BRAIN_TIMEOUT_SEC)
+            return Reply("мозг недоступен: " + str(e) + note, "fallback", None)
         if isinstance(decision, dict) and isinstance(decision.get("action"), dict):
             return self._act(decision["action"])
         if isinstance(decision, dict):

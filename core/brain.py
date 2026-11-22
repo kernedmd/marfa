@@ -68,7 +68,12 @@ class BrainClient:
     # ---------- транспорт ----------
 
     def _post(self, path: str, payload: dict) -> dict:
-        """POST JSON к llama-server. Любая поломка -> BrainError."""
+        """POST JSON к llama-server. Любая поломка -> BrainError.
+
+        Таймаут — из закона дома (BRAIN_TIMEOUT_SEC, 300 с): Pascal-мозг
+        честно думает минутами, обрывать его на 120-й секунде — ложь
+        (урок переписки 22.11: «изучи себя» обрывалось ровно так).
+        """
         req = urllib.request.Request(
             self.url + path,
             data=json.dumps(payload).encode("utf-8"),
@@ -76,7 +81,8 @@ class BrainClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(
+                    req, timeout=config.BRAIN_TIMEOUT_SEC) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except BrainError:
             raise

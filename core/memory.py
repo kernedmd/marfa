@@ -174,6 +174,11 @@ class Memory:
         exp = rec.get("expire_at")
         return exp is None or exp > self._now()
 
+    def count(self) -> int:
+        """Живых (не истёкших) записей. Для самопознания («изучи себя»)
+        и статуса: цифра настоящая, из любого бэкенда — chroma или JSON."""
+        return sum(1 for rec in self._records() if self._alive(rec))
+
     # ---------- API ----------
     def remember(self, text: str, tags: Optional[list[str]] = None,
                  importance: float = 1.0, ttl_hours: Optional[float] = None,

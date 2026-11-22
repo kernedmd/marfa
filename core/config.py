@@ -98,6 +98,10 @@ BRAIN_URL = os.environ.get("MARFA_BRAIN_URL") or f"http://127.0.0.1:{PORT_BRAIN}
 BRAIN_MODEL_NAME = "Qwen3-30B-A3B"      # MoE: 3.3B активных из 30.5B
 BRAIN_CTX_TOKENS = CONTEXT_TOKENS
 BRAIN_FLAGS = ["--mlock", "-ngl", "0"]  # 0.5 и 2.2: GPU только для QLoRA
+# Таймаут клиента мозга (22.11, урок переписки: «изучи себя» → timed out).
+# 120 с оказалось ложью для Pascal: 768 токенов генерации при ~6 ток/с
+# под нагрузкой — уже 128 с. Честное ожидание для Q4 на DDR4 — 5 минут.
+BRAIN_TIMEOUT_SEC = 300
 DEFAULT_QUANT = "Q4_K_M"
 MODEL_QUANTS_GB = {
     "Q4_K_M": 18.63,   # по умолчанию: 8-16 ток/с на DDR4
