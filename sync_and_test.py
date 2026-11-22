@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parent
 LOGS_DIR = ROOT / "logs" / "sync"
 TEST_TIMEOUT_SEC = 600
 FETCH_TIMEOUT_SEC = 90
+DEPS_TIMEOUT_SEC = 900      # opencv+numpy — десятки МБ на медленной сети
 
 
 def _utf8_console() -> None:
@@ -112,7 +113,7 @@ def main() -> int:
 
     # --- 2. Забрать с GitHub ---
     log("")
-    log("[1/3] git fetch origin ...")
+    log("[1/4] git fetch origin ...")
     rc, out = run(["git", "fetch", "origin"], timeout=FETCH_TIMEOUT_SEC)
     if rc != 0:
         log("ОТКАЗ: fetch не прошёл (сеть? ключи?). Дом НЕ изменён.")
@@ -131,10 +132,10 @@ def main() -> int:
         ahead, behind = 0, 0
     log("")
     if behind == 0:
-        log("[2/3] Локальная ветка " + branch + " уже актуальна (ahead=" +
+        log("[2/4] Локальная ветка " + branch + " уже актуальна (ahead=" +
             str(ahead) + ", behind=0).")
     else:
-        log("[2/3] Сзади " + str(behind) + " коммитов, ahead=" + str(ahead) +
+        log("[2/4] Сзади " + str(behind) + " коммитов, ahead=" + str(ahead) +
             ". Подтягиваю (только fast-forward)...")
         rc, out = run(["git", "merge", "--ff-only", "origin/" + branch])
         if rc != 0:
@@ -144,17 +145,36 @@ def main() -> int:
         _, last = run(["git", "log", "-1", "--oneline"])
         log("Обновлено. Теперь HEAD: " + last)
 
+    # --- 3.5 Зависимости едут с кодом (урок cv2, 22.11) ---
+    # Код приезжает git'ом, а requirements.txt — нет: opencv-python
+    # был заявлен в requirements раньше, чем оказался в venv, и Марфа
+    # осталась без камеры. pip идемпотентен и быстр, когда всё уже стоит;
+    # ставим ВСЕГДА, а не только после merge — синк может быть первым
+    # после ручного git pull из бандла. Только venv-интерпретатор
+    # (голый pip на Windows — чужой, системный).
+    log("")
+    log("[3/4] Зависимости дома (pip install -r requirements.txt)...")
+    py = venv_python()
+    rc, out = run([py, "-m", "pip", "install", "--no-input",
+                   "--disable-pip-version-check", "-r", "requirements.txt"],
+                  timeout=DEPS_TIMEOUT_SEC)
+    if rc == 0:
+        log("зависимости на месте")
+    else:
+        log("ВНИМАНИЕ: зависимости не поставились — тесты и камера могут "
+            "покраснеть. Хвост вывода:")
+        log(tail(out, 8))
+
     # --- 4. Тесты ---
     if args.no_tests:
         log("")
-        log("[3/3] Тесты пропущены (--no-tests).")
+        log("[4/4] Тесты пропущены (--no-tests).")
         log("ИТОГ: синк прошёл, тесты не гонялись.")
         _save_log(log_parts)
         return 0
 
     log("")
-    log("[3/3] Прогоняю тесты (до 10 минут)...")
-    py = venv_python()
+    log("[4/4] Прогоняю тесты (до 10 минут)...")
     rc, out = run([py, "-m", "pytest", "tests/", "-q", "--tb=short"],
                   timeout=TEST_TIMEOUT_SEC)
     log("")
