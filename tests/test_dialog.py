@@ -182,7 +182,8 @@ def test_agent_passes_history_to_brain(monkeypatch, home):
         def __init__(self):
             self.got = None
 
-        def ask_json(self, text, system_extra="", retries=2, history=None):
+        def ask_json(self, text, system_extra="", retries=2, history=None,
+                     max_tokens=None, on_text=None):
             self.got = (text, history)
             return {"answer": "ответ"}
 

@@ -142,3 +142,24 @@ def test_doctrine_file_loaded(home):
 
 def test_doctrine_missing_falls_back(home):
     assert "Марфа" in load_doctrine()  # каркасный минимум, не фантазия
+
+
+# ---------- СКОРОСТЬ v1: краткость — закон дома ----------
+
+def test_speed_law_in_brain_prompt(agent):
+    """«ответ через две минуты — очень долго»: мозг ВИДИТ закон
+    краткости в каждом системном промпте (статично — KV-кэш цел)."""
+    extra = agent._system_extra("привет")
+    assert "ЗАКОН СКОРОСТИ" in extra
+    assert "одно-четыре предложения" in extra
+
+
+def test_brain_track_short_budget_and_tokens(agent, srv):
+    """Чат-ответ: бюджет BRAIN_ANSWER_TOKENS + штамп несёт токены —
+    по ним видно, кто съел время, если снова две минуты."""
+    srv.reply_content = '{"answer": "кратко и по делу"}'
+    r = agent.handle("привет, как дела?")
+    assert r.source == "brain"
+    assert srv.calls[-1]["max_tokens"] == config.BRAIN_ANSWER_TOKENS
+    assert srv.calls[-1]["stream"] is True          # превью просилось
+    assert isinstance(r.meta, dict) and r.meta["tok"] >= 1

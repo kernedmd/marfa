@@ -36,6 +36,20 @@ v3 (живой прогон v2, 22.11): антипопугай ПРОВАЛИЛ�
 второй источник зрения, «посмотри в камеру» / «посмотри на меня».
 OpenCV ставится отдельно; нет его или нет камеры — честная ошибка.
 
+Аптечка (22.11, вечер): «ПОчему ты сам не установишь?» — резолюция
+Создателя. Нет cv2 — Марфа ставит opencv-python САМА, pip'ом СВОЕГО
+интерпретатора (sys.executable -m pip: голый pip на Windows — чужой,
+системный, урок живого прогона «Requirement already satisfied …
+python311» при по-прежнему мёртвом cv2).
+
+Статистика дескриптора (22.11, вечер): пустой elements — не приговор,
+а симптом с причиной. _validate_elements кладёт в d["_stats"]
+{raw, kept, dropped}: руки и экзамен честно говорят, ПОЧЕМУ пусто —
+модель ничего не вернула / геометрия не прошла проверку / надписи
+не прочитаны. Молчаливое выбрасывание боксов лишило архитектора
+диагноза в живом прогоне («глаза не прочитали ни одной надписи» —
+а почему?).
+
 Швы для тестов: _screenshot_b64 / _camera_b64 / _post_chat / health /
 health_cached / _VISION_ERROR — tests/test_eyes.py подменяют их, реальный
 сервер, камера и экран не нужны.
@@ -50,7 +64,7 @@ from typing import Optional, Tuple
 
 import requests
 
-from core import config, progress
+from core import config, progress, selfcare
 
 try:
     import mss
@@ -341,11 +355,19 @@ def _validate_elements(d: dict, size) -> dict:
     """Честная геометрия (урок v3): bbox обязан жить внутри кадра, что
     отправлен глазам, — x1<x2, y1<y2, в пределах ширины и высоты.
     Выдуманные боксы выбрасываются: они не попадут ни в чат, ни в прицел
-    рук (Р-0 меряет диалект координат по этим цифрам)."""
+    рук (Р-0 меряет диалект координат по этим цифрам).
+
+    v3.1 (урок «глаза не прочитали ни одной надписи»): выбрасывание
+    больше не МОЛЧИТ — в дескриптор кладётся _stats {raw, kept,
+    dropped}. Пустой список без статистики — загадка; со статистикой —
+    диагноз: модель не увидела ничего (raw=0), геометрия не прошла
+    (dropped=raw), надписи не прочитаны (kept>0, текстов нет).
+    """
     els = d.get("elements") if isinstance(d, dict) else None
     if not isinstance(els, list):
         if isinstance(d, dict):
             d["elements"] = []      # контракт: elements — всегда список
+            d["_stats"] = {"raw": 0, "kept": 0, "dropped": 0}
         return d
     w, h = int(size[0]), int(size[1])
     good = []
@@ -362,7 +384,10 @@ def _validate_elements(d: dict, size) -> dict:
             continue
         el["bbox"] = bbox
         good.append(el)
+    raw = len([e for e in els if isinstance(e, dict)])
     d["elements"] = good[:8]
+    d["_stats"] = {"raw": raw, "kept": len(d["elements"]),
+                   "dropped": max(0, raw - len(good))}
     return d
 
 
@@ -448,16 +473,12 @@ def describe_text(width: int = WORK_WIDTH) -> str:
 def _camera_b64(width: int = CAMERA_WIDTH) -> str:
     """Кадр с веб-камеры -> PNG base64, ужатый до width.
 
-    OpenCV ставится отдельно (pip install opencv-python) — лениво:
-    нет его или нет камеры — честная ошибка, не выдумка про «вижу».
+    cv2 идёт через аптечку (core/selfcare.py): нет модуля — Марфа
+    ставит его сама в свой venv и пробует снова. Нет камеры или кадра —
+    честная ошибка, не выдумка про «вижу».
     Устройство 0 — камера по умолчанию (у Создателя — веб-камера).
     """
-    try:
-        import cv2
-    except ImportError as e:
-        raise RuntimeError(
-            "нет модуля камеры: %s (venv\\Scripts\\pip install "
-            "opencv-python)" % e)
+    cv2 = _cv2_module()
     cap = cv2.VideoCapture(0)
     try:
         if not cap.isOpened():
@@ -467,6 +488,7 @@ def _camera_b64(width: int = CAMERA_WIDTH) -> str:
         ok, frame = cap.read()
         if not ok or frame is None:
             raise RuntimeError("камера не дала кадр — попробуй ещё раз")
+        from PIL import Image        # лениво: PIL живёт своей жизнью от mss
         img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     finally:
         cap.release()
@@ -476,6 +498,34 @@ def _camera_b64(width: int = CAMERA_WIDTH) -> str:
     buf = io.BytesIO()
     small.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode()
+
+
+def _import_cv2():
+    """Голый импорт cv2 (шов для тестов: подменяют, чтобы имитировать
+    «нет модуля» и его появление после аптечки)."""
+    import cv2
+    return cv2
+
+
+def _cv2_module():
+    """cv2 через аптечку: нет модуля — Марфа ставит его САМА (директива
+    Создателя 22.11 «ПОчему ты сам не установишь?»).
+
+    Ставит pip'ом СВОЕГО интерпретатора — sys.executable -m pip: голый
+    pip на Windows берётся из PATH и принадлежит системному Python
+    (живой прогон: «Requirement already satisfied … python311» при
+    мёртвом cv2 в venv дома). Не вышло — честная ошибка с командой
+    для Создателя, без выдумок.
+    """
+    try:
+        return _import_cv2()
+    except ImportError as e:
+        rep = selfcare.ensure_module("cv2")
+        if rep.get("ok"):
+            return _import_cv2()          # аптечка помогла — импорт заново
+        raise RuntimeError(
+            "нет модуля камеры: %s. Аптечка %s"
+            % (e, selfcare.render_report(rep)))
 
 
 # ---------------------------------------------------------------
@@ -523,20 +573,31 @@ def camera_selftest() -> str:
     Каждая ступень честна отдельно: модуль есть, но сенсор спит —
     говорим про сенсор; сенсор жив, но кадра нет — говорим про
     устройство. Без выдумок «всё ещё недоступна» по памяти.
+
+    v2 (аптечка): модуля НЕТ — Марфа не отправляет Создателя в консоль,
+    а ставит opencv-python сама (pip своего venv) и честно докладывает,
+    сколько это заняло. Не вышло (сеть, права) — тогда команда руками.
     """
     lines = ["ПРОВЕРКА КАМЕРЫ (вживую, не по памяти):"]
     progress.stage("проверяю камеру вживую: модуль, сенсор, кадр…")
     ver = _cv2_import()
     if not ver:
-        return "\n".join(lines + [
-            "- модуль opencv: НЕТ — поставить: venv\\Scripts\\pip install "
-            "opencv-python",
-            "  (ставил в другом окне? убедись, что это venv дома: "
-            "C:\\Marfa\\venv\\Scripts\\pip.exe; после установки "
-            "повтори «проверь камеру» — перезапуск не нужен)"])
+        rep = selfcare.ensure_module("cv2")
+        if rep.get("ok"):
+            ver = _cv2_import() or "?"
+            lines.append("- модуль opencv: НЕ БЫЛ — аптечка %s"
+                         % selfcare.render_report(rep))
+        else:
+            return "\n".join(lines + [
+                "- модуль opencv: НЕТ. Аптечка попробовала и не смогла: %s"
+                % selfcare.render_report(rep),
+                "  (почему не вышло руками: голый pip в консоли ставит "
+                "в СИСТЕМНЫЙ Python, а дом живёт в своём venv — "
+                "команда выше ставит именно туда)"])
+    else:
+        lines.append("- модуль opencv: есть (%s)" % ver)
     global _cv2_cache
     _cv2_cache = (ver, time.time())       # свежая правда — и в состояние дома
-    lines.append("- модуль opencv: есть (%s)" % ver)
     if _VISION_ERROR:
         return "\n".join(lines + ["- глаза не готовы: " + _VISION_ERROR])
     if not health():

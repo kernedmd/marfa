@@ -6,13 +6,22 @@
 - ask_json(): строгий JSON, при браке — повтор с укором, regex-спасение ЗАПРЕЩЕНО;
 - фоллбэк №37: провайдер с available()/ask() подставляется снаружи (GigaChat);
 - usage_tokens(): честный расход из сырого ответа сервера.
+
+СКОРОСТЬ v1 (22.11, доклад Создателя «ответ через две минуты — это очень
+долго»): у чат-ответа — СВОЙ бюджет первого захода (BRAIN_ANSWER_TOKENS,
+320): краткий ответ на CPU стоит ~40 с, а не две минуты. Обрезанный
+JSON — не приговор: повтор уходит с полным бюджетом (обрезка — одна
+из причин брака, лечится местом, а не укором). Стрим: ask_json(on_text)
+печатает ответ в эфир ЖИВЬЁМ — чат видит рождение текста по мере
+генерации, а не после последнего токена.
 """
 from __future__ import annotations
 
 import json
+import re
 import urllib.request
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from core import config
 
@@ -29,6 +38,18 @@ class BrainError(Exception):
 # Нет файла / нет поля / брак — характер по умолчанию: 0.3.
 # ---------------------------------------------------------------
 DEFAULT_TEMPERATURE = 0.3
+
+# Qwen3 умеет «думать вслух» блоками <think>…</think> ДО ответа.
+# Грамматика json_object обычно не пускает их в генерацию, но не все
+# сборки сервера держат грамматику: пустой think-блок перед JSON —
+# самый дешёвый способ угробить парс и заплатить минутой ретрая.
+# Стриппер — страховка, не режим.
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def _strip_think(raw: str) -> str:
+    """Убрать think-блоки Qwen3 — JSON остаётся чистым."""
+    return _THINK_RE.sub("", raw or "").strip()
 
 
 def mood_params() -> dict:
@@ -64,6 +85,8 @@ class BrainClient:
         # пустая строка -> адрес из закона дома (core/config.py).
         self.url = brain_url or config.BRAIN_URL
         self.fallback = None  # провайдер фоллбэка (№37): available() + ask(prompt)
+        # последний честный расход (usage ответа) — для штампа «N ток»
+        self.last_usage: dict = {}
 
     # ---------- транспорт ----------
 
@@ -98,6 +121,80 @@ class BrainClient:
         except Exception:
             return False
 
+    # ---------- стрим (СКОРОСТЬ v1): ответ печатается живьём ----------
+
+    def _post_stream(self, path: str, payload: dict,
+                     on_text: Callable[[str], None]) -> dict:
+        """POST со стримом SSE: дельты текста летят в on_text ПО МЕРЕ
+        генерации — чат показывает рождение ответа, не тишину.
+
+        Возвращает тот же словарь, что _post (content собран из дельт).
+        Сервер проигнорировал "stream" и ответил обычным JSON — читаем
+        целиком и зовём on_text один раз: превью всё равно состоится,
+        пусть и разом (фоллбэк-честность, фейк-сервер тестов живёт так).
+        Поломка on_text НЕ рвёт запрос: превью — косметика, мышление —
+        работа (закон эфира).
+        """
+        body = dict(payload)
+        body["stream"] = True
+        body["stream_options"] = {"include_usage": True}
+        req = urllib.request.Request(
+            self.url + path,
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(
+                    req, timeout=config.BRAIN_TIMEOUT_SEC) as resp:
+                chunks: list = []
+                usage: dict = {}
+                sse = False
+                raw_lines: list = []
+                for line in resp:
+                    raw_lines.append(line)
+                    text_line = line.decode("utf-8", errors="replace").strip()
+                    if not text_line.startswith("data:"):
+                        continue
+                    sse = True
+                    data_str = text_line[5:].strip()
+                    if data_str == "[DONE]":
+                        continue
+                    try:
+                        obj = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(obj.get("usage"), dict) and obj["usage"]:
+                        usage = obj["usage"]
+                    try:
+                        delta = obj["choices"][0].get("delta") or {}
+                    except (IndexError, KeyError, TypeError, AttributeError):
+                        continue
+                    piece = delta.get("content") or ""
+                    if piece:
+                        chunks.append(piece)
+                        try:
+                            on_text("".join(chunks))
+                        except Exception:
+                            pass      # превью сломалось — ответ живёт
+                if not sse:
+                    data = json.loads(
+                        b"".join(raw_lines).decode("utf-8", errors="replace"))
+                    content = data["choices"][0]["message"]["content"]
+                    try:
+                        on_text(content)
+                    except Exception:
+                        pass
+                    return data
+                return {"choices": [{"message": {
+                            "role": "assistant",
+                            "content": "".join(chunks)}}],
+                        "usage": usage}
+        except BrainError:
+            raise
+        except Exception as e:
+            raise BrainError(str(e))
+
     # ---------- обычный чат ----------
 
     def chat(self, messages: list, gen_tokens: Optional[int] = None,
@@ -125,7 +222,9 @@ class BrainClient:
     # ---------- строгий JSON (ADR-002) ----------
 
     def ask_json(self, user_text: str, system_extra: str = "", retries: int = 2,
-                 history: Optional[list] = None) -> dict:
+                 history: Optional[list] = None,
+                 max_tokens: Optional[int] = None,
+                 on_text: Optional[Callable[[str], None]] = None) -> dict:
         """Спросить мозг и получить dict. Брак -> повтор с укором -> фоллбэк/ошибка.
 
         ADR-002: JSON, завёрнутый в посторонний текст, НЕ спасается регулярками —
@@ -133,6 +232,11 @@ class BrainClient:
         №10: history — прошлые ходы [{role, content}], вставляются ПОСЛЕ
         системного промпта и ДО нового сообщения: префиксный KV-кэш цел,
         разговор не рвётся.
+
+        СКОРОСТЬ v1: max_tokens — бюджет ПЕРВОГО захода (чат Марфы живёт
+        на BRAIN_ANSWER_TOKENS: краткость — часть закона дома); повторы
+        уходят с полным бюджетом — обрезанный JSON лечится местом.
+        on_text — стрим-превью: текст летит в эфир по мере генерации.
         """
         messages = [
             {"role": "system", "content": (
@@ -150,17 +254,30 @@ class BrainClient:
         messages.append({"role": "user", "content": user_text})
         attempts = max(1, retries)
         mood = mood_params()   # №9: характер — из доктрины Создателя
-        for _ in range(attempts):
+        first_cap = (config.GENERATION_BUDGET_TOKENS if max_tokens is None
+                     else min(int(max_tokens), config.GENERATION_BUDGET_TOKENS))
+        for i in range(attempts):
             payload = {
                 "messages": messages,
                 "temperature": mood.get("temperature", DEFAULT_TEMPERATURE),
-                "max_tokens": config.GENERATION_BUDGET_TOKENS,
+                "max_tokens": (first_cap if i == 0
+                               else config.GENERATION_BUDGET_TOKENS),
                 "response_format": {"type": "json_object"},
             }
             if "top_p" in mood:
                 payload["top_p"] = mood["top_p"]
-            data = self._post("/v1/chat/completions", payload)
+            if on_text is not None:
+                data = self._post_stream("/v1/chat/completions", payload, on_text)
+            else:
+                data = self._post("/v1/chat/completions", payload)
             raw = data["choices"][0]["message"]["content"]
+            raw = _strip_think(raw)
+            usage = data.get("usage")
+            if isinstance(usage, dict):
+                self.last_usage = {
+                    "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                    "completion_tokens": int(usage.get("completion_tokens") or 0),
+                }
             try:
                 out = json.loads(raw)
                 if isinstance(out, dict):

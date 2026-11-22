@@ -36,6 +36,10 @@
         .typing .dots::after { content: ''; animation: dots 1.2s steps(4, end) infinite; }
         @keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } }
         .typing .stage { display: block; margin-top: 4px; opacity: 0.75; max-width: 320px; }
+        /* СКОРОСТЬ v1: живой черновик — мозг печатает ответ прямо в чат */
+        .typing .preview { display: block; margin-top: 6px; max-width: 340px;
+                           font-style: italic; opacity: 0.9; white-space: pre-wrap;
+                           border-left: 2px solid var(--border); padding-left: 8px; }
         .stamp { font-size: 11px; color: #6e7681; align-self: flex-start; margin-top: -6px; padding-left: 8px; }
     </style>
 </head>
@@ -74,13 +78,15 @@
             return (Math.round(Number(x || 0) * 10) / 10).toString().replace('.', ',');
         }
 
-        // штамп под ответом: «12,4 с · мозг» — время видно в самом чате
-        function addStamp(secs, label) {
+        // штамп под ответом: «12,4 с · мозг · 84 ток» — время И объём:
+        // если снова медленно — по токенам видно, кто съел время
+        function addStamp(secs, label, tok) {
             if (secs === null || secs === undefined) return;
             const c = document.getElementById('chat');
             const d = document.createElement('div');
             d.className = 'stamp';
-            d.textContent = fmtSecs(secs) + ' с · ' + (label || '');
+            d.textContent = fmtSecs(secs) + ' с · ' + (label || '') +
+                            (tok ? ' · ' + tok + ' ток' : '');
             c.appendChild(d);
             c.scrollTop = c.scrollHeight;
         }
@@ -130,7 +136,7 @@
                     document.getElementById('chat').innerHTML = '';
                     d.turns.forEach(t => {
                         add(t.role, t.text, t.html);
-                        if (t.role === 'assistant') addStamp(t.secs, t.src_label);
+                        if (t.role === 'assistant') addStamp(t.secs, t.src_label, t.tok);
                     });
                     add('meta', '— разговор продолжается, Марфа помнит —');
                 }
@@ -143,7 +149,8 @@
             const box = document.createElement('div');
             box.className = 'typing';
             box.innerHTML = '<span class="dots">думает</span> <span id="think-secs">0,0 с</span>' +
-                            '<span class="stage" id="think-stage"></span>';
+                            '<span class="stage" id="think-stage"></span>' +
+                            '<span class="preview" id="think-preview"></span>';
             document.getElementById('chat').appendChild(box);
             document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
             return box;
@@ -171,6 +178,15 @@
                         if (p.busy) {
                             st.textContent = p.mine ? (p.stage || '') : 'отвечает в другом разговоре…';
                         }
+                        // СКОРОСТЬ v1: превью — мозг печатает ответ живьём,
+                        // чат показывает текст ПО МЕРЕ генерации
+                        const pv = document.getElementById('think-preview');
+                        if (pv) {
+                            pv.textContent = (p.busy && p.mine && p.preview) ? p.preview : '';
+                            if (pv.textContent) {
+                                document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
+                            }
+                        }
                     }).catch(() => {});
             }, 1500);
             try {
@@ -181,7 +197,7 @@
                 });
                 const d = await r.json();
                 add('ai', d.reply || 'Нет ответа', d.html);
-                addStamp(d.secs, d.source_label);
+                addStamp(d.secs, d.source_label, d.tok);
             } catch(e) {
                 add('ai', 'Ошибка: ' + e);
             } finally {

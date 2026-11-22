@@ -192,6 +192,43 @@ def test_describe_drops_hallucinated_bbox(monkeypatch):
     assert d["elements"][0]["text"] == "Пуск"
 
 
+def test_describe_stats_reveal_why_empty(monkeypatch):
+    """Урок «руки нажми Пуск» → «глаза не прочитали ни одной надписи»:
+    выбрасывание больше не МОЛЧИТ — дескриптор несёт _stats, и пустота
+    получает причину (для рук и архитектора)."""
+    bad = {
+        "description": "ок",
+        "elements": [
+            {"type": "button", "text": "Пуск", "bbox": [0, 698, 32, 720]},
+            {"type": "button", "text": "за экраном", "bbox": [2000, 5, 3000, 99]},
+        ],
+    }
+    _fake_sees(monkeypatch, _json.dumps(bad, ensure_ascii=False))
+    d = eyes.describe()
+    assert d["_stats"] == {"raw": 2, "kept": 1, "dropped": 1}
+
+
+def test_describe_stats_all_geometry_dropped(monkeypatch):
+    """Модель вернула элементы, но ВСЯ геометрия вне кадра — рукам
+    и экзамену есть что доложить: увидели N, не прошло проверку."""
+    bad = {"elements": [
+        {"type": "button", "text": "Пуск", "bbox": [2000, 5, 3000, 99]},
+        {"type": "text", "text": "иероглиф", "bbox": [0, 900, 100, 999]},
+    ]}
+    _fake_sees(monkeypatch, _json.dumps(bad, ensure_ascii=False))
+    d = eyes.describe()
+    assert d["elements"] == []
+    assert d["_stats"]["dropped"] == 2 and d["_stats"]["raw"] == 2
+
+
+def test_describe_stats_empty_model_answer(monkeypatch):
+    """Модель сама ничего не вернула — raw=0: честное «не увидели
+    ничего», а не загадочное молчание."""
+    _fake_sees(monkeypatch, '{"summary": "пусто"}')
+    d = eyes.describe()
+    assert d["_stats"] == {"raw": 0, "kept": 0, "dropped": 0}
+
+
 def test_describe_rejects_parrot_template(monkeypatch):
     """Браковщик шаблонов: «пример-надпись» в ответе — сенсор видит
     промпт, а не экран; ответ забракован, Создателю — честная ошибка."""
@@ -309,13 +346,76 @@ def test_camera_no_opencv_honest(monkeypatch):
     monkeypatch.setattr(eyes, "health", lambda: True)
 
     def no_cv2(width=960):
-        raise RuntimeError("нет модуля камеры: No module named 'cv2' "
-                           "(venv\\Scripts\\pip install opencv-python)")
+        raise RuntimeError("нет модуля камеры: No module named 'cv2'. "
+                           "Аптечка не смогла: сеть")
 
     monkeypatch.setattr(eyes, "_camera_b64", no_cv2)
     text = eyes.describe_camera_text()
     assert "камера не смогла" in text
-    assert "opencv-python" in text          # Создателю — что ставить
+    assert "Аптечка" in text            # Марфа пробовала сама — и сказала
+
+
+# ---------- аптечка в момент команды: «посмотри на меня» без cv2 ----------
+
+class _FakeCap:
+    def isOpened(self):
+        return True
+
+    def read(self):
+        return True, _FRAME
+
+    def release(self):
+        pass
+
+
+import numpy as _np  # noqa: E402 — только для фикстуры кадра в тесте
+
+_FRAME = _np.zeros((4, 6, 3), dtype=_np.uint8)
+
+
+def test_camera_b64_installs_missing_cv2(monkeypatch):
+    """Нет cv2 — Марфа ставит opencv-python прямо в момент команды
+    и ТЕМ ЖЕ вызовом снимает кадр: никакого «поставь и приходи завтра»."""
+    import types
+    calls = {"n": 0}
+    fake_cv2 = types.SimpleNamespace(
+        VideoCapture=lambda i: _FakeCap(), COLOR_BGR2RGB=4,
+        cvtColor=lambda f, c: f)
+
+    def fake_import():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ImportError("No module named 'cv2'")
+        return fake_cv2
+
+    monkeypatch.setattr(eyes, "_import_cv2", fake_import)
+    monkeypatch.setattr(eyes.selfcare, "ensure_module",
+                        lambda name, timeout=900.0: {
+                            "ok": True, "already": False, "version": "4.10.0",
+                            "secs": 23.4, "import_name": "cv2",
+                            "pkg": "opencv-python", "rc": 0, "tail": "",
+                            "why": None})
+    b64 = eyes._camera_b64()
+    assert b64 and calls["n"] == 2        # до аптечки — мимо, после — живой
+
+
+def test_camera_b64_module_uninstallable_honest(monkeypatch):
+    """Аптечка не смогла (сеть) — честная ошибка с командой для рук,
+    без выдумки про «вижу»."""
+    def no_cv2():
+        raise ImportError("No module named 'cv2'")
+
+    monkeypatch.setattr(eyes, "_import_cv2", no_cv2)
+    monkeypatch.setattr(eyes.selfcare, "ensure_module",
+                        lambda name, timeout=900.0: {
+                            "ok": False, "already": False, "version": None,
+                            "secs": 5.0, "import_name": "cv2",
+                            "pkg": "opencv-python", "rc": 1,
+                            "tail": "network is unreachable", "why": None})
+    with pytest.raises(RuntimeError) as ei:
+        eyes._camera_b64()
+    assert "нет модуля камеры" in str(ei.value)
+    assert "Аптечка" in str(ei.value) and "opencv-python" in str(ei.value)
 
 
 # ---------- живой самотест камеры (урок «а сейчас?» 22.11) ----------
@@ -334,11 +434,40 @@ def test_camera_selftest_all_alive(monkeypatch):
 
 
 def test_camera_selftest_no_module_honest(monkeypatch):
+    """Модуля нет, аптечка не справилась (сеть/права) — честный отказ:
+    что пробовала, почему не вышло и команда для рук Создателя."""
     monkeypatch.setattr(eyes, "_cv2_import", lambda: None)
+    monkeypatch.setattr(eyes.selfcare, "ensure_module",
+                        lambda name, timeout=900.0: {
+                            "ok": False, "already": False, "version": None,
+                            "secs": 12.0, "import_name": "cv2",
+                            "pkg": "opencv-python", "rc": 1,
+                            "tail": "network is unreachable", "why": None})
     text = eyes.camera_selftest()
     assert "модуль opencv: НЕТ" in text
-    assert "opencv-python" in text       # Создателю — что ставить и где
-    assert "venv" in text
+    assert "Аптечка" in text                     # что пробовала сама
+    assert "opencv-python" in text                # что ставить руками
+
+
+def test_camera_selftest_installs_module_itself(monkeypatch):
+    """Директива Создателя «ПОчему ты сам не установишь?»: модуля нет —
+    аптечка ставит его САМА и докладывает секунды; дальше ступени
+    самотеста идут как ни в чём не бывало."""
+    state = {"ver": None}
+    monkeypatch.setattr(eyes, "_cv2_import", lambda: state["ver"])
+
+    def fake_install(name, timeout=900.0):
+        state["ver"] = "4.10.0"
+        return {"ok": True, "already": False, "version": "4.10.0",
+                "secs": 23.4, "import_name": "cv2",
+                "pkg": "opencv-python", "rc": 0, "tail": "", "why": None}
+
+    monkeypatch.setattr(eyes.selfcare, "ensure_module", fake_install)
+    monkeypatch.setattr(eyes, "_VISION_ERROR", None)
+    monkeypatch.setattr(eyes, "health", lambda: False)   # сенсор дальше по ступеням
+    text = eyes.camera_selftest()
+    assert "НЕ БЫЛ" in text and "аптечка" in text
+    assert "4.10.0" in text and "23" in text      # версия и секунды — в чат
 
 
 def test_camera_selftest_sensor_down(monkeypatch):

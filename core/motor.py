@@ -484,12 +484,33 @@ def _eyes_or_honest():
 
 
 def _seen_texts(d: dict, limit: int = 6) -> str:
-    """Что глаза ЧИТАЮТ на экране — для честного «не вижу, вот что вижу»."""
+    """Что глаза ЧИТАЮТ на экране — для честного «не вижу, вот что вижу».
+
+    v2.1 (живой прогон 22.11: «руки нажми Пуск» → «глаза не прочитали
+    ни одной надписи» — а ПОЧЕМУ пусто, дом промолчал): пустота теперь
+    приходит с ПРИЧИНОЙ из _stats дескриптора — модель ничего не
+    вернула / геометрия не прошла проверку / увидели объекты, но
+    надписей не прочитали. Молчаливый симптом — не диагноз; в следующем
+    прогоне Создателя архитектор должен увидеть корень, а не угадывать.
+    """
     texts = [str(e.get("text", "")).strip() for e in (d.get("elements") or [])
              if isinstance(e, dict) and str(e.get("text", "")).strip()]
-    if not texts:
-        return "глаза не прочитали на экране ни одной надписи"
-    return ", ".join("«%s»" % t for t in texts[:limit])
+    if texts:
+        return ", ".join("«%s»" % t for t in texts[:limit])
+    st = d.get("_stats") if isinstance(d, dict) else None
+    if isinstance(st, dict):
+        raw = int(st.get("raw") or 0)
+        kept = int(st.get("kept") or 0)
+        dropped = int(st.get("dropped") or 0)
+        if raw and dropped >= raw:
+            return ("глаза увидели %d элемент(ов), но НИ ОДИН не прошёл "
+                    "проверку координат (геометрия вне кадра) — сообщи "
+                    "архитектору, это лечится" % raw)
+        if kept:
+            return ("глаза видят %d объект(ов), но надписей на них не "
+                    "прочитали — света/масштаба не хватило; скажи "
+                    "«посмотри» — опишу словами" % kept)
+    return "глаза не прочитали на экране ни одной надписи"
 
 
 def _do_click(task: str, target: str, motor: bool) -> list:
@@ -593,8 +614,9 @@ def exam() -> str:
     if el is None:
         return "\n".join(
             lines + ["глаза не нашли Пуск в дескрипторе — экзамен не "
-                     "состоялся: открой меню Пуска (клавиша Win) и скажи "
-                     "«руки, экзамен» ещё раз"])
+                     "состоялся. Глаза читают: %s. Открой меню Пуска "
+                     "(клавиша Win) и скажи «руки, экзамен» ещё раз"
+                     % _seen_texts(d)])
     bbox = el.get("bbox") or [0, 0, 0, 0]
     cx, cy = frame_center(el)
     x, y = scale_point(cx, cy, real, sent)

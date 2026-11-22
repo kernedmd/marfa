@@ -525,3 +525,58 @@ def test_parse_bare_verb_is_empty_not_garbage():
     """«нажми» без цели — подсказка, а не «не вижу ""»."""
     assert motor.parse_task("нажми")["verb"] == "empty"
     assert motor.parse_task("напечатай")["verb"] == "empty"
+
+
+# ---------- честная пустота: _stats называет ПРИЧИНУ (22.11, вечер) ----------
+# Урок живого прогона: «руки нажми Пуск» → «глаза не прочитали на
+# экране ни одной надписи» — а ПОЧЕМУ пусто, дом промолчал. Пустота
+# теперь приходит с диагнозом из _stats дескриптора глаз.
+
+def test_seen_texts_geometry_failed_diagnosis():
+    """Модель вернула элементы, но геометрия НЕ ПРОШЛА проверку кадра —
+    отказ рук называет это лечимым заболеванием, а не «не вижу»."""
+    d = {"elements": [], "_stats": {"raw": 3, "kept": 0, "dropped": 3}}
+    s = motor._seen_texts(d)
+    assert "3" in s and "не прошёл" in s and "архитектору" in s
+
+
+def test_seen_texts_seen_but_not_read_diagnosis():
+    """Объекты увидели, надписи — нет: «света/масштаба не хватило»,
+    выход — «посмотри», там живое описание словами."""
+    d = {"elements": [{"type": "icon", "text": "", "bbox": [1, 2, 3, 4]}],
+         "_stats": {"raw": 2, "kept": 2, "dropped": 0}}
+    s = motor._seen_texts(d)
+    assert "2" in s and "не прочитали" in s and "посмотри" in s
+
+
+def test_seen_texts_old_descriptor_still_honest():
+    """Дескриптор без статистики (старый формат) — прежнее честное
+    «ни одной надписи», без выдумок и без падения."""
+    s = motor._seen_texts({"elements": []})
+    assert "ни одной надписи" in s
+
+
+def test_run_not_found_names_reason(home, monkeypatch):
+    """Отказ рук несёт ДИАГНОЗ пустоты: Создатель (и архитектор) в
+    следующем прогоне видит корень, а не угадывает по симптому."""
+    _armed_eyes(monkeypatch, descriptor={"elements": [
+        {"type": "button", "text": "Пуск", "bbox": [2000, 5, 3000, 99]},
+        {"type": "text", "text": "иероглиф", "bbox": [0, 900, 100, 999]},
+    ]})
+    out = motor.run("нажми Пуск")
+    assert "не видят" in out
+    assert "не прошёл" in out and "2" in out     # вот причина пустоты
+
+
+def test_exam_no_pusk_names_what_eyes_read(home, monkeypatch):
+    """Экзамен тоже честен: Пуска нет — говорим, ЧТО глаза читали,
+    а не только «не состоялся»."""
+    _armed_eyes(monkeypatch, descriptor={"elements": [
+        {"type": "input", "text": "Поиск", "bbox": [100, 690, 400, 715],
+         "confidence": 0.9},
+        {"type": "text", "text": "C:\\Marfa>", "bbox": [64, 32, 412, 58],
+         "confidence": 0.8},
+    ]})
+    out = motor.exam()
+    assert "не состоялся" in out
+    assert "Глаза читают" in out and "Поиск" in out

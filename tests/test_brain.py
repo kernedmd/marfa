@@ -174,3 +174,70 @@ def test_explicit_temperature_beats_mood(client, srv, doctrine_home):
     _write_mood(config.DOCTRINE_FILE, {"temperature": 0.6})
     client.chat([{"role": "user", "content": "сожми"}], temperature=0.2)
     assert srv.calls[-1]["temperature"] == 0.2
+
+
+# ---------- СКОРОСТЬ v1: бюджет краткости, стрим, think-блоки ----------
+
+def test_ask_json_short_budget_first_attempt(client, srv):
+    """Чат-ответ живёт на BRAIN_ANSWER_TOKENS: первый заход — краткий
+    бюджет (урок «ответ через две минуты — это очень долго»)."""
+    srv.reply_content = '{"answer": "кратко"}'
+    client.ask_json("привет", max_tokens=config.BRAIN_ANSWER_TOKENS)
+    assert srv.calls[-1]["max_tokens"] == config.BRAIN_ANSWER_TOKENS
+
+
+def test_ask_json_retry_escalates_budget(client, srv):
+    """Брак → повтор с ПОЛНЫМ бюджетом: обрезанный JSON лечится местом,
+    а не укором — иначе короткий бюджет превращался бы в вечный брак."""
+    srv.script = ["не json совсем", '{"answer": "со второго раза"}']
+    client.ask_json("повтори", max_tokens=config.BRAIN_ANSWER_TOKENS)
+    assert srv.calls[0]["max_tokens"] == config.BRAIN_ANSWER_TOKENS
+    assert srv.calls[1]["max_tokens"] == config.GENERATION_BUDGET_TOKENS
+
+
+def test_ask_json_strips_think_blocks(client, srv):
+    """Qwen3 думает блоками <think>…</think> — грамматика их не
+    пускает, но сборка сервера без грамматики обязана не сломать дом:
+    стриппер снимает think, JSON остаётся чистым."""
+    srv.reply_content = '<think>размышления</think>{"answer": "суть"}'
+    out = client.ask_json("вопрос")
+    assert out == {"answer": "суть"}
+
+
+def test_ask_json_usage_captured(client, srv):
+    """usage ответа честно лежит в last_usage — для штампа «N ток»."""
+    content = '{"answer": "считай меня"}'
+    srv.reply_content = content
+    client.ask_json("вопрос")
+    assert client.last_usage["completion_tokens"] == max(1, len(content) // 3)
+
+
+def test_ask_json_streams_preview(client, srv):
+    """on_text — стрим-превью: дельты летят в эфир по мере генерации.
+    Фейк-сервер отвечает обычным JSON — честный фоллбэк зовёт on_text
+    один раз, превью всё равно состоится."""
+    srv.reply_content = '{"answer": "ответ рождается"}'
+    seen = []
+    out = client.ask_json("привет", on_text=seen.append)
+    assert out == {"answer": "ответ рождается"}
+    assert seen and seen[-1] == '{"answer": "ответ рождается"}'
+    assert srv.calls[-1]["stream"] is True     # стрим просился по-настоящему
+
+
+def test_ask_json_broken_on_text_never_breaks_answer(client, srv):
+    """Закон эфира: превью — косметика. Сломавшийся колбэк не имеет
+    права уронить ответ дома."""
+    srv.reply_content = '{"answer": "жива"}'
+
+    def boom(text):
+        raise RuntimeError("чат закрылся")
+
+    out = client.ask_json("привет", on_text=boom)
+    assert out == {"answer": "жива"}
+
+
+def test_answer_budget_stays_lean():
+    """Бюджет краткости не расползается: 320 — это ~40 с на CPU,
+    768 — уже две минуты (урок живого дома)."""
+    assert config.BRAIN_ANSWER_TOKENS <= 320
+    assert config.BRAIN_ANSWER_TOKENS < config.GENERATION_BUDGET_TOKENS
