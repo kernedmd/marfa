@@ -629,6 +629,101 @@ def whats_changed_text() -> str:
 
 
 # ---------------------------------------------------------------
+# №6 «ГЛАЗА КАК КОНТЕКСТ МОЗГА» (роадмап 30, закрывает Г-3): флаг
+# «Илья за компьютером». Резолюция Создателя «следи за экраном» —
+# и каждый мозговой трек получает свежую строку о том, что на
+# экране: мозг отвечает «в курсе», а не «дай команду посмотри».
+# Взгляд кэшируется (TTL 5 мин): каждый ход не платит по 9 секунд.
+# ---------------------------------------------------------------
+
+WATCH_PROMPT = (
+    "Ты — зрение Марфы. Одним-двумя предложениями по-русски скажи, "
+    "что сейчас на экране: какая программа или окно открыто, чем "
+    "занят человек. Читай заголовки окон и главные надписи, самые "
+    "важные цитируй коротко; нечитаемое не выдумывай. Очень коротко — "
+    "это фон для разговора, а не отчёт."
+)
+WATCH_MAX_TOKENS = 160        # фон короткий: у чата и так бюджет 320
+WATCH_LINE_CAP = 300          # символов: контекст — не роман
+
+_watch_cache = {"line": None, "ts": 0.0}
+
+
+def watch_enabled() -> bool:
+    """Включено ли слежение: data\\screen_watch.json (резолюция
+    Создателя, как моторика и живой язык). Код файл не пишет —
+    только команда «следи за экраном»."""
+    return Path(config.SCREEN_WATCH_FILE).is_file()
+
+
+def set_watch(on: bool) -> str:
+    """Включить/выключить слежение за экраном (воля Создателя)."""
+    p = Path(config.SCREEN_WATCH_FILE)
+    global _watch_cache
+    if on:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(
+            {"enabled": True, "ts": time.strftime("%Y-%m-%d %H:%M:%S")},
+            ensure_ascii=False), encoding="utf-8")
+        _watch_cache = {"line": None, "ts": 0.0}
+        return ("Теперь слежу за экраном: примерно раз в 5 минут "
+                "посматриваю и держу мозг в курсе, что перед тобой "
+                "происходит, — спрашивай «что на экране», отвечу по "
+                "свежему. Выключить — «не следи за экраном»")
+    try:
+        p.unlink()
+    except FileNotFoundError:
+        pass
+    _watch_cache = {"line": None, "ts": 0.0}
+    return "Больше не слежу за экраном — мозг снова без картинки"
+
+
+def _watch_render(line: str, ts: float) -> str:
+    """Свежесть взгляда — в тексте: мозг видит, насколько факт стар."""
+    mins = int((time.time() - ts) // 60)
+    return line + (" (взгляд только что)" if mins < 1
+                   else " (взгляд %d мин назад)" % mins)
+
+
+def screen_context_line(force: bool = False) -> Optional[str]:
+    """Свежая строка о экране для системного промпта мозга (№6).
+
+    Слежение выключено — None (промпт не дорожает). Включено —
+    короткая правда с кэшем TTL: один взгляд живёт 5 минут, ходы
+    между ними бесплатны. Глаза споткнулись — честная строка
+    «не прочитан» тоже кэшируется: каждый ход не ждёт по 9 секунд
+    мёртвого сенсора. Исключений не поднимает.
+    """
+    global _watch_cache
+    if not watch_enabled():
+        return None
+    line = _watch_cache.get("line")
+    ts = float(_watch_cache.get("ts") or 0.0)
+    if not force and line and time.time() - ts < config.SCREEN_WATCH_TTL_SEC:
+        return _watch_render(line, ts)
+    try:
+        if _VISION_ERROR:
+            raise RuntimeError(_VISION_ERROR)
+        if not health_cached():
+            raise RuntimeError("сенсор %d не отвечает" % config.PORT_EYES)
+        progress.stage("посматриваю на экран для контекста разговора…")
+        b64, _real, small = _screenshot_b64(WORK_WIDTH)
+        remember_frame(b64, small)          # взгляд есть взгляд (№3)
+        out, _ = _ask(b64, WATCH_PROMPT, None, max_tokens=WATCH_MAX_TOKENS)
+        prose = _clean_prose(out)[:WATCH_LINE_CAP]
+        if not prose:
+            raise RuntimeError("пустой ответ")
+    except Exception as e:
+        _watch_cache = {"line": ("экран не прочитан (%s) — попробую снова "
+                                 "через ~%d мин"
+                                 % (e, config.SCREEN_WATCH_TTL_SEC // 60)),
+                        "ts": time.time()}
+        return _watch_cache["line"]
+    _watch_cache = {"line": prose, "ts": time.time()}
+    return _watch_render(prose, _watch_cache["ts"])
+
+
+# ---------------------------------------------------------------
 # №4 «ЗАПОМНИ ЭКРАН» — снимок + дескриптор в зрительную память
 # (роадмап 30, №4): data\screenshots\screen_*.png + .json-сайдкар
 # рядом + строка в память дома. «вспомни экран» находит обычным

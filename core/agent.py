@@ -320,6 +320,17 @@ def _house_state() -> str:
             thought_note = "; " + t
     except Exception as e:
         _lesson("сенсор-упал", "мысли: %s: %s" % (type(e).__name__, e))
+    # №6 «глаза как контекст мозга» (Г-3): слежение включено — мозг
+    # получает свежую строку о экране (кэш TTL: ходы между взглядами
+    # бесплатны). Сенсор в своей броне: упавшее слежение не выдаёт
+    # себя за «мозг недоступен» (закон №10 р3)
+    watch_note = ""
+    try:
+        wl = eyes.screen_context_line()
+        if wl:
+            watch_note = "; экран сейчас: " + wl
+    except Exception as e:
+        _lesson("сенсор-упал", "слежение: %s: %s" % (type(e).__name__, e))
     return (
         "Состояние дома: мозг " + config.BRAIN_MODEL_NAME + " на " + config.BRAIN_URL +
         ", панель " + str(config.PORT_WEB) +
@@ -330,7 +341,7 @@ def _house_state() -> str:
         "; " + ears_note +
         "; " + inner_note +
         "; " + sleep_note + thought_note +
-        "; я не сплю с " + started
+        "; я не сплю с " + started + watch_note
     )
 
 
@@ -628,6 +639,16 @@ class Agent:
         if lowq in ("запомни экран", "запомни этот экран", "сохрани экран"):
             return Reply(eyes.save_snapshot(memory=self.memory),
                          "python", "screen_shot")
+
+        # №6 «глаза как контекст мозга» (Г-3): резолюция Создателя —
+        # как моторика и живой язык, одной фразой. Мозг начинает
+        # видеть экран через строку состояния (кэш TTL 5 мин)
+        if lowq in ("следи за экраном", "смотри за экраном",
+                    "следи за экран"):
+            return Reply(eyes.set_watch(True), "python", "screen_watch")
+        if lowq in ("не следи за экраном", "хватит следить за экраном",
+                    "не следи за экран", "перестань следить за экраном"):
+            return Reply(eyes.set_watch(False), "python", "screen_watch")
 
         # №2 «найди на экране» (роадмап 30): поиск элемента по описанию —
         # лестница зон с апскейлом; ответ: надпись, центр экрана, рамка.
