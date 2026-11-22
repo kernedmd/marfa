@@ -362,3 +362,31 @@ def test_agent_forget_name(agent, srv):
     r = agent.handle("забудь моё имя")
     assert "забыла" in r.text
     assert srv.calls == []
+
+
+# ---------- Ф3/Ф4: приветствие и дайджест — команды ----------
+
+def test_agent_greet_command(agent, srv):
+    """«привет» — рефлекс: время суток + имя + отсутствие; мозг молчит
+    (в приветствии нечего думать — всё знает дом)."""
+    r = agent.handle("привет")
+    assert r.tool_used == "greet" and r.source == "python"
+    assert "Илья" in r.text
+    assert srv.calls == []
+
+
+def test_agent_digest_command(agent, srv):
+    """«что нового» — дайджест жизни дома за отсутствие."""
+    r = agent.handle("что нового")
+    assert r.tool_used == "digest" and r.source == "python"
+    assert srv.calls == []
+
+
+def test_agent_good_morning_still_wakes_organism(agent, srv, monkeypatch):
+    """«доброе утро» — команда пробуждения организма (сон важнее
+    приветствия), не попала в новый список приветствий."""
+    from core import sleep as _sleep
+    monkeypatch.setattr(_sleep, "morning_text", lambda dream=None: "утро организма")
+    r = agent.handle("доброе утро")
+    assert r.tool_used == "sleep"
+    assert srv.calls == []

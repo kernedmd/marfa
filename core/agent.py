@@ -695,6 +695,37 @@ class Agent:
             from core import people as _people
             return Reply(_people.forget_name(), "python", "introduce")
 
+        # Ф3 «живое приветствие» (23.11): «привет» — рефлекс, не шаблон
+        # мозга: время суток + имя (знакомство) + сколько не виделись
+        # (файлы диалога, из первых рук). «доброе утро» остаётся
+        # командой пробуждения организма — это важнее
+        if lowq in ("привет", "привет!", "здравствуй", "здравствуйте",
+                    "здорово", "добрый день", "добрый вечер", "доброй ночи",
+                    "салют", "ку"):
+            from core import greet as _greet
+            from core.dialog import DialogStore as _DS
+            try:
+                _dialog = _DS()
+            except Exception:
+                _dialog = None
+            return Reply(_greet.greeting_text(dialog=_dialog),
+                         "python", "greet")
+
+        # Ф4 «что нового» (23.11): дайджест жизни дома за отсутствие —
+        # мысли, сны, новые воспоминания, открытые вопросы; каждый
+        # орган в своей броне, тишина — тоже честный ответ
+        if lowq in ("что нового", "что случилось", "что было",
+                    "что было пока меня нет", "расскажи новости"):
+            from core import digest as _digest
+            from core.dialog import DialogStore as _DS
+            try:
+                _dialog = _DS()
+            except Exception:
+                _dialog = None
+            return Reply(_digest.what_is_new(dialog=_dialog,
+                                             memory=self.memory),
+                         "python", "digest")
+
         # 22.11 (ночь, урок прогона): «проверь ещё раз модуль, он появился» —
         # проверка камеры это ЭКСПЕРИМЕНТ (импорт → сенсор → кадр),
         # а не воспоминание мозга «всё ещё недоступна». startswith — хвост

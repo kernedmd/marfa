@@ -164,7 +164,7 @@ def test_agent_brain_failure_is_a_lesson(home):
             raise RuntimeError("нет ответа от 8082")
 
     agent = Agent(brain=DeadBrain(), memory=None, doctrine="")
-    reply = agent.handle("привет")
+    reply = agent.handle("расскажи о законах дома")
     assert "мозг недоступен" in reply.text
     kinds = [r["kind"] for r in journal.recent()]
     assert "мозг-недоступен" in kinds

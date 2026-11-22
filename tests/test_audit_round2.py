@@ -625,7 +625,7 @@ def test_h8_oversized_doctrine_honest_reply(tmp_path, monkeypatch):
     config.ensure_dirs()
     from core.agent import Agent
     giant = "закон " * 2000                    # ~6600 ток — не влезает
-    r = Agent(brain=None, memory=None, doctrine=giant).handle("привет")
+    r = Agent(brain=None, memory=None, doctrine=giant).handle("расскажи о законах дома")
     assert r.source == "fallback"
     assert "архитектору" in r.text
 
