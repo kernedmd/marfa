@@ -347,3 +347,20 @@ def test_roadmap_has_self_knowledge_circle():
     text = _flat(Path("docs/ROADMAP_30.md").read_text(encoding="utf-8"))
     assert "Самопознание" in text
     assert "изучи себя" in text
+
+
+def test_roadmap_has_eyes_v2_and_hands():
+    """Круг Р и глаза v2 записаны в карту: попугай промпта, руки-слуга."""
+    text = _flat(Path("docs/ROADMAP_30.md").read_text(encoding="utf-8"))
+    assert "Глаза v2" in text
+    assert "антипопугай" in text.lower() or "попугай" in text
+    assert "руки, экзамен" in text            # Р-0 — команда экзамена
+
+
+def test_manual_teaches_hands_and_camera():
+    """РУКОВОДСТВО: кнопка 91 (резолюция на моторику), сухой режим,
+    команды камеры и «что ты видишь» — строки 10-11 разбора полётов."""
+    text = _flat(Path("docs/РУКОВОДСТВО_СОЗДАТЕЛЯ.md").read_text(encoding="utf-8"))
+    for anchor in ("91_hands_gate", "СУХОМ режиме", "руки, экзамен",
+                   "что ты видишь", "посмотри в камеру", "opencv-python"):
+        assert anchor in text, "в РУКОВОДСТВЕ нет: " + anchor
