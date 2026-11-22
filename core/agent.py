@@ -555,6 +555,26 @@ class Agent:
             return Reply(_quote.quote(memory=self.memory),
                          "python", "quote")
 
+        # Ф10 «будильник» (23.11): «напомни через N минут: X» — у мозга
+        # нет часов действия, у дома есть; назвонившие выносит первая
+        # строка любого ответа (обёртка handle)
+        if lowq in ("напоминания", "напомни мне", "будильники", "таймеры"):
+            from core import reminders
+            return Reply(reminders.render_active(), "python", "reminders")
+        m = re.match(r"^отмени\s+напоминание\s*[№#]?\s*(\d+)$", lowq)
+        if m:
+            from core import reminders
+            return Reply(reminders.cancel(int(m.group(1))),
+                         "python", "reminders")
+        if low.startswith("напомни"):
+            from core import reminders
+            plan = reminders.parse(t)
+            if plan is not None:
+                return Reply(reminders.add(plan), "python", "reminders")
+            # без времени — не таймер: «напомни, где мы остановились» —
+            # работа памяти и мозга, не будильника (урок жадной ветки:
+            # тест доктрины поймал перехват на «напомни, где живёт дом»)
+
         # СОН: «спи» — Создатель укладывает до утра или «проснись»
         if lowq in ("спи", "спать", "ложись спать", "на боковую"):
             return Reply(sleep.go_to_bed(reason="Илья сказал: спи"),
@@ -1144,7 +1164,26 @@ class Agent:
     def handle(self, user_text: str, reply_to=None,
                history: Optional[list] = None) -> Reply:
         """Главная точка дома. №10: history — прошлые ходы разговора
-        (DialogStore.render_messages), мозг видит диалог целиком."""
+        (DialogStore.render_messages), мозг видит диалог целиком.
+
+        Ф10 (23.11): будильник дома — любая реплика Создателя выносит
+        назвонившие напоминания ПЕРВОЙ строкой ответа (у панели нет
+        канала «постучать первой», и мы не притворяемся; напоминание
+        честно ждёт в чате). Упавший будильник не роняет чат.
+        """
+        reply = self._dispatch(user_text, reply_to, history)
+        try:
+            from core import reminders
+            note = reminders.due_note()
+            if note:
+                reply.text = note + "\n\n" + reply.text
+        except Exception as e:
+            _lesson("орган-упал", "будильник: %s: %s" % (type(e).__name__, e))
+        return reply
+
+    def _dispatch(self, user_text: str, reply_to=None,
+                  history: Optional[list] = None) -> Reply:
+        """Прежняя главная точка: калитка → пробуждение → рефлексы → мозг."""
         # Раунд 3, №6: калитка Создателя — тоже код, и она может споткнуться
         # (нет .env, битый конфиг). Безопасность важнее, но исключение из
         # калитки не должно убивать весь чат: урок — архитектору, ход — дальше

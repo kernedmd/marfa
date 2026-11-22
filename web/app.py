@@ -354,6 +354,25 @@ def api_progress():
     return jsonify(progress.snapshot(sid))
 
 
+@app.get("/api/reminders")
+def api_reminders():
+    """Ф10 «будильник»: назвонившие напоминания — для страницы чата.
+
+    Чат спрашивает при загрузке: открыл панель — увидел, что время
+    вышло (напоминание звонит и первой строкой любого ответа — этот
+    эндпоинт для тихого возврата в панель). Будильник упал — честный
+    пустой список, чат жив (закон №10 р3).
+    """
+    try:
+        from core import reminders
+        note = reminders.due_note()
+        active = reminders.render_active()
+        return jsonify({"note": note, "active": active})
+    except Exception as e:
+        return jsonify({"note": "", "active": "",
+                        "error": "%s: %s" % (type(e).__name__, e)})
+
+
 @app.get("/api/dialog/<session>")
 def api_dialog(session):
     """История сессии для страницы чата (переживает F5).

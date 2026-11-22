@@ -462,3 +462,43 @@ def test_agent_quote_command(agent, srv, monkeypatch):
     r2 = agent.handle("что прочитала?")
     assert r2.tool_used == "quote"
     assert srv.calls == []
+
+
+# ---------- Ф10: будильник дома ----------
+
+def test_agent_reminder_full_cycle(agent, srv):
+    """«напомни через минуту» → молчит, пока не вышло → ЛЮБАЯ реплика
+    выносит напоминание первой строкой → один звонок, один раз."""
+    r = agent.handle("напомни через 1 минуту: проверить тест будильника")
+    assert r.tool_used == "reminders" and "Напомню" in r.text
+    r2 = agent.handle("время")
+    assert "НАПОМИНАНИЕ" not in r2.text
+    # выходим за срок — правкой файла времени (часы теста не ждут)
+    import json as _json
+    import datetime as _dt
+    import core.reminders as _r
+    items = _json.loads(_r.reminders_file().read_text(encoding="utf-8"))
+    items[0]["due"] = (_dt.datetime.now() - _dt.timedelta(seconds=1)) \
+        .isoformat(timespec="seconds")
+    _r.reminders_file().write_text(_json.dumps(items, ensure_ascii=False),
+                                   encoding="utf-8")
+    r3 = agent.handle("время")
+    assert r3.text.startswith("НАПОМИНАНИЕ") and "проверить тест" in r3.text
+    assert "Сейчас" in r3.text                     # ответ на месте
+    r4 = agent.handle("время")
+    assert "НАПОМИНАНИЕ" not in r4.text            # один звонок — один раз
+
+
+def test_agent_reminder_without_time_is_not_timer(agent, srv):
+    """«напомни про день города» — без времени это не таймер, а живая
+    речь для мозга (урок жадной ветки: тест доктрины поймал перехват)."""
+    srv.reply_content = '{"answer": "день города в субботу"}'
+    r = agent.handle("напомни про день города")
+    assert r.source == "brain" and len(srv.calls) == 1
+
+
+def test_agent_reminders_list_command(agent, srv):
+    agent.handle("напомни через 30 минут: списочек")
+    r = agent.handle("напоминания")
+    assert r.tool_used == "reminders" and "списочек" in r.text
+    assert srv.calls == []
