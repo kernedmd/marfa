@@ -179,3 +179,36 @@ def test_agent_command_crash_honest(monkeypatch):
     assert r.tool_used == "architect_weekly"
     assert "не собрался" in r.text and "архитектору" in r.text
     assert a.brain.calls == 0
+
+
+# ---------- СТРАЖ «ТЕСТ В ТЕСТЕ» (23.11, урок песочницы) ----------
+
+def test_src_tests_refuses_inside_battery(monkeypatch):
+    """Дежурный, проснувшись ВНУТРИ батареи (стремление в тесте гоняет
+    настоящий weekly_audit), не запускает вторую батарею: она дошла бы
+    до стремления снова — и так до таймаутов, рекурсия из одной минуты.
+    PYTEST_CURRENT_TEST ставит сам pytest — честный отказ, как N7."""
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/test_drive.py::x")
+    line = architect_oncall._src_tests()
+    assert "НЕ ЗАПУСКАЛИСЬ" in line and "тест в тесте" in line
+
+
+def test_src_tests_runs_outside_battery(monkeypatch):
+    """Вне батареи (живой дом, вс 20:00) — батарея запускается как
+    раньше: страж не превратил weekly_audit в вечно молчащий."""
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    # подменяем сам запуск: важно, что страж его ПРОПУСТИЛ
+    called = []
+
+    def fake_run(cmd, **kw):
+        called.append(cmd)
+        class R:
+            returncode = 0
+            stdout = "779 passed"
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(architect_oncall.subprocess, "run", fake_run)
+    line = architect_oncall._src_tests()
+    assert called, "страж не пустил батарею вне теста — слишком рьяно"
+    assert "ЗЕЛЁНАЯ" in line

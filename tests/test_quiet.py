@@ -136,10 +136,17 @@ def test_agent_quiet_crash_falls_to_brain(home, monkeypatch):
 
 def test_panel_import_applies_saved(home, monkeypatch):
     """web/app зовёт apply_saved на старте: резолюция доживает до
-    рестарта панели (импорт модуля — тот же рестарт в миниатюре)."""
+    рестарта панели (импорт модуля — тот же рестарт в миниатюре).
+
+    Герметичность батареи: web.app к этому моменту мог импортировать
+    сосед сверху (test_monitor_web) — обычный import стал бы no-op и
+    «рестарт» не случился бы. reload честно переисполняет модуль,
+    как настоящий перезапуск панели."""
     (home / "data").mkdir(parents=True, exist_ok=True)
     (home / "data" / "quiet.json").write_text(
         json.dumps({"quiet": True}), encoding="utf-8")
     logging.getLogger(quiet.PANEL_LOGGER).setLevel(logging.INFO)
-    import web.app  # noqa: F401 — повторный импорт применит волю
+    import importlib
+    import web.app as web_app          # noqa: F401 — был импортирован или нет
+    importlib.reload(web_app)          # «рестарт панели» даже при кэше
     assert _level() == logging.ERROR

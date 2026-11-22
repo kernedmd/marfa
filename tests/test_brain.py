@@ -155,18 +155,21 @@ def test_mood_changes_ask_json_sampling(client, srv, doctrine_home):
 
 
 def test_mood_broken_falls_back_to_default(client, srv, doctrine_home):
-    """Брак (temperature вне здравых границ) — характер по умолчанию 0.3."""
+    """Брак (temperature вне здравых границ) — характер по умолчанию 0.7
+    (фикс сэмплинга Qwen3 без мышления, §15; 0.3 был температурой С
+    мышлением и сушил ответы)."""
     _write_mood(config.DOCTRINE_FILE, {"temperature": 99})
     client.chat([{"role": "user", "content": "привет"}])
     call = srv.calls[-1]
-    assert call["temperature"] == 0.3
-    assert "top_p" not in call
+    assert call["temperature"] == 0.7
+    assert call["top_p"] == 0.8
 
 
 def test_mood_missing_file_is_default(client, srv, doctrine_home):
     """Нет файла доктрины — дефолт, никаких выдумок о характере."""
     client.chat([{"role": "user", "content": "привет"}])
-    assert srv.calls[-1]["temperature"] == 0.3
+    assert srv.calls[-1]["temperature"] == 0.7
+    assert srv.calls[-1]["top_p"] == 0.8
 
 
 def test_explicit_temperature_beats_mood(client, srv, doctrine_home):
@@ -241,3 +244,66 @@ def test_answer_budget_stays_lean():
     768 — уже две минуты (урок живого дома)."""
     assert config.BRAIN_ANSWER_TOKENS <= 320
     assert config.BRAIN_ANSWER_TOKENS < config.GENERATION_BUDGET_TOKENS
+
+
+# ---------- ТЕРАПИЯ §15 (23.11): мышление выкл, сэмплинг без мышления ----------
+
+def test_thinking_killed_in_every_track(client, srv):
+    """Двойное мышление выкл (закон дома): КАЖДЫЙ запрос несёт
+    chat_template_kwargs + «/no_think» в системном промпте — стрим,
+    чат и ask_json зовут одну модульную функцию (урок первой ревизии:
+    метод класса из стрима звался голым именем — NameError на каждом
+    ответе чата)."""
+    client.chat([{"role": "system", "content": "Ты — Марфа."},
+                 {"role": "user", "content": "привет"}])
+    call = srv.calls[-1]
+    assert call["chat_template_kwargs"] == {"enable_thinking": False}
+    assert call["messages"][0]["content"].endswith(" /no_think")
+    client.ask_json("вопрос")
+    call = srv.calls[-1]
+    assert call["chat_template_kwargs"] == {"enable_thinking": False}
+    assert call["messages"][0]["content"].endswith(" /no_think")
+
+
+def test_no_think_appended_once_on_retries(client, srv):
+    """Ретраи не плетут косичку из «/no_think»: идемпотентность
+    докупки — KV-кэш и промпт остаются честными."""
+    srv.script = ["мусор не json", '{"answer": "со второго"}']
+    client.ask_json("вопрос")
+    assert srv.calls[-1]["messages"][0]["content"].count("/no_think") == 1
+
+
+def test_thinking_kept_when_house_orders(client, srv, monkeypatch):
+    """BRAIN_THINKING=True — дом хочет мышление (например, ночная
+    рефлексия): клиент не душит модель своей страховкой."""
+    monkeypatch.setattr(config, "BRAIN_THINKING", True)
+    client.chat([{"role": "user", "content": "подумай глубоко"}])
+    call = srv.calls[-1]
+    assert "chat_template_kwargs" not in call
+    assert "/no_think" not in call["messages"][0]["content"]
+
+
+def test_no_system_message_still_safe(client, srv):
+    """Запрос без system-сообщения — только kwargs, без падения:
+    стрипперы и переключатели не имеют права ломать транспорт."""
+    client.chat([{"role": "user", "content": "без системы"}])
+    assert srv.calls[-1]["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_sampling_defaults_without_thinking(client, srv, doctrine_home):
+    """Фикс сэмплинга Qwen3 без мышления (§15): temp 0.7, top_p 0.8 —
+    0.3 был температурой С мышлением и сушил живой язык."""
+    client.chat([{"role": "user", "content": "привет"}])
+    call = srv.calls[-1]
+    assert call["temperature"] == 0.7
+    assert call["top_p"] == 0.8
+
+
+def test_preamble_says_organism_not_assistant(client, srv):
+    """«Ассистент» — слово-паразит живого лога 23.11: на нём 30B
+    скатывался в «не имею личных мыслей или эмоций». Преамбула
+    называет Марфу организмом — как органы чувств/сна/мыслей."""
+    client.ask_json("кто ты?")
+    sys_text = srv.calls[-1]["messages"][0]["content"]
+    assert "ассистент" not in sys_text.lower()
+    assert "организм" in sys_text.lower()

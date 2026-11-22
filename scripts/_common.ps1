@@ -178,12 +178,12 @@ function Test-PortFree {
 
 function Get-FreeRamGB {
     $os = Get-CimInstance Win32_OperatingSystem
-    return [math]::Round($os.FreePhysicalMemory * 1KB / 1GB, 1)
+    return [m[math]::Round($os.FreePhysicalMemory * 1KB / 1GB, 1)
 }
 
 function Get-TotalRamGB {
     $os = Get-CimInstance Win32_OperatingSystem
-    return [math]::Round($os.TotalVisibleMemorySize * 1KB / 1GB, 1)
+    return [m[math]::Round($os.TotalVisibleMemorySize * 1KB / 1GB, 1)
 }
 
 function Test-FileSha256 {
@@ -312,7 +312,7 @@ function Get-RemoteFile {
             Rename-Bad -Step $Step -Path $OutFile
         }
         elseif ($ExpectedGB -gt 0) {
-            $sizeGB = [math]::Round($sizeBytes / 1GB, 2)
+            $sizeGB = [m[math]::Round($sizeBytes / 1GB, 2)
             if ($sizeGB -ge ($ExpectedGB * 0.90) -and $sizeGB -le ($ExpectedGB * 1.10)) {
                 Write-Step "$name уже на месте ($sizeGB ГБ в допуске) — докачка не нужна"
                 Write-StepLog -Step $Step -Message "$name уже на месте, $sizeGB ГБ OK"
@@ -327,8 +327,8 @@ function Get-RemoteFile {
             }
         }
         elseif ($sizeBytes -gt 1MB) {
-            Write-Step "$name уже на месте ($([math]::Round($sizeBytes / 1MB)) МБ) — скачивание пропущено"
-            Write-StepLog -Step $Step -Message "$name уже на месте, $([math]::Round($sizeBytes / 1MB)) МБ"
+            Write-Step "$name уже на месте ($([m[math]::Round($sizeBytes / 1MB)) МБ) — скачивание пропущено"
+            Write-StepLog -Step $Step -Message "$name уже на месте, $([m[math]::Round($sizeBytes / 1MB)) МБ"
             return $true
         }
         else { Rename-Bad -Step $Step -Path $OutFile }
@@ -368,7 +368,7 @@ function Get-RemoteFile {
         Write-Step "SHA-256 совпал"
     }
     elseif ($ExpectedGB -gt 0) {
-        $sizeGB = [math]::Round((Get-Item $OutFile).Length / 1GB, 2)
+        $sizeGB = [m[math]::Round((Get-Item $OutFile).Length / 1GB, 2)
         $low = $ExpectedGB * 0.90; $high = $ExpectedGB * 1.10
         if ($sizeGB -lt $low -or $sizeGB -gt $high) {
             Fail -Step $Step -Why "размер $sizeGB ГБ вне допуска $low-$high ГБ (ждали ~$ExpectedGB) — файл не докачан: повторите шаг, докачка продолжится; при повторной ошибке удалите файл"

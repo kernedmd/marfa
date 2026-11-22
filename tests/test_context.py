@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Тесты Ф51 «иерархический контекст» (ТЗ 3.1, 0.3): бюджет 3072, иерархия, прозрачность."""
+"""Тесты Ф51 «иерархический контекст» (ТЗ 3.1, 0.3): бюджет 6500 (терапия §15 — контекст 8192, промпт перестал резаться), иерархия, прозрачность."""
 import pytest
 
 from core import config
@@ -9,8 +9,8 @@ DOCTRINE = "Я — Марфа. Служу Илье. Правила жизни д
 
 
 def test_constants_law():
-    """0.3: иерархия получает 3072 - 1000 = 2072 токена промпта."""
-    assert HIERARCHY_BUDGET == 2072
+    """0.3 + терапия §15: иерархия получает 6500 - 1000 = 5500 токенов промпта."""
+    assert HIERARCHY_BUDGET == 5500
     assert config.PROMPT_BUDGET_TOKENS + config.GENERATION_BUDGET_TOKENS <= config.CONTEXT_TOKENS
 
 
@@ -77,6 +77,6 @@ def test_oversized_doctrine_is_house_incident():
 
 
 def test_budget_above_law_rejected():
-    """Просить больше 3072 — нарушение 0.3, отказ."""
+    """Просить больше 6500 — нарушение 0.3, отказ."""
     with pytest.raises(ValueError):
-        build_system(doctrine=DOCTRINE, state_text="s", genome_rules=[], budget=4000)
+        build_system(doctrine=DOCTRINE, state_text="s", genome_rules=[], budget=7000)
