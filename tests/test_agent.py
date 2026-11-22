@@ -163,3 +163,56 @@ def test_brain_track_short_budget_and_tokens(agent, srv):
     assert srv.calls[-1]["max_tokens"] == config.BRAIN_ANSWER_TOKENS
     assert srv.calls[-1]["stream"] is True          # превью просилось
     assert isinstance(r.meta, dict) and r.meta["tok"] >= 1
+
+
+# ---------- РУКИ v2.1 (23.11): живой язык — мозгу, шпаргалка — по просьбе ----------
+
+def test_hands_natural_language_goes_to_brain(agent, srv):
+    """Урок живого лога: «Руки проверить работу микрофона» билось в
+    формат-ошибку рук. Живой язык — работа МОЗГА: руки не притворяются
+    глухим форматом, задание уходит думать мозгу."""
+    srv.reply_content = '{"answer": "проверю уши, минуту"}'
+    r = agent.handle("Руки проверить работу микрофона")
+    assert r.source == "brain" and len(srv.calls) == 1
+    assert "проверю уши" in r.text
+
+
+def test_hands_bare_and_help_are_friendly(agent, srv):
+    """«руки» и «что умеют руки» — шпаргалка по-человечески, а не тот же
+    формат-отказ (второй урок того же лога: на вопрос о руках рука
+    отвечала примером формата)."""
+    for msg in ("руки", "руки?", "руки помощь", "что умеют руки",
+                "что ты можешь руками"):
+        r = agent.handle(msg)
+        assert r.source == "python" and r.tool_used == "hands_help", msg
+        assert "нажми" in r.text and "буфер" in r.text, msg
+        assert srv.calls == [], msg
+
+
+def test_hands_known_verbs_still_direct(agent, srv, monkeypatch):
+    """Настоящие задания рук не ушли мозгу: «нажми Пуск» — по-прежнему
+    руки, мозг молчит (сухой режим честно скажет про кнопку 91)."""
+    from core import motor
+    called = []
+
+    def fake_run(task):
+        called.append(task)
+        return "РУКИ — задание: %s [сухой режим]" % task
+
+    monkeypatch.setattr(motor, "run", fake_run)
+    r = agent.handle("руки нажми Пуск")
+    assert r.source == "python" and r.tool_used == "hands"
+    assert called and "Пуск" in called[0]
+    assert srv.calls == []
+
+
+def test_hands_looking_redirect_survives(agent, srv, monkeypatch):
+    """«руки посмотри на меня» — честный редирект рук на глаза (урок
+    22.11 жив и с новым маршрутом: неизвестный глагол с «посмотр» не
+    уходит мозгу молча, а получает свою подсказку)."""
+    from core import motor
+    monkeypatch.setattr(motor, "run", lambda task: "РУКИ не смотрят — «посмотри»")
+    r = agent.handle("руки посмотри на меня")
+    assert r.source == "python" and r.tool_used == "hands"
+    assert "не смотрят" in r.text
+    assert srv.calls == []
