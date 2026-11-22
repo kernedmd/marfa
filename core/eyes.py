@@ -443,6 +443,7 @@ def describe_with_sizes(width: int = WORK_WIDTH) -> tuple:
         raise RuntimeError("глаза не готовы: " + _VISION_ERROR)
     progress.stage("снимаю экран для рук…")
     b64, real, small = _screenshot_b64(width)
+    remember_frame(b64, small)             # №3: взгляд = новый эталон
     progress.stage("глаза читают экран: элементы и координаты…")
     out, _ = _ask(b64, ELEMENTS_PROMPT, SCHEMA,
                   max_tokens=ELEMENTS_MAX_TOKENS)
@@ -480,6 +481,7 @@ def describe_text(width: int = WORK_WIDTH) -> str:
         t0 = time.time()
         progress.stage("снимаю экран…")
         b64, _real, _small = _screenshot_b64(width)
+        remember_frame(b64, _small)         # №3: взгляд = новый эталон
         progress.stage("глаза читают экран: надписи и кнопки…")
         out, _ = _ask(b64, SCREEN_PROMPT, None,
                       max_tokens=SCREEN_MAX_TOKENS)
@@ -506,6 +508,123 @@ def describe_text(width: int = WORK_WIDTH) -> str:
         return "\n".join(lines)
     except Exception as e:
         return "глаза ошиблись: " + str(e)
+
+
+# ---------------------------------------------------------------
+# №3 «ЧТО ИЗМЕНИЛОСЬ» — пиксельная сверка с последним взглядом
+# (роадмап 30, №3; урок v1.5: истину говорят ПИКСЕЛИ, а не мнение
+# сенсора). Каждый взгляд на экран запоминает кадр; «что изменилось»
+# снимает свежий и сверяет попиксельно — мозг и даже сервер зрения
+# не нужны, чистая земля.
+# ---------------------------------------------------------------
+
+CHANGE_PCT = 5.0            # порог «заметно изменился» (роадмап №3)
+CHANGE_CELL_PCT = 10.0      # клетка сетки считается «где изменилось»
+CHANGE_CELLS = 3            # сетка 3×3: где изменения — по-человечески
+
+_CELL_NAMES = (
+    ("левый верх", "верх", "правый верх"),
+    ("лево", "центр", "право"),
+    ("левый низ", "низ", "правый низ"),
+)
+
+_last_frame: dict = {}      # зрительная память: последний увиденный кадр
+
+
+def remember_frame(b64: str, size) -> None:
+    """Запомнить кадр — эталон для «что изменилось». Зовёт каждый
+    взгляд на экран (описание, поиск, дескриптор для рук): память
+    глаз бесплатна, а вопрос «что изменилось?» чаще всего значит
+    «с прошлого раза, когда ты смотрела»."""
+    global _last_frame
+    _last_frame = {"b64": b64, "size": tuple(size), "ts": time.time()}
+
+
+def _age_human(ts: float) -> str:
+    """Сколько прошло — по-человечески: «40 с», «12 мин», «3 ч»."""
+    secs = max(0, time.time() - ts)
+    if secs < 90:
+        return "%d с" % secs
+    if secs < 90 * 60:
+        return "%d мин" % (secs // 60)
+    return "%d ч" % (secs // 3600)
+
+
+def _frame_diff(a_b64: str, b_b64: str, cells: int = CHANGE_CELLS):
+    """Пиксельная сверка двух кадров. Возвращает (доля изменившихся
+    пикселей 0..1, доли по клеткам сетки cells×cells) или None —
+    сравнить не смогли (нет PIL, битые данные): честно не выдумываем.
+    Порог яркости 30 — как у пиксельной сверки рук (§10.4)."""
+    try:
+        from PIL import Image, ImageChops
+        ia = Image.open(io.BytesIO(base64.b64decode(a_b64))).convert("RGB")
+        ib = Image.open(io.BytesIO(base64.b64decode(b_b64))).convert("RGB")
+        if ia.size != ib.size:
+            ib = ib.resize(ia.size, Image.LANCZOS)
+        diff = ImageChops.difference(ia, ib).convert("L")
+        hist = diff.histogram()
+        total = float(ia.width * ia.height)
+        frac = sum(hist[30:]) / total
+        cell_fracs = []
+        cw, ch = ia.width / float(cells), ia.height / float(cells)
+        for gy in range(cells):
+            for gx in range(cells):
+                box = (int(gx * cw), int(gy * ch),
+                       int(min((gx + 1) * cw, ia.width)),
+                       int(min((gy + 1) * ch, ia.height)))
+                d = diff.crop(box)
+                h2 = d.histogram()
+                cell_fracs.append(sum(h2[30:])
+                                   / float(max(1, d.width * d.height)))
+        return frac, cell_fracs
+    except Exception:
+        return None
+
+
+def _where_changed(cell_fracs) -> str:
+    """Имена клеток, где изменения заметнее порога — по-человечески."""
+    names = []
+    for i, f in enumerate(cell_fracs):
+        if f * 100.0 >= CHANGE_CELL_PCT:
+            names.append(_CELL_NAMES[i // CHANGE_CELLS][i % CHANGE_CELLS])
+    return ", ".join(names[:4])
+
+
+def whats_changed_text() -> str:
+    """«что изменилось» — пиксельная сверка с последним взглядом.
+
+    Земная истина без сенсора и без мозга (урок v1.5): снимок,
+    попиксельная разница, порог 5% (роадмап №3), ГДЕ изменилось —
+    по сетке 3×3. Свежий кадр становится новым эталоном. Исключений
+    не поднимает, не сравнила — честно говорит.
+    """
+    try:
+        if _VISION_ERROR:
+            return "глаза не готовы: " + _VISION_ERROR
+        last = _last_frame
+        if not last or not last.get("b64"):
+            return ("я ещё не запоминала экран — скажи «посмотри» или "
+                    "«найди на экране <надпись>», запомню кадр; потом "
+                    "«что изменилось» — сверю пиксели с тем взглядом")
+        progress.stage("снимаю экран и сверяю пиксели с прошлым взглядом…")
+        b64, _real, small = _screenshot_b64(int(last["size"][0]))
+        res = _frame_diff(last["b64"], b64)
+        if res is None:
+            return ("не смогла сравнить кадры — честно, не выдумываю. "
+                    "Скажи «посмотри» — опишу экран словами")
+        frac, cell_fracs = res
+        remember_frame(b64, small)          # новый эталон для следующего раза
+        pct = frac * 100.0
+        age = _age_human(float(last.get("ts") or time.time()))
+        head = (("С прошлого взгляда (%s назад) экран изменился заметно: "
+                 "%.1f%% кадра" if pct >= CHANGE_PCT else
+                 "С прошлого взгляда (%s назад) существенных изменений "
+                 "нет: %.1f%% кадра") % (age, pct))
+        where = _where_changed(cell_fracs)
+        tail = ("; сильнее всего: %s" % where) if where else ""
+        return head + tail + ". Порог — %.0f%% (пиксели, не мнение)" % CHANGE_PCT
+    except Exception as e:
+        return "сверка не удалась: " + str(e)
 
 
 # ---------------------------------------------------------------
@@ -668,6 +787,7 @@ def find_on_screen(query: str) -> str:
         progress.stage("ищу на экране: %s…" % q)
         deadline = time.monotonic() + FIND_TOTAL_SEC
         b64, real, small = _screenshot_b64(WORK_WIDTH)
+        remember_frame(b64, small)          # №3: взгляд = новый эталон
         left = max(1.0, deadline - time.monotonic())
         out, _ = _ask(b64, ELEMENTS_PROMPT, SCHEMA,
                       max_tokens=ELEMENTS_MAX_TOKENS, timeout=left)
