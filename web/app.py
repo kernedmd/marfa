@@ -28,6 +28,12 @@ app = Flask(__name__)
 PORT_WEB = config.PORT_WEB
 DIALOGS = DialogStore()          # №10/№11: память разговора живёт в доме
 
+# №27 «тихий час»: резолюция тишины переживает рестарт панели —
+# применяется на старте. Битый файл — дом говорит (тишина без воли
+# Создателя — не тишина, а сбой)
+from core import quiet as _quiet  # noqa: E402
+_quiet.apply_saved()
+
 PANEL_HTML = """<!DOCTYPE html>
 <html lang="ru">
 <head>

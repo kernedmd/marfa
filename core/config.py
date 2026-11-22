@@ -274,6 +274,11 @@ SCREENSHOTS_DIR = DATA_DIR / "screenshots"
 SCREEN_WATCH_FILE = DATA_DIR / "screen_watch.json"
 SCREEN_WATCH_TTL_SEC = 300        # свежесть взгляда для контекста, с
 
+# №27 «ТИХИЙ ЧАС» (роадмап 30): «тишина» — access-лог панели
+# (werkzeug: строка на каждый опрос /api/progress) режется до ошибок.
+# Резолюция живёт в data/quiet.json, применяется на старте панели.
+QUIET_FILE = DATA_DIR / "quiet.json"
+
 # ---------------------------------------------------------------
 # Fallback GigaChat (ТЗ 3.2): включается только когда 30B упала
 # ---------------------------------------------------------------
