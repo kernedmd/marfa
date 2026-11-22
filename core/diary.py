@@ -161,6 +161,10 @@ def _facts_prompt(facts: dict) -> str:
         lines.append("- новых воспоминаний: %d" % facts["memory_new"])
     if facts.get("lessons"):
         lines.append("- уроков в журнал эволюционера: %d" % facts["lessons"])
+    sl = facts.get("sleep")
+    if sl and sl.get("hours") is not None:
+        lines.append("- спала ночью %.1f ч (встала: %s)"
+                     % (float(sl["hours"]), sl.get("why_wake", "?")))
     lines.append("")
     lines.append("Напиши живой рассказ о дне от первого лица.")
     return "\n".join(lines)
@@ -266,6 +270,22 @@ class Diary:
         if lessons:
             facts["lessons"] = lessons
 
+        # СОН (23.11): ночь, закончившаяся этим днём, — факт для дневника.
+        # Организм сна честно отдаёт и синтез тихой ночи, и куски слов
+        try:
+            from core import sleep as _sleep
+            n = _sleep.last_night()
+            if n:
+                wake_dt = _parse_ts(n.get("wake"))
+                if wake_dt is not None and wake_dt.date() == day:
+                    facts["sleep"] = {
+                        "bed": str(n.get("bed", "?"))[:16],
+                        "hours": n.get("hours"),
+                        "why_wake": str(n.get("why_wake", ""))[:80],
+                    }
+        except Exception:
+            pass                # орган сна молчит — дневник живёт без него
+
         return facts
 
     # ---------- каркас ----------
@@ -318,6 +338,18 @@ class Diary:
         if facts.get("lessons"):
             lines.append("## Уроки (эволюционер)")
             lines.append("Событий в журнал уроков: %d." % facts["lessons"])
+            lines.append("")
+
+        sl = facts.get("sleep")
+        if sl:
+            lines.append("## Сон")
+            try:
+                hours = float(sl.get("hours"))
+                lines.append("Легла %s, спала %.1f ч. Встала: %s."
+                             % (str(sl.get("bed", "?"))[:16].replace("T", " "),
+                                hours, sl.get("why_wake", "?")))
+            except (TypeError, ValueError):
+                lines.append("Ночь была — но часы её не разобрать, честно.")
             lines.append("")
 
         lines.append("## Что хочу завтра")

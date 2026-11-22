@@ -85,7 +85,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from core import config, context, creator_gate, diary, eyes, hands, identity, progress
+from core import config, context, creator_gate, diary, eyes, feelings, hands, identity, progress
+from core import musing, sleep                    # внутренняя жизнь организма (23.11)
 from core import uptime as _uptime   # H7 аудита: момент рождения процесса — импорт модуля
                                     # (панель поднимает агента на старте), а не первый запрос
 from core.brain import BrainClient
@@ -299,6 +300,26 @@ def _house_state() -> str:
     except Exception as e:
         _lesson("сенсор-упал", "uptime: %s: %s" % (type(e).__name__, e))
         started = "?"
+    # ВНУТРЕННЯЯ ЖИЗНЬ (23.11): чувства, сон и последняя мысль — каждый
+    # сенсор в своей броне (закон №10 раунда 3): упавший барометр не
+    # выдаёт себя за «мозг недоступен», состояние деградирует построчно
+    try:
+        inner_note = "чувства: " + feelings.state_line()
+    except Exception as e:
+        _lesson("сенсор-упал", "чувства: %s: %s" % (type(e).__name__, e))
+        inner_note = "чувства: барометр молчит — расскажи архитектору"
+    try:
+        sleep_note = "сон: " + sleep.state_line()
+    except Exception as e:
+        _lesson("сенсор-упал", "сон: %s: %s" % (type(e).__name__, e))
+        sleep_note = "сон: орган сна молчит — расскажи архитектору"
+    thought_note = ""
+    try:
+        t = musing.state_line()
+        if t:
+            thought_note = "; " + t
+    except Exception as e:
+        _lesson("сенсор-упал", "мысли: %s: %s" % (type(e).__name__, e))
     return (
         "Состояние дома: мозг " + config.BRAIN_MODEL_NAME + " на " + config.BRAIN_URL +
         ", панель " + str(config.PORT_WEB) +
@@ -307,6 +328,8 @@ def _house_state() -> str:
         ", RAM-бюджет " + str(config.RAM_BUDGET_GB) + " ГБ; " + eyes_note +
         "; " + cam_note +
         "; " + ears_note +
+        "; " + inner_note +
+        "; " + sleep_note + thought_note +
         "; я не сплю с " + started
     )
 
@@ -393,7 +416,17 @@ class Agent:
 
         # Гейт §5, рефлексия: Марфа читает свои дневники и думает.
         # Без резолюции честно говорит, чем включается.
+        # МЫСЛИ (23.11): «о чём думаешь?» сначала смотрит СВЕЖУЮ фоновую
+        # мысль — организм и правда думал в тишине; нет её — рефлексия
+        # по дневникам, как раньше
         if lowq in ("поразмышляй", "размышляй", "о чём думаешь", "о чем думаешь"):
+            if lowq.startswith("о ч"):
+                try:
+                    fresh = musing.render_last()
+                    if fresh:
+                        return Reply(fresh, "python", "musing")
+                except Exception:
+                    pass
             if diary.resolution() is None:
                 return Reply("живой язык ещё не включён — кнопка 89 "
                              "(scripts\\89_live_voice.bat), один раз",
@@ -425,11 +458,60 @@ class Agent:
                              "python", "backup")
             return Reply(_backup.render(report), "python", "backup")
 
-        # №25 uptime: сколько панель не спит (мозг старше — его часы
-        # в его консоли, тут честно про моё бодрствование)
+        # №25 uptime + СОН (23.11): «сколько ты не спала» — правда
+        # организма; ночей ещё не было — честный откат на uptime
+        # процесса (старая правда осталась правдой)
         if lowq in ("сколько ты не спала", "ты не спала", "uptime"):
             from core.uptime import uptime_text
-            return Reply(uptime_text(), "python", "uptime")
+            try:
+                slept = sleep.status_text()
+            except Exception:
+                slept = None
+            return Reply(slept or uptime_text(), "python", "uptime")
+
+        # ЧУВСТВА (23.11): «как ты?» — честный ответ организма из фактов
+        # дома: доминанта с причиной, без ролевой драмы 30B
+        if lowq in ("как ты", "как ты себя чувствуешь", "что чувствуешь",
+                    "что ты чувствуешь", "как настроение"):
+            return Reply(feelings.report(), "python", "feelings")
+
+        # СОН: «спи» — Создатель укладывает до утра или «проснись»
+        if lowq in ("спи", "спать", "ложись спать", "на боковую"):
+            return Reply(sleep.go_to_bed(reason="Илья сказал: спи"),
+                         "python", "sleep")
+
+        # СОН: встала — как спала и что снилось, одним ответом
+        if lowq in ("проснись", "подъём", "подъем", "доброе утро",
+                    "с добрым утром"):
+            dream = None
+            try:
+                got = musing.last_dream()
+                if got:
+                    dream = got[1]
+            except Exception:
+                dream = None
+            return Reply(sleep.morning_text(dream=dream), "python", "sleep")
+
+        # СОН: честный статус прямо сейчас
+        if lowq in ("ты спишь", "ты не спишь"):
+            return Reply(sleep.status_text() or "не сплю — день на дворе",
+                         "python", "sleep")
+
+        # МЫСЛИ: последний сон — «что тебе снилось»
+        if lowq in ("что тебе снилось", "что снилось", "сны", "расскажи сон"):
+            return Reply(musing.render_last_dream(), "python", "dream")
+
+        # МЫСЛИ: «подумай» — подумать сейчас (тишина не нужна, гейт §5 —
+        # закон); свежая мысль ложится в musings.md, как фоновая
+        if lowq in ("подумай", "подумай о чём-нибудь",
+                    "подумай о чем-нибудь"):
+            text, status = musing.muse(
+                force=True,
+                brain=self.brain if hasattr(self.brain, "chat") else None)
+            if text:
+                return Reply("Вот о чём подумала:\n\n" + text,
+                             "python", "musing")
+            return Reply("не подумалось: " + status, "python", "musing")
 
         # №21 доктор: осмотр дома текстом — без мозга и без лечения.
         # Лечение — у кнопки 84 (с подтверждением) и автодоктора
@@ -772,6 +854,14 @@ class Agent:
             hit, gate_reply = False, None
         if hit:
             return Reply(gate_reply, "python", "creator_gate")
+        # СОН (23.11): слово Создателя будит организм — как прикосновение.
+        # Рефлексы (быстрые команды) работают и в сонном окне; разговор —
+        # пробуждение. Броня: упавший орган сна не роняет чат — организм
+        # просто считается проснувшимся
+        try:
+            sleep.wake_on_message()
+        except Exception:
+            pass
         # Раунд 3, №4: быстрые команды зовут сенсоры, доктора, библиотекаря,
         # память и руки — любой из них может упасть. Крах быстрой команды
         # не должен ронять чат: урок летит архитектору, ответ говорит мозг
