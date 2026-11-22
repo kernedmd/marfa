@@ -70,8 +70,8 @@ def server_alive() -> bool:
 
 def _find_model() -> Optional[Path]:
     """Найти тело кодера в чулане. АРСЕНАЛ зовёт его qwen2.5-coder-7b
-    -instruct; точное имя файла/квант могло измениться — ищем по шаблону,
-    как руки ищут UI-TARS. Нет — None, честно (чинить нечем)."""
+    -instruct; точное имя файла/квант могло измениться — ищем по шаблону.
+    Нет — None, честно (чинить нечем)."""
     cands = sorted(config.MODELS_DIR.glob("*coder*7b*.gguf"))
     if not cands:
         cands = sorted(config.MODELS_DIR.glob("*coder*.gguf"))
@@ -91,11 +91,12 @@ def _spawn_server(model: Path) -> None:
 def ensure_server(wait_secs: Optional[float] = None) -> tuple:
     """Поднять кодера: (жив ли, честная сводка действий).
 
-    VRAM-танец зеркален рукам: кодер ~4.7 ГБ + глаза 3.0 ГБ > 6 ГБ —
-    глаза присаживаем (той же механикой _stop_llama из motor), после
-    задачи release() возвращает их доктором.
+    VRAM-танец остался только у кодера (Руки v2 «единое зрение»
+    больше не танцуют — работают на координатах глаз): кодер ~4.7 ГБ
+    + глаза ~3.0 ГБ > 6 ГБ — глаза присаживает на время патча,
+    после задачи release() возвращает их доктором.
     """
-    from core.motor import _stop_llama
+    from core.vram import stop_llama
     wait_secs = config.CODER_START_WAIT_SECS if wait_secs is None else wait_secs
     if server_alive():
         return True, "кодер уже на посту"
@@ -105,7 +106,7 @@ def ensure_server(wait_secs: Optional[float] = None) -> tuple:
                        "*.gguf в %s — проверь, доехал ли файл (АРСЕНАЛ, "
                        "раздел «в строю»)" % config.MODELS_DIR)
     notes = []
-    if _stop_llama(config.PORT_EYES):
+    if stop_llama(config.PORT_EYES):
         notes.append("глаза присели (VRAM 6 ГБ: двоим не хватит)")
     try:
         _spawn_server(model)
@@ -123,9 +124,10 @@ def ensure_server(wait_secs: Optional[float] = None) -> tuple:
 
 
 def release() -> str:
-    """Кодер ложится, глаза возвращаются — та же церемония, что у рук."""
-    from core.motor import _stop_llama
-    stopped = _stop_llama(config.PORT_CODER)
+    """Кодер ложится, глаза возвращаются (церемония заёма — core/vram.py;
+    после Рук v2 кодер — единственный танцор VRAM)."""
+    from core.vram import stop_llama
+    stopped = stop_llama(config.PORT_CODER)
     note = "кодер лёг; " if stopped else "кодера на посту не было; "
     try:
         from core import doctor

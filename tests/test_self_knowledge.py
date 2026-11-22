@@ -120,19 +120,19 @@ def test_report_names_limits_honestly():
 
 
 def test_report_tells_hands_truth(tmp_path, monkeypatch):
-    """v2: руки в теле отчёта — модель в чулане и честный режим."""
+    """Руки v2 «единое зрение»: своей модели нет — координаты глаз;
+    без резолюции — сухой режим, с резолюцией — честное «ВКЛЮЧЕНА»."""
     monkeypatch.setattr(config, "HANDS_ENABLED_FILE",
                         tmp_path / "нет_резолюции.json")
-    monkeypatch.setattr(config, "HANDS_MODEL",
-                        tmp_path / "UI-TARS-7B-DPO.Q4_K_M.gguf")
-    monkeypatch.setattr(config, "HANDS_MMPROJ",
-                        tmp_path / "UI-TARS-7B-DPO.mmproj-f16.gguf")
-    (tmp_path / "UI-TARS-7B-DPO.Q4_K_M.gguf").write_bytes(b"x")
-    (tmp_path / "UI-TARS-7B-DPO.mmproj-f16.gguf").write_bytes(b"x")
     r = capabilities_report(memory=None, eyes_ok=True, ears_ok=True)
-    assert "UI-TARS" in r
-    assert "сухой режим" in r            # без резолюции — только план
-    assert str(config.PORT_HANDS) in r
+    assert "координатах глаз" in r            # единое зрение
+    assert "сухой режим" in r                 # без резолюции — только план
+    assert "UI-TARS" not in r                 # своя модель больше не нужна
+    monkeypatch.setattr(config, "HANDS_ENABLED_FILE",
+                        tmp_path / "есть_резолюция.json")
+    (tmp_path / "есть_резолюция.json").write_text("{}", encoding="utf-8")
+    r2 = capabilities_report(memory=None, eyes_ok=True, ears_ok=True)
+    assert "ВКЛЮЧЕНА" in r2
 
 
 def test_tools_are_single_source_of_truth():

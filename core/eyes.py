@@ -366,20 +366,29 @@ def _validate_elements(d: dict, size) -> dict:
     return d
 
 
+def describe_with_sizes(width: int = WORK_WIDTH) -> tuple:
+    """СТРУКТУРНЫЙ дескриптор + размеры: (дескриптор, реальный экран,
+    отправленный кадр). Одним взглядом — рукам v2 «единое зрение» нужны
+    и элементы, и масштаб для пересчёта центра bbox в пиксели экрана:
+    одна правда о координатах, а не два несвязанных взгляда.
+    Поднимает исключения (сервер, парс, шаблон)."""
+    if _VISION_ERROR:
+        raise RuntimeError("глаза не готовы: " + _VISION_ERROR)
+    b64, real, small = _screenshot_b64(width)
+    out, _ = _ask(b64, ELEMENTS_PROMPT, SCHEMA,
+                  max_tokens=ELEMENTS_MAX_TOKENS)
+    d = parse_json(out)
+    _assert_no_parrot(d)
+    return _validate_elements(d, small), real, small
+
+
 def describe(width: int = WORK_WIDTH) -> dict:
     """СТРУКТУРНЫЙ дескриптор экрана (для РУК и экзамена Р-0):
     description + active_window + elements. Промпт без единого примера
     значений (урок v3), геометрия проверена по отправленному кадру,
     шаблоны забракованы. Поднимает исключения (сервер, парс, шаблон) —
     безопасная обёртка для чата: describe_text()."""
-    if _VISION_ERROR:
-        raise RuntimeError("глаза не готовы: " + _VISION_ERROR)
-    b64, _real, small = _screenshot_b64(width)
-    out, _ = _ask(b64, ELEMENTS_PROMPT, SCHEMA,
-                  max_tokens=ELEMENTS_MAX_TOKENS)
-    d = parse_json(out)
-    _assert_no_parrot(d)
-    return _validate_elements(d, small)
+    return describe_with_sizes(width)[0]
 
 
 def describe_text(width: int = WORK_WIDTH) -> str:
