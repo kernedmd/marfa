@@ -216,3 +216,47 @@ def test_hands_looking_redirect_survives(agent, srv, monkeypatch):
     assert r.source == "python" and r.tool_used == "hands"
     assert "не смотрят" in r.text
     assert srv.calls == []
+
+
+# ---------- ЗРЕНИЕ v2 (23.11): ДВА источника, ответ подписан ----------
+
+def test_webcam_synonyms_route_to_camera(agent, srv, monkeypatch):
+    """Урок живого лога: «посмотри веб-камерой» не имел маршрута — Создатель
+    просил веб-камеру, а читал про экран сервера. Синонимы веб-камеры
+    собраны в одну ветку ДО экранной."""
+    from core import eyes
+    seen = []
+    monkeypatch.setattr(eyes, "describe_camera_text",
+                        lambda: (seen.append(1), "Вижу в ВЕБ-КАМЕРЕ: тест")[1])
+    for msg in ("включи веб-камеру", "что в веб-камере", "веб-камера",
+                "посмотри веб-камерой", "посмотри в камеру, что там?",
+                "глянь в веб-камеру", "что ты видишь в камере?",
+                "кто в камере"):
+        r = agent.handle(msg)
+        assert r.tool_used == "camera", msg
+        assert "ВЕБ-КАМЕРЕ" in r.text, msg
+    assert len(seen) == 8
+    assert srv.calls == []          # мозг молчит — маршрут мгновенный
+
+
+def test_screen_commands_still_route_to_screen(agent, srv, monkeypatch):
+    """Экран не пострадал от камеры: «посмотри», «что на экране» —
+    по-прежнему экран, подпись источника честная."""
+    from core import eyes
+    monkeypatch.setattr(eyes, "describe_text",
+                        lambda *a, **kw: "Вижу на ЭКРАНЕ: рабочий стол")
+    for msg in ("посмотри", "что на экране", "что ты видишь",
+                "посмотри, что открыто"):
+        r = agent.handle(msg)
+        assert r.tool_used == "eyes", msg
+        assert "ЭКРАНЕ" in r.text, msg
+
+
+def test_camera_selftest_not_hijacked(agent, monkeypatch):
+    """«проверь камеру» — ЭКСПЕРИМЕНТ (импорт→сенсор→кадр), а не взгляд:
+    живой тест не превратился в описание из-за новых синонимов."""
+    from core import eyes
+    monkeypatch.setattr(eyes, "camera_selftest", lambda: "ПРОВЕРКА КАМЕРЫ: жива")
+    r = agent.handle("проверь камеру")
+    assert r.tool_used == "camera_selftest"
+    assert "ПРОВЕРКА КАМЕРЫ" in r.text
