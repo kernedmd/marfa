@@ -520,6 +520,26 @@ class Agent:
                 return Reply("и на этом спасибо — книжка радостей споткнулась, "
                              "но чувство я всё равно запомнила", "python", "praise")
 
+        # Ф7 «случайные решения» (23.11): монетка, кубик, жребий —
+        # мелочи решает честный шанс, мозг молчит (в жребии нечего думать)
+        if lowq in ("брось монетку", "монетка", "монетку",
+                    "подбрось монетку", "орёл или решка"):
+            from core import chance
+            return Reply(chance.coin(), "python", "chance")
+        m = re.match(r"^(?:кубик|брось кубик|кинь кубик)\s*(\d{1,3})?$",
+                     lowq, re.IGNORECASE)
+        if m or lowq in ("кубик", "брось кубик", "кинь кубик"):
+            from core import chance
+            sides = int(m.group(1)) if (m and m.group(1)) else 6
+            return Reply(chance.dice(sides), "python", "chance")
+        if low.startswith("выбери") or low.startswith("выберите"):
+            from core import chance
+            opts = chance.parse_choose(t)
+            if not opts:
+                return Reply("что выбрать? скажи «выбери: чай или кофе»",
+                             "python", "chance")
+            return Reply(chance.choose(opts), "python", "chance")
+
         # СОН: «спи» — Создатель укладывает до утра или «проснись»
         if lowq in ("спи", "спать", "ложись спать", "на боковую"):
             return Reply(sleep.go_to_bed(reason="Илья сказал: спи"),

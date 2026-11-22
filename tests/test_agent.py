@@ -419,3 +419,18 @@ def test_agent_praise_command(agent, srv):
     srv.reply_content = '{"answer": "на здоровье"}'
     r2 = agent.handle("спасибо, что объяснила про контекст")
     assert r2.source == "brain"
+
+
+# ---------- Ф7: случайные решения ----------
+
+def test_agent_chance_commands(agent, srv):
+    """Монетка, кубик, жребий — чистый рефлекс, мозг молчит."""
+    r1 = agent.handle("брось монетку")
+    assert r1.tool_used == "chance" and "Монетка" in r1.text
+    r2 = agent.handle("кубик 20")
+    assert r2.tool_used == "chance" and "d20" in r2.text
+    r3 = agent.handle("выбери: чай или кофе")
+    assert r3.tool_used == "chance" and "Жребий" in r3.text
+    r4 = agent.handle("выбери")
+    assert "что выбрать" in r4.text
+    assert srv.calls == []
