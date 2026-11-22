@@ -46,16 +46,23 @@ PROBE_TIMEOUT_SEC = 3
 # ---------------------------------------------------------------
 def load_env() -> dict:
     """Прочитать .env дома в словарь. Нет файла — пусто, калитка закрыта.
-    Путь берём в момент вызова: калитка следует за config.HOME_DIR."""
+    Путь берём в момент вызова: калитка следует за config.HOME_DIR.
+
+    H3 аудита: без exists()-предпроверки — файл мог исчезнуть между
+    взглядом и чтением (антивирус, git checkout); OSError — честное
+    «калитка закрыта», а не исключение в чат."""
     env: dict = {}
     env_file = config.HOME_DIR / ".env"
-    if env_file.exists():
-        for raw in env_file.read_text(encoding="utf-8-sig", errors="replace").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            env[k.strip()] = v.strip().strip('"').strip("'")
+    try:
+        raw_text = env_file.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return env
+    for raw in raw_text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        env[k.strip()] = v.strip().strip('"').strip("'")
     return env
 
 
@@ -121,13 +128,21 @@ def _cmd_status() -> str:
 
 
 def _cmd_tests() -> str:
-    """Прогон батареи: venv-интерпретатором, с таймаутом, показать хвост."""
+    """Прогон батареи: venv-интерпретатором, с таймаутом, показать хвост.
+
+    N7 аудита: pytest не установлен — это НЕ «красные тесты», а «не
+    запускались»; диагноз не врёт, лечение — одна команда."""
     t0 = time.time()
     try:
         r = subprocess.run(
             [sys.executable, "-m", "pytest", "tests", "-q"],
             cwd=str(config.HOME_DIR), capture_output=True, text=True,
             timeout=TEST_TIMEOUT_SEC)
+        if r.returncode != 0 and "No module named" in (r.stderr or "") \
+                and "pytest" in (r.stderr or ""):
+            return ("тесты НЕ ЗАПУСКАЛИСЬ: в этом интерпретаторе нет pytest "
+                    "(%s). Это не красные тесты. Поставь: "
+                    "venv\\Scripts\\pip install pytest" % sys.executable)
         tail = "\n".join((r.stdout or "").splitlines()[-TAIL_LINES:])
         verdict = "БАТАРЕЯ ЗЕЛЁНАЯ" if r.returncode == 0 else "ЕСТЬ КРАСНЫЕ ТЕСТЫ (код %d)" % r.returncode
         return "%s за %.0f с. Хвост вывода:\n%s" % (verdict, time.time() - t0, tail)

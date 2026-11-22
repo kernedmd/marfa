@@ -13,8 +13,8 @@ r"""core/drive.py — СЛУЖБА СТРЕМЛЕНИЯ (Круг Д): серд�
     venv\Scripts\python.exe -m core.drive --service   # вечная служба
     venv\Scripts\python.exe -m core.drive --tick      # один такт (проверка)
 
-Служба не умирает: упавшая работа — урок в журнал эволюционера,
-тик продолжается. Выход — Ctrl+C.
+Служба не умирает (K7 аудита): упавший тик — урок в журнал эволюционера,
+следующий тик живёт дальше; Ctrl+C — честный выход.
 """
 from __future__ import annotations
 
@@ -27,6 +27,15 @@ from pathlib import Path
 from typing import Optional
 
 from core import config
+
+
+def _lesson(kind: str, text: str) -> None:
+    """Урок эволюционеру; никогда не рвёт службу."""
+    try:
+        from evolution.journal import log_lesson
+        log_lesson(kind, text)
+    except Exception:
+        pass
 
 
 def _read_status() -> dict:
@@ -49,12 +58,14 @@ def _write_status(brain_ok: bool, results: list[dict],
         try:
             brain_down_since = (dt.datetime.fromisoformat(raw).isoformat(timespec="seconds")
                                 if raw else now.isoformat(timespec="seconds"))
-        except ValueError:
+        except (ValueError, TypeError):
+            # H7 аудита: битый статус (число/мусор вместо ISO) не должен
+            # ронять службу — отсчёт молчания начинается заново, честно
             brain_down_since = now.isoformat(timespec="seconds")
 
-    jobs = {}
-    for rec in prev.get("jobs", {}).items():
-        jobs[rec[0]] = rec[1]
+    # H7: jobs в битом статусе оказался списком/мусором — начинаем чистый
+    prev_jobs = prev.get("jobs")
+    jobs = dict(prev_jobs) if isinstance(prev_jobs, dict) else {}
     for r in results:
         jobs[r["id"]] = {"ts": now.isoformat(timespec="seconds"),
                          "ok": bool(r.get("ok")),
@@ -76,11 +87,22 @@ def _write_status(brain_ok: bool, results: list[dict],
     return status
 
 
+_BRAIN_CACHE = (None, "")
+
+
 def _brain_ok() -> bool:
-    """Жив ли мозг. Ошибка сети — не ошибка службы."""
+    """Жив ли мозг. Ошибка сети — не ошибка службы.
+
+    N8 аудита: клиент — один на жизнь службы (1440 объектов в сутки не
+    рождаются); смена config.BRAIN_URL (тест/переезд) подхватывается."""
+    global _BRAIN_CACHE
     try:
         from core.brain import BrainClient
-        return BrainClient().health()
+        client, url = _BRAIN_CACHE
+        if client is None or url != config.BRAIN_URL:
+            client = BrainClient()
+            _BRAIN_CACHE = (client, config.BRAIN_URL)
+        return client.health()
     except Exception:
         return False
 
@@ -102,14 +124,26 @@ def serve(interval: float = config.DRIVE_INTERVAL_SECS,
     n = 0
     try:
         while True:
-            status = one_tick()
+            try:
+                status = one_tick()
+            except Exception as e:
+                # K7 аудита: доктрина модуля — «служба не умирает». Раньше
+                # ЛЮБОЕ исключение тика убивало процесс; теперь урок — в
+                # журнал, служба живёт, следующий тик через интервал.
+                status = {}
+                _lesson("стремление-тик-упал",
+                        "%s: %s" % (type(e).__name__, e))
             stamp = dt.datetime.now().strftime("%H:%M:%S")
-            ran = ", ".join("%s:%s" % (r["id"], "ок" if r.get("ok") else "СБОЙ")
-                            for r in status.get("last_results", []))
-            note = ("мозг жив" if status.get("brain_ok")
-                    else "мозг молчит с %s" % str(status.get("brain_down_since", "?"))[11:16])
-            print("[%s] тик %d: %s%s" % (stamp, n + 1, note,
-                                          (" | " + ran) if ran else ""))
+            if status:
+                ran = ", ".join("%s:%s" % (r["id"], "ок" if r.get("ok") else "СБОЙ")
+                                for r in status.get("last_results", []))
+                note = ("мозг жив" if status.get("brain_ok")
+                        else "мозг молчит с %s" % str(status.get("brain_down_since", "?"))[11:16])
+                print("[%s] тик %d: %s%s" % (stamp, n + 1, note,
+                                              (" | " + ran) if ran else ""))
+            else:
+                print("[%s] тик %d: упал — урок записан, служба живёт"
+                      % (stamp, n + 1))
             n += 1
             if max_ticks is not None and n >= max_ticks:
                 return

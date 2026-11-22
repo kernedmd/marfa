@@ -32,7 +32,10 @@ def _read_json(path: Path) -> Optional[dict]:
 
 
 def _count_day_lines(path: Path, day: dt.date) -> int:
-    """Сколько записей JSONL приходится на дату day (поле ts = ISO)."""
+    """Сколько записей JSONL приходится на дату day (поле ts = ISO).
+
+    H2 аудита: битая строка с "ts": null (или не-словарём) — не повод
+    ронять дневник: TypeError ловится наравне с ValueError."""
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -40,10 +43,11 @@ def _count_day_lines(path: Path, day: dt.date) -> int:
     n = 0
     for line in lines:
         try:
-            ts = json.loads(line).get("ts", "")
-            if ts[:10] == day.isoformat():
+            rec = json.loads(line)
+            ts = rec.get("ts", "") if isinstance(rec, dict) else ""
+            if isinstance(ts, str) and ts[:10] == day.isoformat():
                 n += 1
-        except ValueError:
+        except (ValueError, TypeError, AttributeError):
             continue
     return n
 

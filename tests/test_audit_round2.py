@@ -220,3 +220,131 @@ def test_m11_load_queue_survives_busy_file(home, monkeypatch):
 
     monkeypatch.setattr(Path, "read_text", busy)
     assert load_queue() == []
+
+
+# ================================================================
+# ФАЗА 2 — НЕ ПАДАТЬ
+# ================================================================
+
+def test_k7_serve_survives_crashing_tick(home, monkeypatch, capsys):
+    """Доктрина модуля — «служба не умирает»: упавший тик не убивает
+    процесс, урок записан, следующий тик живёт."""
+    from core import drive
+    calls = {"n": 0}
+
+    def boom():
+        calls["n"] += 1
+        raise RuntimeError("расписание упало")
+
+    monkeypatch.setattr(drive, "one_tick", boom)
+    drive.serve(interval=0.001, max_ticks=3)
+    out = capsys.readouterr().out
+    assert calls["n"] == 3                       # все тики прожиты
+    assert "служба живёт" in out                 # честно про падение
+
+
+def test_h7_write_status_survives_broken_prev(home):
+    """Битое сердце (число вместо ISO, список вместо jobs) — не смерть
+    службы на втором тике."""
+    from core import drive
+    config.DRIVE_STATUS_FILE.write_text(json.dumps(
+        {"brain_down_since": 42, "jobs": ["мусор", "вместо", "словаря"]}),
+        encoding="utf-8")
+    now = dt.datetime(2026, 11, 22, 12, 0)
+    status = drive._write_status(False, [], now=now)   # не упало
+    assert status["brain_down_since"] == now.isoformat(timespec="seconds")
+    assert status["jobs"] == {}
+
+
+def test_h2_diary_survives_null_ts(home):
+    """Журнал уроков с "ts": null — дневник собирается, живые записи считаются."""
+    from core.diary import _count_day_lines
+    p = home / "data" / "evolution" / "journal.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("\n".join([
+        json.dumps({"kind": "a", "ts": None}),
+        json.dumps({"kind": "b", "ts": "2026-11-22T10:00:00"}),
+        "вообще не json",
+        json.dumps(["не", "словарь"]),
+        json.dumps({"kind": "c", "ts": "2026-11-22T11:00:00"}),
+    ]), encoding="utf-8")
+    assert _count_day_lines(p, dt.date(2026, 11, 22)) == 2
+
+
+def test_h3_load_env_disappearing_file(home, monkeypatch):
+    """.env исчез между exists() и read_text() — калитка закрыта, не исключение."""
+    from core import creator_gate
+    (home / ".env").write_text("MARFA_CODEWORD=тайна\n", encoding="utf-8")
+
+    def gone(self, *a, **k):
+        raise FileNotFoundError("антивирус успел раньше")
+
+    monkeypatch.setattr(Path, "read_text", gone)
+    assert creator_gate.load_env() == {}
+    assert creator_gate.check("тайна статус") == (False, None)  # путь обычный
+
+
+def test_h6_brain_without_choices_is_honest_error():
+    """200 с телом без choices — BrainError с диагнозом, а не KeyError
+    под маской «мозг недоступен»."""
+    from core.brain import BrainClient, BrainError
+    client = BrainClient(brain_url="http://127.0.0.1:1")
+
+    def weird(path, payload):
+        return {"error": "server lost its mind"}
+
+    client._post = weird
+    with pytest.raises(BrainError) as ei:
+        client.chat([{"role": "user", "content": "привет"}])
+    assert "choices" in str(ei.value)
+
+
+def test_m1_chat_zero_tokens_floored_at_one():
+    """gen_tokens=0 — не пустой ответ сервера: нижняя граница 1 токен."""
+    from tests.fake_llama_server import start_fake_brain
+    from core.brain import BrainClient
+    srv = start_fake_brain()
+    try:
+        client = BrainClient(brain_url=srv.base_url)
+        client.chat([{"role": "user", "content": "привет"}], gen_tokens=0)
+        assert srv.calls[-1]["max_tokens"] == 1
+        client.chat([{"role": "user", "content": "привет"}], gen_tokens=-5)
+        assert srv.calls[-1]["max_tokens"] == 1
+    finally:
+        srv.shutdown()
+
+
+def test_n7_gate_tests_honest_without_pytest(home, monkeypatch):
+    """pytest не установлен — «НЕ ЗАПУСКАЛИСЬ», а не «ЕСТЬ КРАСНЫЕ ТЕСТЫ»."""
+    from core import creator_gate
+
+    class R:
+        returncode = 1
+        stdout = ""
+        stderr = "/usr/bin/python: No module named pytest"
+
+    monkeypatch.setattr(creator_gate.subprocess, "run", lambda *a, **k: R())
+    out = creator_gate._cmd_tests()
+    assert "НЕ ЗАПУСКАЛИСЬ" in out
+    assert "КРАСНЫЕ ТЕСТЫ" not in out.split("не красные")[0]   # не «красные»
+
+
+def test_n8_drive_reuses_one_brain_client(home, monkeypatch):
+    """Клиент мозга — один на жизнь службы; смена BRAIN_URL подхватывается."""
+    from core import drive
+    from core import brain as brain_mod
+    made = []
+
+    class FakeClient:
+        def __init__(self, brain_url=""):
+            made.append(brain_url or "default")
+        def health(self):
+            return True
+
+    monkeypatch.setattr(brain_mod, "BrainClient", FakeClient)
+    monkeypatch.setattr(drive, "_BRAIN_CACHE", (None, ""))
+    assert drive._brain_ok() and drive._brain_ok()
+    assert len(made) == 1                        # один на много тиков
+    monkeypatch.setattr(config, "BRAIN_URL", "http://127.0.0.1:9")
+    assert drive._brain_ok()
+    assert len(made) == 2                        # переезд — новый клиент
