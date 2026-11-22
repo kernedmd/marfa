@@ -121,10 +121,15 @@ def check_all(now: Optional[dt.datetime] = None) -> dict:
         free_gb = shutil.disk_usage(str(config.HOME_DIR)).free / 2**30
     except OSError:
         free_gb = -1.0
-    checks["disk"] = _check(
-        "crit" if 0 <= free_gb < DISK_CRIT_GB else "warn",
-        free_gb < 0 or free_gb >= DISK_WARN_GB,
-        "свободно %.1f ГБ" % free_gb if free_gb >= 0 else "не посмотреть")
+    if free_gb < 0:
+        # N5 аудита: «не смогли посмотреть» — это НЕ «всё ок»: осмотр
+        # честно говорит, что не посмотрел, и не рисует зелёную галочку
+        checks["disk"] = _check("warn", False, "не посмотреть — осмотр диска не удался")
+    else:
+        checks["disk"] = _check(
+            "crit" if free_gb < DISK_CRIT_GB else "warn",
+            free_gb >= DISK_WARN_GB,
+            "свободно %.1f ГБ" % free_gb)
     head = _git_head()
     checks["canon"] = _check("warn", head is not None,
                              head or "git молчит")

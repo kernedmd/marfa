@@ -287,7 +287,11 @@ def _ask(b64: str, prompt: str, schema: Optional[dict],
 def parse_json(text: str) -> dict:
     """Сенсор — не парсер: JSON может лежать в ```fences```, сопровождаться
     текстом или хвостом. Выковыриваем первый сбалансированный {...} и парсим
-    только его."""
+    только его.
+
+    H4 аудита (раунд 2): фигурная скобка ВНУТРИ строкового литерала
+    («закрываю } окно») больше не обманывает баланс — парсер ходит
+    по строкам с учётом экранирования."""
     clean = text.strip()
     if clean.startswith("```"):
         clean = clean.strip("`").strip()
@@ -300,11 +304,25 @@ def parse_json(text: str) -> dict:
     start = clean.find("{")
     if start < 0:
         raise ValueError("в ответе нет JSON: " + clean[:120])
+    in_str = esc = False
     depth = 0
     for i in range(start, len(clean)):
-        if clean[i] == "{":
+        c = clean[i]
+        if esc:
+            esc = False
+            continue
+        if c == "\\":
+            if in_str:
+                esc = True
+            continue
+        if c == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if c == "{":
             depth += 1
-        elif clean[i] == "}":
+        elif c == "}":
             depth -= 1
             if depth == 0:
                 return json.loads(clean[start:i + 1])

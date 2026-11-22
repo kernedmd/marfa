@@ -348,3 +348,58 @@ def test_n8_drive_reuses_one_brain_client(home, monkeypatch):
     monkeypatch.setattr(config, "BRAIN_URL", "http://127.0.0.1:9")
     assert drive._brain_ok()
     assert len(made) == 2                        # переезд — новый клиент
+
+
+# ================================================================
+# ФАЗА 3 — НЕ ВРАТЬ
+# ================================================================
+
+def test_h1_diary_sees_iso_memories(home):
+    """created_at ISO-строкой (ручная правка/импорт) — дневник ВИДИТ
+    новые воспоминания, а не пишет «0» навсегда."""
+    from core.diary import Diary
+    day = dt.date(2026, 11, 22)
+    mem = home / "data" / "memory"
+    mem.mkdir(parents=True, exist_ok=True)
+    (mem / "memory.json").write_text(json.dumps([
+        {"text": "число", "created_at": dt.datetime(2026, 11, 22, 10, 0).timestamp()},
+        {"text": "ISO-строка", "created_at": "2026-11-22T11:30:00"},
+        {"text": "вчерашнее", "created_at": "2026-11-21T09:00:00"},
+        {"text": "мусор", "created_at": "не дата вовсе"},
+    ], ensure_ascii=False), encoding="utf-8")
+    facts = Diary(data_dir=home / "data").collect_facts(day)
+    assert facts.get("memory_new") == 2          # оба формата честно видны
+
+
+def test_n1_voice_keeps_paragraphs():
+    """Абзацы живого рассказа не слипаются в простыню."""
+    from core.diary import _sanitize_voice
+    raw = "Утро началось тихо. Я слушала дом.\n\nПотом Илья написал мне.\n\nМы поговорили."
+    out = _sanitize_voice(raw)
+    assert out.count("\n\n") == 2                # оба абзаца живы
+    assert "Утро" in out and "поговорили" in out
+
+
+def test_h4_parse_json_brace_inside_string():
+    """Скобка } внутри строкового литерала — валидный ответ сенсора,
+    а не «глаза ошиблись»."""
+    from core.eyes import parse_json
+    d = parse_json('{"text": "закрываю } окно", "n": 1}')
+    assert d == {"text": "закрываю } окно", "n": 1}
+    d2 = parse_json('Вот ответ: {"a": "строка со } и { внутри", "b": {"c": 2}} и хвост')
+    assert d2["b"]["c"] == 2
+    d3 = parse_json('{"esc": "кавычка \\" и } после"}')
+    assert d3["esc"] == 'кавычка " и } после'
+
+
+def test_n5_disk_uninspectable_is_not_ok(home, monkeypatch):
+    """«Не смогли посмотреть диск» — честное НЕ-ок, а не зелёная галочка."""
+    from core import doctor
+
+    def boom(path):
+        raise OSError("диск спрятался")
+
+    monkeypatch.setattr(doctor.shutil, "disk_usage", boom)
+    report = doctor.check_all()
+    c = report["checks"]["disk"]
+    assert c["ok"] is False and "не посмотреть" in c["note"]

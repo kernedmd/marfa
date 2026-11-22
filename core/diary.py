@@ -23,6 +23,25 @@ from typing import Optional
 from core import config
 
 
+def _parse_ts(raw) -> Optional[dt.datetime]:
+    """H1 аудита (раунд 2): created_at бывает ЧИСЛОМ (пишет Memory) и
+    ISO-строкой (ручная правка, импорт) — оба формата честно читаются,
+    дневник видит новые воспоминания, а не «0» навсегда."""
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        try:
+            return dt.datetime.fromtimestamp(float(raw))
+        except (ValueError, OSError, OverflowError):
+            return None
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return dt.datetime.fromisoformat(raw.strip())
+        except ValueError:
+            return None
+    return None
+
+
 def _read_json(path: Path) -> Optional[dict]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -89,11 +108,23 @@ def resolution() -> Optional[dict]:
 
 
 def _sanitize_voice(raw: str) -> str:
-    """Почистить ответ мозга: think-обрывки, заголовки, кавычки, лимит."""
+    """Почистить ответ мозга: think-обрывки, заголовки, кавычки, лимит.
+
+    N1 аудита (раунд 2): абзацы — часть живого рассказа: пустые строки
+    не выбрасываются (одиночные остаются), рассказ не слипается в
+    простыню — «тёплый тон хозяйки дома» живёт в абзацах."""
     text = re.sub(r"</?[a-zA-Z]+>", "", (raw or ""))
     lines = [ln.strip() for ln in text.strip().splitlines()]
-    lines = [ln for ln in lines if ln and not ln.startswith("#")]
-    text = "\n".join(lines).strip()
+    kept: list[str] = []
+    for ln in lines:
+        if not ln:
+            if kept and kept[-1]:
+                kept.append("")            # граница абзаца — живёт
+            continue
+        if ln.startswith("#"):
+            continue
+        kept.append(ln)
+    text = "\n".join(kept).strip()
     if len(text) >= 2 and (
             (text[0] == text[-1] and text[0] in "\"'")
             or (text[0] == "«" and text[-1] == "»")):
@@ -219,9 +250,13 @@ class Diary:
         memory_file = self.data_dir / "memory" / "memory.json"
         try:
             recs = json.loads(memory_file.read_text(encoding="utf-8"))
-            new_mem = [r for r in recs if isinstance(r, dict)
-                       and dt.datetime.fromtimestamp(
-                           float(r.get("created_at", 0))).date() == day]
+            new_mem = []
+            for r in recs:
+                if not isinstance(r, dict):
+                    continue
+                ts = _parse_ts(r.get("created_at"))
+                if ts is not None and ts.date() == day:
+                    new_mem.append(r)
             if new_mem:
                 facts["memory_new"] = len(new_mem)
         except (OSError, ValueError, TypeError, OverflowError):
