@@ -145,3 +145,35 @@ def test_report_short_and_honest(home):
     assert "не разговаривали 9 ч" in text
     assert "не выдумка" in text
     assert len(text) < 400
+
+
+# ---------- Ф6 «похвала — факт» (23.11) ----------
+
+def test_praise_recorded_and_feeds_joy(home):
+    """«спасибо» — событие дня: ложится в книжку радостей, барометр
+    честно говорит «мне радостно» с причиной «Илья похвалил»."""
+    import datetime as dt
+    r = feelings.add_praise("спасибо")
+    assert "книжку радостей" in r and "сегодня уже 1" in r
+    res = feelings.compute(now=dt.datetime.now())
+    joy = res["feelings"].get("радость")
+    assert joy and joy["value"] > 0
+    assert "Илья похвалил: 1 раз" in joy["reason"]
+
+
+def test_praise_cap_and_broken_file(home):
+    """Потолок 100 записей — похвала не летопись; битый файл начинается
+    заново, орган не ломается."""
+    import json as _json
+    from pathlib import Path as _P
+    # битый файл
+    feelings._praise_file().parent.mkdir(parents=True, exist_ok=True)
+    feelings._praise_file().write_text("мусор", encoding="utf-8")
+    r = feelings.add_praise("молодец")
+    assert "книжку радостей" in r          # пережила битый файл
+    # потолок
+    items = [{"ts": "2026-11-23T10:00:00", "what": "спасибо"}] * 150
+    feelings._praise_file().write_text(_json.dumps(items), encoding="utf-8")
+    feelings.add_praise("спасибо")
+    kept = _json.loads(feelings._praise_file().read_text(encoding="utf-8"))
+    assert len(kept) == 100

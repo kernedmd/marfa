@@ -406,3 +406,16 @@ def test_agent_run_python_humanized(agent, srv):
     assert "68621991936" in r.text          # сырьё на месте
     assert "63.9 ГБ" in r.text              # и перевод рядом
     assert "если это байты" in r.text
+
+
+# ---------- Ф6: похвала — факт ----------
+
+def test_agent_praise_command(agent, srv):
+    """«спасибо» — рефлекс с чувством, мозг молчит; «спасибо, что…»
+    (с хвостом) остаётся живой речью для мозга."""
+    r = agent.handle("спасибо")
+    assert r.tool_used == "praise" and "книжку радостей" in r.text
+    assert srv.calls == []
+    srv.reply_content = '{"answer": "на здоровье"}'
+    r2 = agent.handle("спасибо, что объяснила про контекст")
+    assert r2.source == "brain"
