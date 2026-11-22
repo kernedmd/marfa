@@ -156,7 +156,11 @@ def _fmt_num(x) -> str:
 def _house_state() -> str:
     """Лёгкое состояние дома для промпта (тяжёлый осмотр — marfa_status.py).
     Г-2.1: сюда же — глаза. Мозг читает этот текст в каждом сообщении
-    и ЗНАЕТ, что у дома есть зрение и как им пользоваться."""
+    и ЗНАЕТ, что у дома есть зрение и как им пользоваться.
+    22.11 (ночь): сюда же — камера. Урок живого прогона: на «а сейчас?»
+    мозг ответил про камеру ПО ПАМЯТИ («всё ещё недоступна») уже после
+    установки opencv. Свежий факт в состоянии дома — мозгу не нужно
+    выдумывать."""
     eyes_note = (
         "глаза: сенсор зрения " + str(config.PORT_EYES) + " жив, команда «посмотри» — опишу экран"
         if eyes.health_cached()
@@ -164,6 +168,11 @@ def _house_state() -> str:
     # v2: уши называют ПРИЧИНУ — «микрофон не найден», «модель ушей нет»,
     # «служба не запущена» — а не отговорку «молчит или микрофона нет»
     ears_note = "уши: " + identity.ears_diagnosis()
+    # камера: факт из живого процесса (кэш), не воспоминание мозга
+    cam_note = ("камера: модуль есть — «посмотри в камеру»; живой тест — "
+                "«проверь камеру»" if eyes.camera_module_ok()
+                else "камера: нет модуля opencv (venv\\Scripts\\pip install "
+                "opencv-python); после установки — «проверь камеру»")
     from core.uptime import started_hhmm
     return (
         "Состояние дома: мозг " + config.BRAIN_MODEL_NAME + " на " + config.BRAIN_URL +
@@ -171,6 +180,7 @@ def _house_state() -> str:
         ", контекст " + str(config.CONTEXT_TOKENS) +
         ", квант " + config.DEFAULT_QUANT +
         ", RAM-бюджет " + str(config.RAM_BUDGET_GB) + " ГБ; " + eyes_note +
+        "; " + cam_note +
         "; " + ears_note +
         "; я не сплю с " + started_hhmm()
     )
@@ -336,6 +346,18 @@ class Agent:
                 or low.startswith("посмотри на нас")):
             return Reply(eyes.describe_camera_text(), "python", "camera")
 
+        # 22.11 (ночь, урок прогона): «проверь ещё раз модуль, он появился» —
+        # проверка камеры это ЭКСПЕРИМЕНТ (импорт → сенсор → кадр),
+        # а не воспоминание мозга «всё ещё недоступна». startswith — хвост
+        # «он появился» и «?» не должны ронять команду в мозг.
+        if (low.startswith("проверь камер") or low.startswith("проверь веб-камер")
+                or low.startswith("проверь модуль камер")
+                or low.startswith("проверь еще раз модуль")
+                or low.startswith("проверь ещё раз модуль")
+                or low.startswith("камера работает")
+                or low.startswith("камера жива")):
+            return Reply(eyes.camera_selftest(), "python", "camera_selftest")
+
         # Г-2, глаза дома: дескриптор экрана от сенсора 8083, мозг молчит.
         # Граница слова обязательна: «посмотрим» — не команда глазам.
         # v2 (22.11): «что ты видишь» — тоже команда — так спрашивает
@@ -360,6 +382,44 @@ class Agent:
                 if "экзамен" in task:
                     return Reply(motor.exam(), "python", "hands_exam")
                 return Reply(motor.run(task), "python", "hands")
+
+        # САМОЛЕЧЕНИЕ v1 (ТЗ_Самолечение_v1, 22.11): кодер-слуга пишет
+        # патчи в ПЕСОЧНИЦУ data\patches — применение за Создателем.
+        # «Марфа сама себя лечит»: мозг (или Создатель) ставит требование,
+        # кодер-7B печатает код, страж проверяет, Создатель применяет.
+        if low in ("патчи", "список патчей"):
+            from core import repair
+            return Reply(repair.list_patches(), "python", "patches")
+        m = re.match(r"^примени\s+патч\s+(\d+)$", low)
+        if m:
+            from core import repair
+            return Reply(repair.apply_patch(int(m.group(1))),
+                         "python", "patch_apply")
+        m = re.match(r"^откати\s+патч\s+(\d+)$", low)
+        if m:
+            from core import repair
+            return Reply(repair.rollback_patch(int(m.group(1))),
+                         "python", "patch_rollback")
+        if low.startswith("почини") or low.startswith("ремонт "):
+            rest = t[len("почини"):] if low.startswith("почини") \
+                else t[len("ремонт"):]
+            rest = rest.strip().lstrip(",;:! ")
+            # «почини <файл>: <что сделать>»; двоеточие диска (C:\...) —
+            # не разделитель
+            idx = rest.find(":")
+            if idx == 1 and len(rest) > 2 and rest[2:3] in "\\/":
+                idx = rest.find(":", 3)
+            if idx < 0:
+                idx = rest.find(" — ")
+                if idx < 0:
+                    path_part, req = rest, ""
+                else:
+                    path_part, req = rest[:idx], rest[idx + 3:]
+            else:
+                path_part, req = rest[:idx], rest[idx + 1:]
+            from core import repair
+            return Reply(repair.make_patch(path_part.strip(), req.strip()),
+                         "python", "repair")
 
         # Г-2.3, самопознание: «изучи себя» — честный динамический отчёт
         # без будоража мозга. Мозг-30B о своих командах и файлах дома
@@ -421,6 +481,15 @@ class Agent:
                 from core import motor
                 return Reply(motor.run(str(args.get("task", ""))),
                              "brain", "ui_action")
+            if tool == "code_patch":
+                # Доктрина ТЗ_Самолечение_v1: мозг не чинит файлы сам —
+                # он ДОВЕРЯЕТ требование кодеру-слуге. Патч ложится в
+                # песочницу; применяет Создатель («примени патч №») —
+                # «уже починила» можно говорить только после него.
+                from core import repair
+                return Reply(repair.make_patch(str(args.get("path", "")),
+                                               str(args.get("requirement", ""))),
+                             "brain", "code_patch")
             _lesson("неизвестный-инструмент", "мозг позвал «%s»" % tool)
             return Reply("неизвестный инструмент: " + tool +
                          ". Мои инструменты (только эти имена): " +

@@ -318,6 +318,73 @@ def test_camera_no_opencv_honest(monkeypatch):
     assert "opencv-python" in text          # Создателю — что ставить
 
 
+# ---------- живой самотест камеры (урок «а сейчас?» 22.11) ----------
+
+def test_camera_selftest_all_alive(monkeypatch):
+    """Модуль → сенсор → кадр: камера ЖИВА — честный трёхступенчатый
+    отчёт, а не воспоминание мозга «всё ещё недоступна»."""
+    monkeypatch.setattr(eyes, "_VISION_ERROR", None)
+    monkeypatch.setattr(eyes, "_cv2_import", lambda: "4.10.0")
+    monkeypatch.setattr(eyes, "health", lambda: True)
+    monkeypatch.setattr(eyes, "_camera_b64", lambda width=960: "x" * 2048)
+    text = eyes.camera_selftest()
+    assert "модуль opencv: есть" in text
+    assert "сенсор зрения: жив" in text
+    assert "КАМЕРА ЖИВА" in text
+
+
+def test_camera_selftest_no_module_honest(monkeypatch):
+    monkeypatch.setattr(eyes, "_cv2_import", lambda: None)
+    text = eyes.camera_selftest()
+    assert "модуль opencv: НЕТ" in text
+    assert "opencv-python" in text       # Создателю — что ставить и где
+    assert "venv" in text
+
+
+def test_camera_selftest_sensor_down(monkeypatch):
+    monkeypatch.setattr(eyes, "_VISION_ERROR", None)
+    monkeypatch.setattr(eyes, "_cv2_import", lambda: "4.10.0")
+    monkeypatch.setattr(eyes, "health", lambda: False)
+    text = eyes.camera_selftest()
+    assert "сенсор зрения" in text and "не отвечает" in text
+
+
+def test_camera_selftest_no_frame_honest(monkeypatch):
+    monkeypatch.setattr(eyes, "_VISION_ERROR", None)
+    monkeypatch.setattr(eyes, "_cv2_import", lambda: "4.10.0")
+    monkeypatch.setattr(eyes, "health", lambda: True)
+
+    def boom(width=960):
+        raise RuntimeError("камера не открылась — занята другим приложением?")
+
+    monkeypatch.setattr(eyes, "_camera_b64", boom)
+    text = eyes.camera_selftest()
+    assert "камера не дала кадр" in text and "занята" in text
+
+
+def test_camera_module_ok_cached(monkeypatch):
+    """Кэш: повторный вопрос за период не импортирует заново."""
+    monkeypatch.setattr(eyes, "_cv2_cache", (None, 0.0))
+    calls = []
+    monkeypatch.setattr(eyes, "_cv2_import",
+                        lambda: (calls.append(1) or "4.10"))
+    assert eyes.camera_module_ok() is True
+    assert eyes.camera_module_ok() is True          # из кэша
+    assert len(calls) == 1
+
+
+def test_camera_module_ok_learns_after_install(monkeypatch):
+    """Модуль появился ПОСЛЕ старта дома (pip в соседнем окне) —
+    следующая проверка видит его: импорт не кэширует отсутствие
+    дольше периода."""
+    monkeypatch.setattr(eyes, "_cv2_cache", (None, time.time() - 301.0))
+    monkeypatch.setattr(eyes, "_cv2_import", lambda: None)
+    assert eyes.camera_module_ok() is False
+    monkeypatch.setattr(eyes, "_cv2_import", lambda: "4.10")
+    monkeypatch.setattr(eyes, "_cv2_cache", (None, time.time() - 301.0))
+    assert eyes.camera_module_ok() is True
+
+
 # ---------- агентный маршрут «посмотри» ----------
 
 class FakeBrain:
@@ -380,6 +447,32 @@ def test_agent_camera_command(monkeypatch):
         r = a.handle(msg)
         assert r.tool_used == "camera", msg
         assert a.brain.calls == 0, msg
+
+
+def test_agent_prover_kameru_is_live_experiment(monkeypatch):
+    """Урок прогона: «проверь ещё раз модуль, он появился» — живой тест,
+    не ответ мозга по памяти."""
+    a = _agent(monkeypatch, "не важно")
+    monkeypatch.setattr(eyes, "camera_selftest",
+                        lambda: "ПРОВЕРКА КАМЕРЫ (вживую): всё живо")
+    for msg in ("проверь камеру", "Проверь еще раз модуль, он появился",
+                "камера работает"):
+        r = a.handle(msg)
+        assert r.tool_used == "camera_selftest", msg
+        assert r.text.startswith("ПРОВЕРКА КАМЕРЫ"), msg
+        assert a.brain.calls == 0, msg
+
+
+def test_house_state_tells_camera_truth(monkeypatch):
+    """Состояние дома несёт свежий факт о камере — мозгу не нужно
+    выдумывать «всё ещё недоступна» по памяти."""
+    monkeypatch.setattr(eyes, "health_cached", lambda period=30.0: True)
+    monkeypatch.setattr(eyes, "camera_module_ok", lambda period=300.0: True)
+    s = agent._house_state()
+    assert "камера: модуль есть" in s
+    monkeypatch.setattr(eyes, "camera_module_ok", lambda period=300.0: False)
+    s = agent._house_state()
+    assert "нет модуля opencv" in s and "проверь камеру" in s
 
 
 def test_agent_word_boundary(monkeypatch):

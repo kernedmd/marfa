@@ -38,6 +38,8 @@ def home(tmp_path, monkeypatch):
                         tmp_path / "data" / "hands_enabled.json")
     monkeypatch.setattr(config, "HANDS_LOG_FILE",
                         tmp_path / "logs" / "hands_log.jsonl")
+    monkeypatch.setattr(config, "HANDS_DIALECT_FILE",
+                        tmp_path / "data" / "hands_dialect.json")
     monkeypatch.setattr(config, "HANDS_MODEL",
                         tmp_path / "models" / "UI-TARS-7B-DPO.Q4_K_M.gguf")
     monkeypatch.setattr(config, "HANDS_MMPROJ",
@@ -57,6 +59,69 @@ def test_parse_all_six_actions():
     assert motor.parse_action("hotkey('ctrl+c')")["name"] == "hotkey"
     assert motor.parse_action("wait()")["name"] == "wait"
     assert motor.parse_action("finished()")["name"] == "finished"
+
+
+# ---------- родной диалект UI-TARS (измерено живьём 22.11) ----------
+
+def test_parse_native_click_start_box():
+    """ЖИВОЙ УРОК 22.11: на задание UI-TARS ответил
+    click(start_box='(757,583)') — обученным форматом, невзирая на
+    упрощённый промпт. Парсер обязан понимать РОДНОЙ диалект."""
+    act = motor.parse_action("click(start_box='(757,583)')")
+    assert act["name"] == "click" and act["args"] == ("757", "583")
+
+
+def test_parse_native_click_box_tokens():
+    """Спец-токены <|box_start|>/<|box_end|> — сервер может оставить."""
+    act = motor.parse_action(
+        "click(start_box='<|box_start|>(100,200)<|box_end|>')")
+    assert act["name"] == "click" and act["args"] == ("100", "200")
+
+
+def test_parse_native_left_single_click():
+    act = motor.parse_action("left_single_click(start_box=\"(10,20)\")")
+    assert act["name"] == "click" and act["args"] == ("10", "20")
+
+
+def test_parse_thought_then_action():
+    raw = ("Thought: I should click the camera icon in the center.\n"
+           "Action: click(start_box='(757,583)')")
+    act = motor.parse_action(raw)
+    assert act["name"] == "click" and act["args"] == ("757", "583")
+
+
+def test_parse_native_type_content():
+    act = motor.parse_action("type(content='hello world')")
+    assert act["name"] == "type" and act["args"] == ("hello world",)
+
+
+def test_parse_native_hotkey_key_space_separator():
+    """UI-TARS печатает 'ctrl c' пробелом — дом живёт на 'ctrl+c'."""
+    act = motor.parse_action("hotkey(key='ctrl c')")
+    assert act["name"] == "hotkey" and act["args"] == ("ctrl+c",)
+
+
+def test_parse_native_scroll_direction():
+    act = motor.parse_action("scroll(start_box='(512,384)', direction='down')")
+    assert act["name"] == "scroll" and act["args"] == ("down",)
+    act2 = motor.parse_action("scroll(direction='up')")
+    assert act2["name"] == "scroll" and act2["args"] == ("up",)
+
+
+def test_parse_double_click_known_unimplemented():
+    """left_double_click — родной диалект распознан, но в протоколе
+    дома его нет: страж отказывает ЧЕСТНО (не «не поняли»)."""
+    act = motor.parse_action("left_double_click(start_box='(5,5)')")
+    assert act["name"] == "double_click"
+    v = motor.guard_action(act, REAL, SENT)
+    assert not v.allowed() and "Р-2" in v.reason
+
+
+def test_parse_right_click_known_unimplemented():
+    act = motor.parse_action("right_click(start_box='(5,5)')")
+    assert act["name"] == "right_click"
+    v = motor.guard_action(act, REAL, SENT)
+    assert not v.allowed()
 
 
 def test_parse_click_coordinates():
@@ -284,6 +349,54 @@ def test_run_logs_to_hands_log(home, monkeypatch):
     assert all(r.get("mode") == "dry" for r in log if "action" in r)
 
 
+def test_run_redirects_looking_tasks(home, monkeypatch):
+    """Урок живого прогона 22.11: «Проверь еще раз модуль, он появился» —
+    мозг поручил рукам «посмотри на меня», руки подняли VRAM-танец и
+    ткнули в центр экрана. Руки не смотрят: редирект к глазам/камере
+    БЕЗ подъёма слуги."""
+    called = []
+    monkeypatch.setattr(motor, "ensure_server",
+                        lambda wait_secs=None: called.append(1) or (True, "шов"))
+    out = motor.run("посмотри на меня")
+    assert "РУКИ не смотрят" in out and "посмотри в камеру" in out
+    assert called == []                     # слуга не поднимался
+
+
+def test_run_redirects_describe_tasks(home, monkeypatch):
+    called = []
+    monkeypatch.setattr(motor, "ensure_server",
+                        lambda wait_secs=None: called.append(1) or (True, "шов"))
+    for task in ("опиши что на экране", "прочитай надпись", "включи камеру"):
+        assert "РУКИ не смотрят" in motor.run(task), task
+    assert called == []
+
+
+def test_run_real_task_still_works(home, monkeypatch):
+    """Настоящее задание рукам — редирект его не ест."""
+    monkeypatch.setattr(motor, "ensure_server", lambda wait_secs=None: (True, "на посту"))
+    monkeypatch.setattr(motor, "release", lambda: "руки легли (шов)")
+    monkeypatch.setattr(motor, "_screenshot",
+                        lambda: ("b64", REAL, SENT))
+    monkeypatch.setattr(motor, "_ask_hands",
+                        lambda task, b64: "click(start_box='(32,706)')")
+    out = motor.run("нажми Пуск")
+    assert "задание: нажми Пуск" in out and "click" in out
+
+
+# ---------- диалект координат: измерение и пересчёт ----------
+
+def test_dialect_default_pixels(home):
+    """До измерения честно считаем пикселями кадра."""
+    assert motor.dialect() == "pixels"
+    assert motor.frame_point(500, 970, SENT) == (500, 970)
+
+
+def test_exam_saves_dialect_file(home):
+    motor._save_dialect("normalized", "тест")
+    assert motor.dialect() == "normalized"
+    assert motor.frame_point(500, 970, SENT) == (640, 698)
+
+
 # ---------- экзамен Р-0 (ТЗ 7) ----------
 
 # Пуск в координатах ОТПРАВЛЕННОГО кадра 1280×720 (экран 1920×1080 / 1.5):
@@ -315,6 +428,38 @@ def test_exam_hit(home, monkeypatch):
     out = motor.exam()
     assert "ПОПАДАНИЕ" in out
     assert "подтверждён" in out
+    # измеренный диалект записан и используется (ТЗ: измеряем, не выдумываем)
+    assert motor.dialect() == "pixels"
+    assert json.loads(config.HANDS_DIALECT_FILE.read_text(
+        encoding="utf-8"))["dialect"] == "pixels"
+
+
+def test_exam_normalized_dialect_measured(home, monkeypatch):
+    """Прицел попадает ТОЛЬКО при пересчёте 0-1000 — экзамен видит второй
+    диалект, запоминает его, и map_point дальше пересчитывает сам."""
+    monkeypatch.setattr(motor, "server_alive", lambda: True)
+    monkeypatch.setattr(motor, "ensure_server", lambda wait_secs=None: (True, "на посту"))
+    monkeypatch.setattr(motor, "release", lambda: "руки легли (шов)")
+    monkeypatch.setattr(motor, "_screenshot", lambda: ("b64", SENT, SENT))
+    # Пуск [640,690,704,720]; прицел (500,970): как пиксели — мимо,
+    # как сетка 0-1000 -> (640,698) — попадание
+    monkeypatch.setattr(motor, "_ask_hands",
+                        lambda task, b64: "click(start_box='(500,970)')")
+    d = {"elements": [{"type": "button", "text": "Пуск",
+                       "bbox": [640, 690, 704, 720], "confidence": 0.9}]}
+    from core import eyes
+    monkeypatch.setattr(eyes, "_VISION_ERROR", None)
+    monkeypatch.setattr(eyes, "_screenshot_b64",
+                        lambda width=1280: ("b64", SENT, SENT))
+    monkeypatch.setattr(eyes, "_post_chat",
+                        lambda body: {"choices": [{"message": {"content":
+                         json.dumps(d, ensure_ascii=False)}}]})
+    out = motor.exam()
+    assert "мимо" in out and "НОРМИРОВАННАЯ" in out
+    assert motor.dialect() == "normalized"
+    # дальше дом пересчитывает сам: прицел (500,970) -> экран 1920x1080
+    assert motor.map_point(500, 970, REAL, SENT) == (int(640 * 1.5),
+                                                      int(698 * 1.5))
 
 
 def test_exam_miss_reports_numbers(home, monkeypatch):
@@ -403,5 +548,7 @@ def test_law_anchors():
     assert config.HANDS_MAX_STEPS <= 10          # бюджет не расползается
     assert "alt+f4" not in config.HANDS_HOTKEY_WHITELIST
     assert "ctrl+c" in config.HANDS_HOTKEY_WHITELIST
-    assert motor.HANDS_PROMPT.count("click(x, y)") == 1
+    # v2 (живой урок): промпт говорит с UI-TARS на РОДНОМ диалекте —
+    # click(start_box='(x,y)'); парсер понимает оба (см. тесты диалекта)
+    assert motor.HANDS_PROMPT.count("click(start_box='(x,y)')") == 1
     assert "finished()" in motor.HANDS_PROMPT

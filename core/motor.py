@@ -39,14 +39,17 @@ import requests
 from core import config
 from safety import guard
 
-# Протокол моторики (ТЗ 3, подтверждено внешними источниками): строго
-# шесть действий. Промпт английский — модель обучена на английских
-# инструкциях; задание Создателя можно писать по-русски.
+# Протокол моторики (ТЗ 3). Урок живого прогона 22.11 (ночь): на задание
+# «посмотри на меня» UI-TARS ответил click(start_box='(757,583)') — СВОИМ
+# обученным форматом, невзирая на упрощённый список в промпте. DPO-модель
+# говорит на родном диалекте — промпт теперь тоже, а парсер понимает ОБА
+# (см. _normalize_dialect). Задание Создателя можно писать по-русски.
 HANDS_PROMPT = (
     "You are a GUI agent. Look at the screenshot and the task. "
-    "Reply with EXACTLY ONE action, nothing else. Actions:\n"
-    "click(x, y) | type('text') | scroll(up) | scroll(down) | "
-    "hotkey('ctrl+c') | wait() | finished()\n"
+    "Reply with EXACTLY ONE action in your native format, nothing else:\n"
+    "click(start_box='(x,y)') | type(content='text') | "
+    "scroll(direction='up' or 'down') | hotkey(key='ctrl c') | "
+    "wait() | finished()\n"
     "x, y are pixel coordinates in THIS screenshot. "
     "Do not invent other actions.\n\n"
     "Task: "
@@ -57,6 +60,10 @@ HANDS_PROMPT = (
 # рассуждение до него (Thought: ... Action: click(...)).
 _ACT_PATTERNS = [
     ("click", re.compile(r"\bclick\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)")),
+    ("double_click", re.compile(
+        r"\bdouble_click\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)")),
+    ("right_click", re.compile(
+        r"\bright_click\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)")),
     ("finished", re.compile(r"\bfinished\s*\(\s*\)", re.IGNORECASE)),
     ("wait", re.compile(r"\bwait\s*\(\s*\)")),
     ("type", re.compile(r"\btype\s*\(\s*['\"](.*)['\"]\s*\)", re.S)),
@@ -64,6 +71,47 @@ _ACT_PATTERNS = [
     ("hotkey", re.compile(r"\bhotkey\s*\(\s*['\"]([^'\"]+)['\"]\s*\)",
                           re.IGNORECASE)),
 ]
+
+
+# Родной диалект UI-TARS -> простой протокол дома. Живой прогон 22.11
+# доказал: модель ОТВЕЧАЕТ нативным форматом (start_box, content=, key=),
+# даже если промпт просит упрощённый. Парсер сворачивает оба в один.
+_BOX_ARG = (r"start_box\s*=\s*['\"]?\(?\s*(\d+)\s*,\s*(\d+)\s*\)?['\"]?")
+
+
+def _normalize_dialect(text: str) -> str:
+    """Нативные формы UI-TARS -> протокол дома (click(x,y) и т.д.).
+
+    Терпит спец-токены <|box_start|>/<|box_end|> (сервер может как
+    вырезать их, так и оставить), кавычки обоих родов и скобки вокруг
+    пары координат. scroll понимает direction= с необязательным
+    start_box; hotkey — разделитель пробелом ('ctrl c'), как в обучении.
+    """
+    s = (text or "").replace("<|box_start|>", "").replace("<|box_end|>", "")
+    s = re.sub(r"\bleft_single_click\s*\(\s*%s\s*\)" % _BOX_ARG,
+               r"click(\1,\2)", s)
+    s = re.sub(r"\bclick\s*\(\s*%s\s*\)" % _BOX_ARG, r"click(\1,\2)", s)
+    s = re.sub(r"\bleft_double_click\s*\(\s*%s\s*\)" % _BOX_ARG,
+               r"double_click(\1,\2)", s)
+    s = re.sub(r"\bright_single_click\s*\(\s*%s\s*\)" % _BOX_ARG,
+               r"right_click(\1,\2)", s)
+    s = re.sub(r"\bright_click\s*\(\s*%s\s*\)" % _BOX_ARG,
+               r"right_click(\1,\2)", s)
+    s = re.sub(r"\btype\s*\(\s*content\s*=\s*['\"](.*?)['\"]\s*\)",
+               r"type('\1')", s, flags=re.S)
+    s = re.sub(r"\bhotkey\s*\(\s*key\s*=\s*['\"]([^'\"]*?)['\"]\s*\)",
+               lambda m: "hotkey('%s')" % m.group(1).strip().replace(" ", "+"), s)
+    s = re.sub(r"\bscroll\s*\(\s*(?:start_box\s*=\s*['\"][^'\"]*['\"]\s*,\s*)?"
+               r"direction\s*=\s*['\"]?(up|down)['\"]?\s*\)",
+               r"scroll(\1)", s, flags=re.IGNORECASE)
+    return s
+
+
+# Задание на РАЗГЛЯДЫВАНИЕ — не для рук (урок живого прогона 22.11:
+# мозг поручил рукам «посмотри на меня» — VRAM-танец впустую и клик в
+# никуда; смотреть — работа глаз и камеры, быстрые команды).
+_LOOKING_MARKS = ("посмотр", "что видишь", "опиши", "прочитай",
+                  "камер", "скриншот")
 
 
 # ---------------------------------------------------------------
@@ -196,11 +244,13 @@ def release() -> str:
 def parse_action(text: str) -> dict:
     """Первое распознанное действие в ответе модели.
 
+    Сначала ответ нормализуется из родного диалекта UI-TARS (урок
+    живого прогона: click(start_box='(757,583)')) — потом паттерны.
     {"name": click/type/scroll/hotkey/wait/finished, "args": (...), "raw": ...}
     Ничего не узнали — {"name": "unknown"}: руки откажутся честно.
     """
     for name, rx in _ACT_PATTERNS:
-        m = rx.search(text or "")
+        m = rx.search(_normalize_dialect(text))
         if m:
             return {"name": name, "args": m.groups(), "raw": m.group(0)}
     return {"name": "unknown", "args": (),
@@ -222,6 +272,51 @@ def scale_point(x: int, y: int, real_size, sent_size) -> tuple:
 
 
 # ---------------------------------------------------------------
+# ДИАЛЕКТ КООРДИНАТ (измеряется экзаменом Р-0, не выдумывается)
+# ---------------------------------------------------------------
+
+def dialect() -> str:
+    """Измеренный диалект координат UI-TARS: "pixels" (пиксели кадра)
+    или "normalized" (сетка 0-1000). Измерение пишет экзамен Р-0;
+    до измерения честно считаем пикселями кадра."""
+    try:
+        raw = Path(config.HANDS_DIALECT_FILE).read_text(encoding="utf-8")
+        d = json.loads(raw)
+        if isinstance(d, dict) and d.get("dialect") in ("pixels", "normalized"):
+            return d["dialect"]
+    except Exception:
+        pass
+    return "pixels"
+
+
+def _save_dialect(name: str, note: str) -> None:
+    """Запомнить измеренный диалект (data/, как вся воля и истина дома)."""
+    try:
+        p = Path(config.HANDS_DIALECT_FILE)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(
+            {"dialect": name, "note": note,
+             "ts": dt.datetime.now().isoformat(timespec="seconds")},
+            ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def frame_point(x: int, y: int, sent_size) -> tuple:
+    """Координаты модели -> координаты КАДРА по измеренному диалекту."""
+    if dialect() == "normalized" and sent_size and sent_size[0]:
+        return (int(round(x * sent_size[0] / 1000.0)),
+                int(round(y * sent_size[1] / 1000.0)))
+    return int(x), int(y)
+
+
+def map_point(x: int, y: int, real_size, sent_size) -> tuple:
+    """Координаты модели -> пиксели РЕАЛЬНОГО экрана: диалект + масштаб."""
+    fx, fy = frame_point(x, y, sent_size)
+    return scale_point(fx, fy, real_size, sent_size)
+
+
+# ---------------------------------------------------------------
 # СТРАЖ моторики (ТЗ 6): whitelist — код, не мнение модели
 # ---------------------------------------------------------------
 
@@ -232,9 +327,15 @@ def guard_action(act: dict, real_size, sent_size) -> guard.Verdict:
         return guard.Verdict("HIGH", "deny",
                              "руки не поняли действие: %s" % act["raw"][:120],
                              "hands.parse")
+    if name in ("double_click", "right_click"):
+        # родной диалект распознан, но в протоколе дома его нет (Р-2)
+        return guard.Verdict("HIGH", "deny",
+                             "%s — не в протоколе дома (Круг Р-2): дай "
+                             "задание обычным кликом" % name,
+                             "hands.unsupported")
     if name == "click":
-        x, y = scale_point(int(act["args"][0]), int(act["args"][1]),
-                           real_size, sent_size)
+        x, y = map_point(int(act["args"][0]), int(act["args"][1]),
+                         real_size, sent_size)
         if not (0 <= x < real_size[0] and 0 <= y < real_size[1]):
             return guard.Verdict("HIGH", "deny",
                                  "клик за краем экрана (%d, %d)" % (x, y),
@@ -281,8 +382,8 @@ def _execute(act: dict, real_size, sent_size) -> str:
                 "venv\\Scripts\\pip install pyautogui" % e)
     name = act["name"]
     if name == "click":
-        x, y = scale_point(int(act["args"][0]), int(act["args"][1]),
-                           real_size, sent_size)
+        x, y = map_point(int(act["args"][0]), int(act["args"][1]),
+                         real_size, sent_size)
         pyautogui.click(x, y)
         return "кликнула (%d, %d)" % (x, y)
     if name == "type":
@@ -411,6 +512,17 @@ def run(task: str, max_steps: Optional[int] = None) -> str:
     if not task:
         return ("руки ждут задание: «руки нажми Пуск». "
                 "Экзамен координат — «руки, экзамен»")
+    low_task = task.lower()
+    if any(mark in low_task for mark in _LOOKING_MARKS):
+        # Урок живого прогона 22.11: «посмотри на меня» ушло РУКАМ —
+        # VRAM-танец впустую и клик в никуда. Руки не смотрят.
+        _log_act({"task": task, "redirect": "eyes"})
+        _lesson("руки-не-смотрят", task)
+        return ("РУКИ не смотрят — это работа глаз и камеры, быстрые "
+                "команды: «посмотри» (экран), «посмотри в камеру» "
+                "(веб-камера), «проверь камеру» (живой тест). Руки жмут "
+                "и печатают: «руки нажми Пуск». Экзамен координат — "
+                "«руки, экзамен»")
     mode = ("моторика ВКЛЮЧЕНА (резолюция Создателя)" if enabled()
             else "сухой режим: план без кликов (включить — кнопка 91)")
     ok, note = ensure_server()
@@ -453,10 +565,11 @@ def run(task: str, max_steps: Optional[int] = None) -> str:
             if enabled():
                 lines.append("  " + _execute(act, real, sent))
                 if act["name"] == "click":
-                    x, y = int(act["args"][0]), int(act["args"][1])
+                    fx, fy = frame_point(int(act["args"][0]),
+                                         int(act["args"][1]), sent)
                     b64_after, _, _ = _screenshot()
-                    frac = _pixel_diff(b64, b64_after, (x - 8, y - 8,
-                                                        x + 8, y + 8))
+                    frac = _pixel_diff(b64, b64_after, (fx - 8, fy - 8,
+                                                        fx + 8, fy + 8))
                     if frac is not None:
                         lines.append("  сверка пикселей: у клика изменилось "
                                      "%.0f%% кадра" % (frac * 100))
@@ -475,14 +588,15 @@ def run(task: str, max_steps: Optional[int] = None) -> str:
 
 
 def exam() -> str:
-    """Р-0 (ТЗ 7): живой экзамен — сверка диалекта координат.
+    """Р-0 (ТЗ 7): живой экзамен — измерение диалекта координат.
 
     Глаза говорят, где Пуск (дескриптор, bbox); руки целятся туда же
-    (UI-TARS, click). Обе системы смотрят на ОДИН кадр одной ширины —
-    координаты сравнимы напрямую. Кликов нет: экзамен только смотрит.
-    Пуск не виден — честно «не состоялся» (меню Пуска должно быть на
-    экране: наведи мышь на панель задач или нажми Win, потом «руки,
-    экзамен»).
+    (UI-TARS, click). Обе системы смотрят на ОДИН кадр одной ширины.
+    Прицел проверяется в ДВУХ диалектах — пиксели кадра и сетка 0-1000
+    (какая из них — знает только эксперимент): попал — диалект
+    ЗАПОМИНАЕТСЯ в data\\hands_dialect.json, и дом пересчитывает сам.
+    Кликов нет: экзамен только смотрит. Пуск не виден — честно
+    «не состоялся» (нажми Win, потом «руки, экзамен»).
     """
     lines = ["ЭКЗАМЕН РУК (Р-0): сверка координат с дескриптором глаз"]
     try:
@@ -519,19 +633,43 @@ def exam() -> str:
                 lines + ["руки ответили не кликом: %s — экзамен не состоялся"
                          % act["raw"], release()])
         x, y = int(act["args"][0]), int(act["args"][1])
-        inside = (bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3])
+        sw = sent[0] or 1
+        sh = sent[1] or 1
+        nx, ny = int(round(x * sw / 1000.0)), int(round(y * sh / 1000.0))
+
+        def _inside(px, py):
+            return bbox[0] <= px <= bbox[2] and bbox[1] <= py <= bbox[3]
+
+        px_hit, nm_hit = _inside(x, y), _inside(nx, ny)
         cx, cy = (bbox[0] + bbox[2]) // 2, (bbox[1] + bbox[3]) // 2
         dist = int(((x - cx) ** 2 + (y - cy) ** 2) ** 0.5)
-        lines.append("руки целились в (%d, %d) — %s (до центра бокса %d px)"
-                     % (x, y, "ПОПАДАНИЕ" if inside else "мимо", dist))
-        verdict = ("диалект координат подтверждён — моторику можно включать "
-                   "(кнопка 91), если Создатель доверяет" if inside else
-                   "координаты НЕ совпали — диалект другой: НЕ включай "
-                   "моторику, калибруем (скажи архитектору цифры выше)")
+        lines.append("руки целились в (%d, %d): как пиксели кадра — %s "
+                     "(до центра %d px); как сетка 0-1000 — (%d, %d), %s"
+                     % (x, y, "ПОПАДАНИЕ" if px_hit else "мимо", dist,
+                        nx, ny, "ПОПАДАНИЕ" if nm_hit else "мимо"))
+        if px_hit:
+            _save_dialect("pixels", "экзамен Р-0: прицел в боксе Пуска напрямую")
+            verdict = ("диалект: ПИКСЕЛИ КАДРА — подтверждён и запомнен; "
+                       "моторику можно включать (кнопка 91), если Создатель "
+                       "доверяет")
+        elif nm_hit:
+            _save_dialect("normalized",
+                          "экзамен Р-0: прицел попадает при пересчёте 0-1000")
+            verdict = ("диалект: НОРМИРОВАННАЯ СЕТКА 0-1000 — подтверждён "
+                       "при пересчёте, дом запомнил и пересчитывает сам; "
+                       "моторику можно включать (кнопка 91), если Создатель "
+                       "доверяет")
+        else:
+            verdict = ("координаты НЕ совпали ни в одном диалекте — НЕ "
+                       "включай моторику, калибруем (скажи архитектору "
+                       "цифры выше)")
         lines.append("вердикт Р-0: " + verdict)
-        _log_act({"exam": True, "eyes_bbox": bbox, "hands_point": [x, y],
-                  "inside": inside, "dist": dist})
-        _lesson("руки-экзамен", "%s: %s" % ((x, y), verdict))
+        _log_act({"exam": True, "eyes_bbox": bbox,
+                  "hands_point": [x, y], "normalized_point": [nx, ny],
+                  "pixel_hit": px_hit, "normalized_hit": nm_hit,
+                  "dist": dist})
+        _lesson("руки-экзамен", "(%d,%d)/норм(%d,%d): %s"
+                % (x, y, nx, ny, verdict[:80]))
         return "\n".join(lines + [release()])
     except Exception as e:
         return "\n".join(lines + ["ошибка экзамена: %s" % e, release()])
