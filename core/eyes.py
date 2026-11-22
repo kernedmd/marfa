@@ -1236,3 +1236,103 @@ def describe_camera_text() -> str:
         return "\n".join(lines)
     except Exception as e:
         return "камера не смогла: " + str(e)
+
+
+# ---------------------------------------------------------------
+# ЗРИТЕЛЬНАЯ ПАМЯТЬ СОЗДАТЕЛЯ (23.11): «запомни меня» / «узнай меня».
+# Урок живого лога: камера увидела мужчину в полосатой футболке, Илья
+# сказал «запомни» — а дому некуда было положить. Один кадр камеры =
+# одно описание; узнавание — тот же сенсор сверяет свежий кадр с
+# описанием в памяти (никакой отдельной модели лиц: честно и дёшево).
+# ---------------------------------------------------------------
+
+def creator_face_file() -> Path:
+    """Где живёт зрительный образ Создателя: data\\creator_face.json."""
+    return Path(config.DATA_DIR) / "creator_face.json"
+
+
+def creator_face() -> Optional[str]:
+    """Сохранённое описание Создателя; нет/битый файл — None, не исключение."""
+    try:
+        raw = creator_face_file().read_text(encoding="utf-8")
+        rec = json.loads(raw)
+        descr = str(rec.get("description") or "").strip()
+        return descr or None
+    except Exception:
+        return None
+
+
+def remember_creator(memory=None) -> str:
+    """«запомни меня»: взглянуть в камеру и ЗАПОМНИТЬ Создателя.
+
+    Описание ложится в data\\creator_face.json (для узнавания) И в память
+    дома с тегом «создатель» (для «вспомни»). Память споткнулась — файл
+    всё равно цел: зрительная память не зависит от RAG. Второй «запомни»
+    перезаписывает образ — люди меняют футболки, живая память не музей.
+    """
+    if _VISION_ERROR:
+        return "глаза не готовы: " + _VISION_ERROR
+    if not health():
+        return ("глаза %d не отвечают — камере нужен живой сенсор зрения"
+                % config.PORT_EYES)
+    try:
+        progress.stage("смотрю в камеру, чтобы запомнить тебя…")
+        b64 = _camera_b64()
+        out, _ = _ask(b64, CAMERA_PROMPT, CAMERA_SCHEMA)
+        d = parse_json(out)
+        descr = str(d.get("description") or "").strip()
+        if not descr:
+            return ("камера не описала кадр — запоминать нечего; света "
+                    "побольше и скажи «запомни меня» ещё раз")
+        rec = {"description": descr,
+               "ts": time.strftime("%Y-%m-%d %H:%M")}
+        creator_face_file().parent.mkdir(parents=True, exist_ok=True)
+        creator_face_file().write_text(
+            json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
+        note = ("Запомнила, как ты выгляжу: %s Теперь «узнай меня» — "
+                "сверю свежий кадр с этим описанием." % descr)
+        if memory is not None:
+            try:
+                memory.remember("Создатель выглядит: " + descr,
+                                tags=["создатель", "внешность"],
+                                importance=4.0)
+            except Exception:
+                pass          # RAG не должен рвать зрительную память
+        return note
+    except Exception as e:
+        return "не получилось запомнить: " + str(e)
+
+
+def recognize_creator() -> str:
+    """«узнай меня»: свежий кадр против описания в зрительной памяти.
+
+    Сенсор получает ОБА текста (что видит + что помнит) и говорит,
+    похож ли человек на Создателя. Не похож — так и говорит: узнавание
+    без подгонки, честность важнее лести.
+    """
+    saved = creator_face()
+    if saved is None:
+        return ("зрительной памяти о тебе ещё нет — скажи «запомни меня», "
+                "и со следующего взгляда я буду узнавать")
+    if _VISION_ERROR:
+        return "глаза не готовы: " + _VISION_ERROR
+    if not health():
+        return ("глаза %d не отвечают — камере нужен живой сенсор зрения"
+                % config.PORT_EYES)
+    try:
+        progress.stage("смотрю в камеру и сверяю с памятью…")
+        b64 = _camera_b64()
+        prompt = (CAMERA_PROMPT + "\nВ зрительной памяти Марфы Создатель "
+                  "выглядит так: «" + saved + "». Если человек в кадре "
+                  "похож на это описание — в description скажи об этом "
+                  "прямо («похож на Создателя: …»); НЕ похож — честно "
+                  "скажи, что не узнаёшь. Не подгоняй ответ под память.")
+        out, _ = _ask(b64, prompt, CAMERA_SCHEMA)
+        d = parse_json(out)
+        descr = str(d.get("description") or "").strip()
+        if not descr:
+            return "камера не описала кадр — попробуй «узнай меня» ещё раз"
+        return ("Сверяю с зрительной памятью (%s): %s"
+                % ("помню: «%s»" % saved[:160], descr))
+    except Exception as e:
+        return "узнавание не вышло: " + str(e)

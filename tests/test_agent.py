@@ -316,3 +316,22 @@ def test_identity_names_feelings_organs(agent, srv):
     sys_text = srv.calls[-1]["messages"][0]["content"]
     assert "Чувства, сон и мысли" in sys_text
     assert "организм" in sys_text
+
+
+# ---------- Ф1: зрительная память Создателя (23.11) ----------
+
+def test_face_memory_commands(agent, srv, monkeypatch):
+    """«запомни меня» / «узнай меня» — быстрые команды, мозг молчит:
+    урок лога (мужчина в полосатой футболке ждёт, что его запомнят)."""
+    from core import eyes
+    monkeypatch.setattr(eyes, "remember_creator",
+                        lambda memory=None: "Запомнила: тест")
+    monkeypatch.setattr(eyes, "recognize_creator",
+                        lambda: "Сверяю с памятью: тест")
+    r1 = agent.handle("запомни меня")
+    r2 = agent.handle("узнай меня")
+    r3 = agent.handle("ты меня помнишь?")
+    assert r1.tool_used == "face_remember" and "Запомнила" in r1.text
+    assert r2.tool_used == "face_recognize" and "Сверяю" in r2.text
+    assert r3.tool_used == "face_recognize"
+    assert srv.calls == []
