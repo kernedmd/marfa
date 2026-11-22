@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import inspect
 import json
 from pathlib import Path
 from typing import Callable, Optional
@@ -40,14 +41,20 @@ def job(job_id: str, kind: str, what: str, run: Callable[[], object], **kw):
 
 def default_jobs() -> list[dict]:
     """Расписание дома. Действия импортируются ЛЕНИВО: без циклов импорта
-    и без тяжёлых подъёмов на этапе чтения модуля."""
+    и без тяжёлых подъёмов на этапе чтения модуля.
+
+    Работа может объявить параметр now — тогда тик передаёт ей своё
+    «сейчас» (урок 22.11: план, построенный по реальным часам, а не по
+    часам тика, — это работа из другого дня; тест, зелёный только в
+    свою дату, — не тест).
+    """
     from core import diary as _diary
     from core import librarian as _librarian
     from core import questions as _questions
     from core.autonomy import DayPlanner
 
-    def _plan() -> str:
-        plan = DayPlanner().tick()
+    def _plan(now: Optional[dt.datetime] = None) -> str:
+        plan = DayPlanner().tick(now)
         return "план построен" if plan else "план уже был"
 
     def _diary_day() -> str:
@@ -147,6 +154,17 @@ class Scheduler:
 
     # ---------- такт ----------
 
+    @staticmethod
+    def _invoke(run: Callable, now: dt.datetime):
+        """Позвать работу. Объявила параметр now — тик передаёт своё
+        «сейчас»: расписание и его работы живут в одном времени. Без
+        параметра — работа зовётся как раньше, без аргументов."""
+        try:
+            wants_now = len(inspect.signature(run).parameters) >= 1
+        except (TypeError, ValueError):
+            wants_now = False
+        return run(now) if wants_now else run()
+
     def tick(self, now: Optional[dt.datetime] = None,
              jobs: Optional[list[dict]] = None) -> list[dict]:
         """Один такт: исполнить всё, что пора. Возврат — протокол честности:
@@ -160,7 +178,7 @@ class Scheduler:
                 continue
             rec = {"id": j["id"], "what": j["what"]}
             try:
-                note = j["run"]()
+                note = self._invoke(j["run"], now)
                 rec.update(ok=True, note=str(note)[:300] if note else "ок")
             except Exception as e:   # работа упала — расписание живо
                 rec.update(ok=False, error=str(e)[:300])

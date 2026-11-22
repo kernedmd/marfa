@@ -109,6 +109,29 @@ def test_broken_state_file_is_fresh_start(sched, home):
     assert sched.due(dt.datetime(2026, 11, 21, 10, 0), [j]) == [j]
 
 
+def test_job_with_now_gets_tick_time(sched, home):
+    """Урок 22.11: работа с параметром now живёт во времени ТИКА, а не
+    реальных часов. План, построенный по сегодняшним часам в момент
+    фиктивного «вчера», — работа из другого дня; тест, зелёный только
+    в свою дату, — не тест (та же болезнь, что и с портами 21.11)."""
+    seen = []
+
+    def careful(now):
+        seen.append(now)
+
+    j = job("t-now", "daily", at="08:00", what="видит время тика",
+            run=careful)
+    tick_at = dt.datetime(2026, 11, 21, 9, 0)
+    sched.tick(tick_at, [j])
+    assert seen == [tick_at]
+
+    plain = []
+    j2 = job("t-plain", "interval", every=60, what="без now — как раньше",
+             run=lambda: plain.append(1))
+    sched.tick(tick_at, [j2])
+    assert plain == [1]
+
+
 # ---------- журнал уроков ----------
 
 def test_lesson_written_and_read(home):
