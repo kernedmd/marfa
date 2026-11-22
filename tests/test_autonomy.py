@@ -56,7 +56,9 @@ def test_queue_tasks_sorted_and_capped(planner):
     assert plan["date"] == "2026-11-12"
 
 
-def test_carry_over_from_yesterday(planner):
+def test_carry_over_no_duplicates_with_tasks(planner):
+    """K6 аудита (раунд 2): задача из очереди входит в задачи дня ОДИН раз —
+    в tasks; в carry_over её дубль не висит. Закрытая вчера не воскресает."""
     yesterday = dt.date(2026, 11, 11)
     add_task("законченная задача")
     add_task("висит задача")
@@ -64,17 +66,68 @@ def test_carry_over_from_yesterday(planner):
     assert len(plan_y["tasks"]) == 2
     planner.mark_task(plan_y["tasks"][0]["id"], "done", day=yesterday)
     plan_today = planner.build_plan(day=dt.date(2026, 11, 12))
-    assert not any("законченная" in c for c in plan_today["carry_over"])  # done не переезжает
-    assert any("висит" in c for c in plan_today["carry_over"])
+    titles = [t["title"] for t in plan_today["tasks"]]
+    assert "висит задача" in titles                       # живая — в задачах
+    assert not any("висит" in c for c in plan_today["carry_over"])  # и БЕЗ дубля
+    assert not any("законченная" in c for c in plan_today["carry_over"])
+    assert "законченная задача" not in titles             # зомби не воскрес
 
 
-def test_pending_only_carry_over(planner):
-    """Неотмеченная (pending) задача вчера — переезжает."""
+def test_carry_over_orphan_from_dead_plan(planner):
+    """Задача из вчерашнего плана, которой УЖЕ нет в очереди (очередь
+    почистили/пересобрали), — переезжает строкой carry_over, не теряется."""
+    yesterday = dt.date(2026, 11, 11)
+    add_task("сирота из очереди")
+    planner.build_plan(day=yesterday)
+    from core.autonomy import save_queue
+    save_queue([])                                        # очередь опустела
+    plan_today = planner.build_plan(day=dt.date(2026, 11, 12))
+    assert any("сирота" in c for c in plan_today["carry_over"])
+
+
+def test_cancelled_not_carried_over(planner):
+    """M5 (раунд 2): отменённая задача — не «незавершённая», завтра не возвращается."""
+    yesterday = dt.date(2026, 11, 11)
+    add_task("отменённая")
+    plan_y = planner.build_plan(day=yesterday)
+    planner.mark_task(plan_y["tasks"][0]["id"], "cancelled", day=yesterday)
+    plan_today = planner.build_plan(day=dt.date(2026, 11, 12))
+    assert not any("отменённая" in c for c in plan_today["carry_over"])
+    assert "отменённая" not in [t["title"] for t in plan_today["tasks"]]
+
+
+def test_pending_task_in_tasks_not_carry(planner):
+    """Неотмеченная (pending) задача вчера — сегодня в задачах дня,
+    без дубля в carry_over (K6 раунда 2)."""
     yesterday = dt.date(2026, 11, 11)
     add_task("висяк")
     planner.build_plan(day=yesterday)
-    planner2 = planner.build_plan(day=dt.date(2026, 11, 12))
-    assert any("висяк" in c for c in planner2["carry_over"])
+    plan2 = planner.build_plan(day=dt.date(2026, 11, 12))
+    assert "висяк" in [t["title"] for t in plan2["tasks"]]
+    assert not any("висяк" in c for c in plan2["carry_over"])
+
+
+def test_force_rebuild_keeps_today_marks(planner):
+    """M4 (раунд 2): force=True пересобирает план (новая задача видна
+    сегодня), но сделанное сегодня не сбрасывает в pending."""
+    day = dt.date(2026, 11, 12)
+    add_task("первая")
+    p1 = planner.build_plan(day=day)
+    planner.mark_task(p1["tasks"][0]["id"], "done", day=day)
+    add_task("приехала после обеда")
+    p2 = planner.build_plan(day=day, force=True)
+    by_title = {t["title"]: t["status"] for t in p2["tasks"]}
+    assert by_title["первая"] == "done"                    # работа дня цела
+    assert by_title["приехала после обеда"] == "pending"  # новенькая видна
+
+
+def test_mark_task_rejects_junk_status(planner):
+    """M5 (раунд 2): «думаю»/«xyz» — не статус, отказ, а не тихая порча плана."""
+    day = dt.date(2026, 11, 12)
+    add_task("задача")
+    p = planner.build_plan(day=day)
+    with pytest.raises(ValueError):
+        planner.mark_task(p["tasks"][0]["id"], "думаю", day=day)
 
 
 def test_should_run_respects_8am(planner):

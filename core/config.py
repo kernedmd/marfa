@@ -16,10 +16,19 @@ from pathlib import Path
 # ДОМ (ТЗ 2.3): всё живёт только внутри C:\Marfa.
 # Переопределение для разработки/тестов вне Z440: переменная MARFA_HOME.
 # ---------------------------------------------------------------
-HOME_DIR: Path = Path(os.environ.get("MARFA_HOME") or (
+def _resolve_home(raw: str) -> Path:
+    """N4 аудита: ОТНОСИТЕЛЬНЫЙ MARFA_HOME резолвится от домашнего каталога
+    пользователя, а не от cwd — запуск дома из другой папки не должен
+    переезжать дом (Path.resolve() молча клеил его к текущему каталогу)."""
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        p = Path.home() / p
+    return p.resolve()
+
+
+HOME_DIR: Path = _resolve_home(os.environ.get("MARFA_HOME") or (
     r"C:\Marfa" if sys.platform == "win32"
-    else os.path.join(tempfile.gettempdir(), "marfa_dev")
-)).resolve()
+    else os.path.join(tempfile.gettempdir(), "marfa_dev")))
 
 CORE_DIR = HOME_DIR / "core"
 DATA_DIR = HOME_DIR / "data"
@@ -49,7 +58,11 @@ RAM_PLAN_GB = {
     "qlora_night": 8.0,           # студент + буферы ночью (30B не выгружается)
     "reserve": 10.0,              # браузер Ильи, бэкапы, распаковка моделей
 }
-assert abs(sum(RAM_PLAN_GB.values()) - RAM_BUDGET_GB) < 1e-9, "План RAM должен сходиться в 44 ГБ"
+# N3 аудита: закон дома проверяется raise, а не assert — python -O
+# (продакшен-флаг) выключает assert'ы молча, и переполнение контекста
+# проехало бы мимо суда.
+if abs(sum(RAM_PLAN_GB.values()) - RAM_BUDGET_GB) >= 1e-9:
+    raise RuntimeError("План RAM должен сходиться в 44 ГБ — закон 0.1 нарушен")
 
 # Пороги монитора Ф97 — проценты от ФАКТИЧЕСКОГО объёма
 MONITOR_WARN_PCT = 85
@@ -71,8 +84,11 @@ GENERATION_BUDGET_TOKENS = 768
 # Обрезанный JSON — не приговор: ретрай уходит с ПОЛНЫМ бюджетом.
 # Дневник, рефлексия и живой голос остаются на 768 — им можно думать.
 BRAIN_ANSWER_TOKENS = 320
-assert BRAIN_ANSWER_TOKENS <= GENERATION_BUDGET_TOKENS
-assert PROMPT_BUDGET_TOKENS + GENERATION_BUDGET_TOKENS <= CONTEXT_TOKENS
+# N3: законы — через raise, не assert (см. план RAM выше)
+if BRAIN_ANSWER_TOKENS > GENERATION_BUDGET_TOKENS:
+    raise RuntimeError("краткий ответ не выше бюджета генерации — закон 0.3")
+if PROMPT_BUDGET_TOKENS + GENERATION_BUDGET_TOKENS > CONTEXT_TOKENS:
+    raise RuntimeError("3072 + 768 <= 4096 — закон контекста 0.3 нарушен")
 
 # Грубая оценка токенов офлайн (без tokenizer'а): усреднённо ~3 символа/токен
 # для смеси русского и кода. Точная цифра приходит из usage ответа llama-server.
@@ -228,5 +244,11 @@ def ensure_dirs() -> None:
 
 
 def token_estimate(text: str) -> int:
-    """Офлайн-оценка токенов. Для точной цифры используйте usage от llama-server."""
+    """Офлайн-оценка токенов. Для точной цифры используйте usage от llama-server.
+
+    K2 аудита: пустой текст — 0 токенов, а не 1: выброшенный блок не
+    съедает «фантомный» токен из бюджета (отчёт level_tokens врёт,
+    used живёт своей жизнью)."""
+    if not text:
+        return 0
     return max(1, (len(text) + CHARS_PER_TOKEN_EST - 1) // CHARS_PER_TOKEN_EST)
