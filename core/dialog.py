@@ -84,8 +84,15 @@ class DialogStore:
         except (OSError, ValueError):
             return []
 
-    def append(self, session_id: str, role: str, text: str) -> dict:
-        """Дописать ход. Роль — только user/assistant (не выдумываем системных)."""
+    def append(self, session_id: str, role: str, text: str,
+               meta: Optional[dict] = None) -> dict:
+        """Дописать ход. Роль — только user/assistant (не выдумываем системных).
+
+        meta — штамп хода (эфир, 22.11): сколько думала (secs) и кто
+        отвечал (src). В файл ложатся только простые значения — никакой
+        вложенной мути от будущих callers; старые файлы без meta читаются
+        как раньше (F5 не сотрёт время и не сломает историю).
+        """
         if role not in ("user", "assistant"):
             raise ValueError("роль хода: user или assistant")
         text = (text or "").strip()
@@ -95,6 +102,13 @@ class DialogStore:
         turns = self.turns(session_id)
         turn = {"role": role, "text": text[:8000],
                 "ts": dt.datetime.now().strftime("%d.%m %H:%M")}
+        if meta:
+            clean = {}
+            for k, v in meta.items():
+                if isinstance(v, (int, float, str, bool)) and len(clean) < 8:
+                    clean[str(k)[:32]] = v
+            if clean:
+                turn["meta"] = clean
         turns.append(turn)
         if len(turns) > _MAX_TURNS:               # потолок: свежее важнее
             turns = turns[-_MAX_TURNS:]

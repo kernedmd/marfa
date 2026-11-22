@@ -11,9 +11,11 @@ from pathlib import Path
 
 import datetime as dt
 import json
+import time
+
 from flask import Flask, jsonify, request
 
-from core import config
+from core import config, progress
 from core.agent import Agent
 from core.brain import BrainClient
 from core.dialog import DialogStore, _safe_session
@@ -49,6 +51,9 @@ PANEL_HTML = """<!DOCTYPE html>
 <button id="theme" onclick="toggleTheme()" title="сменить оформление">день</button>
 <h1>Марфа — панель дома</h1>
 
+<h2>Сейчас делает</h2>
+<div class="card" id="now">спрашиваю у дома...</div>
+
 <h2>Память RAM (Ф97)</h2>
 <div class="card" id="ram">бюджет дома: 44 из 64 ГБ (пороги Ф97: 85/92). Замер...</div>
 
@@ -71,6 +76,31 @@ PANEL_HTML = """<!DOCTYPE html>
 
 <script>
 function cls(level) { return level === "CRIT" ? "crit" : (level === "WARN" ? "warn" : "ok"); }
+function esc(s) { return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+// эфир: чем занята Марфа прямо сейчас — без консоли и без угадывания
+function fmtSecs(x) { return (Math.round(x * 10) / 10).toString().replace(".", ","); }
+function refreshNow() {
+  fetch("/api/progress").then(r => r.json()).then(p => {
+    const el = document.getElementById("now");
+    if (p.busy) {
+      let s = "<b class='ok'>занята</b>: " + esc(p.stage) +
+              " <small>(уже " + fmtSecs(p.elapsed) + " с)</small>";
+      if (p.sid && !p.mine) s += " <small>— отвечает в другом разговоре</small>";
+      el.innerHTML = s;
+    } else {
+      let s = "свободна — жду в <a href='/chat'>чате</a>";
+      if (p.last && p.last.secs) {
+        s = "последний ответ: <b>" + fmtSecs(p.last.secs) + " с</b> (" +
+            esc(p.last.source) + ", " + esc(p.last.ts) + ") — " + s;
+      }
+      el.innerHTML = s;
+    }
+  }).catch(() => {});
+}
+setInterval(refreshNow, 5000);
+refreshNow();
 fetch("/api/status").then(r => r.json()).then(s => {
   const ram = s.ram;
   document.getElementById("ram").innerHTML =
@@ -229,7 +259,13 @@ def panel():
 @app.post("/api/chat")
 def api_chat():
     """№10/№11: разговор с сессией. Панель держит имя сессии в localStorage,
-    дом — ходы в data/dialog/: F5 и рестарт панели разговор не рвут."""
+    дом — ходы в data/dialog/: F5 и рестарт панели разговор не рвут.
+
+    ЭФИР (22.11, вечер-4): ход начинается begin'ом, заканчивается
+    finish'ом — чат живьём показывает стадию и секунды (опрос
+    /api/progress), ответ приходит со штампом «N с · кто отвечал»,
+    штамп ложится и в память диалога: «сколько думала» переживает F5.
+    """
     data = request.get_json(force=True, silent=True) or {}
     text = (data.get("text") or "").strip()
     if not text:
@@ -239,15 +275,39 @@ def api_chat():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     history = DialogStore.render_messages(DIALOGS.turns(session))
+    progress.begin(session)
+    t0 = time.time()
     try:
         reply = Agent().handle(text, history=history)
     except Exception as e:
+        progress.finish(source="")
         return jsonify({"reply": "Ошибка: " + str(e)}), 500
+    secs = round(time.time() - t0, 1)
+    progress.finish(secs=secs, source=reply.source)
     DIALOGS.append(session, "user", text)          # ходы — после ответа:
-    DIALOGS.append(session, "assistant", reply.text)  # неудача не портит память
+    DIALOGS.append(session, "assistant", reply.text,  # неудача не портит память
+                   meta={"secs": secs, "src": reply.source})
     # №12: готовый безопасный HTML — панель не доверяет мозгу ни байтом
     return jsonify({"reply": reply.text, "html": to_safe_html(reply.text),
-                    "session": session})
+                    "session": session, "secs": secs,
+                    "source": reply.source,
+                    "source_label": progress.source_label(reply.source)})
+
+
+@app.get("/api/progress")
+def api_progress():
+    """Эфир дома: чем Марфа занята прямо сейчас и сколько уже думает.
+
+    Чат опрашивает ежесекундно при ответе, панель — раз в 5 с.
+    Сессия не обязательна: панель спрашивает «вообще», эфир отвечает
+    без привязки к разговору. Плохое имя сессии — просто без фильтра.
+    """
+    sid = str(request.args.get("session") or "")
+    try:
+        sid = _safe_session(sid)
+    except ValueError:
+        sid = ""
+    return jsonify(progress.snapshot(sid))
 
 
 @app.get("/api/dialog/<session>")
@@ -256,17 +316,23 @@ def api_dialog(session):
 
     №12: ответам Марфы прилагается безопасный HTML (сервер экранировал
     всё до разметки); ходы Ильи остаются текстом — их и рендерить нечем.
+    Эфир: штампы времени (secs + src_label) едут с ходами Марфы —
+    старые записи без штаммов читаются как раньше.
     """
     try:
         sid = _safe_session(session)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     turns = DIALOGS.turns(sid)
-    return jsonify({"session": sid, "turns": [
-        {"role": t["role"], "text": t["text"],
-         "html": to_safe_html(t["text"]) if t["role"] == "assistant" else ""}
-        for t in turns
-    ]})
+    out = []
+    for t in turns:
+        meta = t.get("meta") if isinstance(t.get("meta"), dict) else {}
+        out.append({"role": t["role"], "text": t["text"],
+                    "html": to_safe_html(t["text"]) if t["role"] == "assistant" else "",
+                    "secs": meta.get("secs"),
+                    "src_label": progress.source_label(str(meta.get("src", "")))
+                    if meta.get("secs") is not None else ""})
+    return jsonify({"session": sid, "turns": out})
 
 
 # ---------- Круг Д: стремление ----------

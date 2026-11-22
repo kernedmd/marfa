@@ -210,3 +210,106 @@ def test_api_dialog_html_only_for_marfa(client, home, monkeypatch):
 def test_stale_chat_copy_removed():
     """Раздел 8 протокола: у страницы чата одно имя, одно место."""
     assert not (Path(__file__).resolve().parents[1] / "web" / "chat.html").exists()
+
+
+# ---------- ЭФИР: время и «что происходит» в самом чате ----------
+
+def test_api_progress_idle_busy_last(client, home):
+    """Живой ход и штамп последнего — одной точкой, для чата и панели."""
+    from core import progress
+    progress.reset()
+    data = client.get("/api/progress").get_json()
+    assert data["busy"] is False and data["stage"] == ""
+    progress.begin("walk1")
+    progress.stage("глаза читают экран…")
+    data = client.get("/api/progress?session=walk1").get_json()
+    assert data["busy"] is True
+    assert data["stage"] == "глаза читают экран…"
+    assert data["mine"] is True
+    assert data["elapsed"] >= 0.0
+    progress.finish(secs=3.2, source="brain")
+    data = client.get("/api/progress").get_json()
+    assert data["busy"] is False
+    assert data["last"]["secs"] == 3.2
+    assert data["last"]["source"] == "мозг"
+    progress.reset()
+
+
+def test_api_progress_bad_session_still_answers(client, home):
+    """Плохое имя сессии в query — эфир отвечает без фильтра, не падает."""
+    r = client.get("/api/progress?session=" + "точки.нет с пробелом")
+    assert r.status_code == 200
+    assert r.get_json()["busy"] is False
+
+
+def test_api_chat_returns_secs_and_writes_stamp(client, home, monkeypatch):
+    """Ответ со штампом «N с · кто отвечал»; штамп — и в память диалога."""
+    import web.app as webapp
+    from core.agent import Reply
+
+    class FakeAgent:
+        def handle(self, text, history=None):
+            return Reply("готово", source="brain")
+
+    monkeypatch.setattr(webapp, "Agent", lambda: FakeAgent())
+    monkeypatch.setattr(webapp, "DIALOGS", DialogStore(home / "data" / "dialog"))
+    data = client.post("/api/chat",
+                       json={"text": "вопрос", "session": "air1"}).get_json()
+    assert isinstance(data["secs"], (int, float))
+    assert data["secs"] >= 0.0
+    assert data["source"] == "brain"
+    assert data["source_label"] == "мозг"
+    turns = webapp.DIALOGS.turns("air1")
+    assert turns[1]["meta"]["secs"] == data["secs"]   # F5 не сотрёт время
+    assert turns[1]["meta"]["src"] == "brain"
+
+
+def test_api_chat_error_releases_air(client, home, monkeypatch):
+    """Панель упала посреди хода — эфир освобождён, «вечно занята» не бывает."""
+    import web.app as webapp
+
+    class BoomAgent:
+        def handle(self, text, history=None):
+            raise RuntimeError("панель сломалась")
+
+    monkeypatch.setattr(webapp, "Agent", lambda: BoomAgent())
+    monkeypatch.setattr(webapp, "DIALOGS", DialogStore(home / "data" / "dialog"))
+    from core import progress
+    progress.reset()
+    r = client.post("/api/chat", json={"text": "вопрос", "session": "air9"})
+    assert r.status_code == 500
+    assert progress.snapshot()["busy"] is False
+    progress.reset()
+
+
+def test_api_dialog_returns_stamps(client, home, monkeypatch):
+    """История несёт штампы: после F5 время ответов остаётся в чате."""
+    import web.app as webapp
+    monkeypatch.setattr(webapp, "DIALOGS", DialogStore(home / "data" / "dialog"))
+    webapp.DIALOGS.append("air2", "user", "вопрос")
+    webapp.DIALOGS.append("air2", "assistant", "ответ",
+                          meta={"secs": 7.7, "src": "brain"})
+    webapp.DIALOGS.append("air2", "user", "ещё вопрос")
+    webapp.DIALOGS.append("air2", "assistant", "старый ответ без мета")
+    turns = client.get("/api/dialog/air2").get_json()["turns"]
+    assert turns[1]["secs"] == 7.7
+    assert turns[1]["src_label"] == "мозг"
+    assert turns[3]["secs"] is None               # до эфира — без штампа, не падает
+    assert turns[0]["secs"] is None               # ходы Ильи — без штампов
+
+
+def test_chat_page_shows_live_progress(client, home):
+    """Чат: секундомер думания + живая стадия + штамп времени."""
+    html = client.get("/chat").data.decode("utf-8")
+    assert "/api/progress" in html
+    assert "think-stage" in html and "think-secs" in html   # индикатор думания
+    assert "addStamp" in html                               # штамп под ответом
+    assert "thinkingBox" in html
+
+
+def test_panel_has_now_card(client, home):
+    """Панель: карточка «Сейчас делает» — чем занята Марфа без консоли."""
+    html = client.get("/").data.decode("utf-8")
+    assert 'id="now"' in html
+    assert "Сейчас делает" in html
+    assert "/api/progress" in html

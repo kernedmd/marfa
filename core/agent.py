@@ -39,6 +39,11 @@
 руки — моторная кора по вызову (core/motor.py, ТЗ_Руки_v1): команда
 «руки <задача>» и инструмент ui_action, моторика — только по резолюции
 Создателя (кнопка 91), каждое действие — через СТРАЖА.
+2026-11-22, вечер-4 (эфир дома): ответы долгие — но чат больше не
+молчит. Ход начинается эфиром (core/progress.py): чат показывает
+живую стадию («собираю контекст…», «мозг думает…») и тикающие
+секунды, ответ приходит со штампом «12,4 с · мозг». Консоль
+для этого открывать не нужно.
 """
 from __future__ import annotations
 
@@ -50,7 +55,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from core import config, creator_gate, diary, eyes, hands, identity
+from core import config, creator_gate, diary, eyes, hands, identity, progress
 from core.brain import BrainClient
 from core.memory import Memory
 
@@ -511,9 +516,14 @@ class Agent:
         fast = self._fast(user_text)
         if fast is not None:
             return fast
+        # эфир: быстрые команды мгновенны, а вот мозговой трек — долгий;
+        # чат обязан видеть, ЧТО происходит, пока он идёт (не молчать)
+        progress.stage("собираю контекст: доктрина, воспоминания, состояние дома…")
+        system_extra = self._system_extra(user_text)
+        progress.stage("мозг думает — большая модель на CPU, это может занять минуту и больше…")
         try:
             decision = self.brain.ask_json(
-                user_text, system_extra=self._system_extra(user_text),
+                user_text, system_extra=system_extra,
                 history=history)
         except Exception as e:
             _lesson("мозг-недоступен", str(e))
