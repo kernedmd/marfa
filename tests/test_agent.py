@@ -335,3 +335,30 @@ def test_face_memory_commands(agent, srv, monkeypatch):
     assert r2.tool_used == "face_recognize" and "Сверяю" in r2.text
     assert r3.tool_used == "face_recognize"
     assert srv.calls == []
+
+
+# ---------- Ф2: знакомство — команды ----------
+
+def test_agent_introduce_and_who(agent, srv):
+    """«меня зовут X» — имя в файл знакомства (переживает рестарт),
+    «кто я» — вся картина; мозг молчит: знакомство — рефлекс."""
+    r = agent.handle("меня зовут Илья")
+    assert r.tool_used == "introduce" and "Илья" in r.text
+    r = agent.handle("кто я")
+    assert r.tool_used == "who_am_i" and "Илья" in r.text
+    assert srv.calls == []
+
+
+def test_agent_natural_phrases_not_introductions(agent, srv):
+    """«я устал» — живая речь для мозга, не знакомство (тире в «я — X»
+    обязательно: урок жадных префиксов раунда 3, второй раз)."""
+    srv.reply_content = '{"answer": "отдохни"}'
+    r = agent.handle("я устал")
+    assert r.source == "brain" and len(srv.calls) == 1
+
+
+def test_agent_forget_name(agent, srv):
+    agent.handle("меня зовут Илья")
+    r = agent.handle("забудь моё имя")
+    assert "забыла" in r.text
+    assert srv.calls == []

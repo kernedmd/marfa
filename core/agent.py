@@ -669,6 +669,32 @@ class Agent:
                     "ты меня помнишь", "помнишь меня"):
             return Reply(eyes.recognize_creator(), "python", "face_recognize")
 
+        # Ф2 «знакомство» (23.11): «меня зовут X» — имя в файл, не в
+        # общие слова мозга; «кто я» — всё, что дом знает о спикере:
+        # имя + зрительная память + воспоминания. «забудь моё имя» —
+        # честная чистка. «я — X» требует тире: «я устал» — не имя
+        # (граница слов — урок жадных префиксов раунда 3)
+        m = re.match(r"^(?:меня\s+зовут|я\s*[—-])\s*[:;,]?\s*([A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё\- ]{1,29})\s*[?.!…]*$",
+                     t, re.IGNORECASE)
+        if m:
+            from core import people as _people
+            return Reply(_people.set_name(m.group(1).strip(),
+                                          memory=self.memory),
+                         "python", "introduce")
+        if lowq in ("кто я", "как меня зовут", "кто я такой",
+                    "кто я для тебя"):
+            from core import people as _people
+            try:
+                face = eyes.creator_face()
+            except Exception:
+                face = None
+            return Reply(_people.who_am_i(memory=self.memory,
+                                          eyes_face=face),
+                         "python", "who_am_i")
+        if lowq in ("забудь моё имя", "забудь, как меня зовут"):
+            from core import people as _people
+            return Reply(_people.forget_name(), "python", "introduce")
+
         # 22.11 (ночь, урок прогона): «проверь ещё раз модуль, он появился» —
         # проверка камеры это ЭКСПЕРИМЕНТ (импорт → сенсор → кадр),
         # а не воспоминание мозга «всё ещё недоступна». startswith — хвост
