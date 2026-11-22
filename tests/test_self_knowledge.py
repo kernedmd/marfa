@@ -21,7 +21,7 @@ import core.config as config
 from core.agent import Agent, IDENTITY, _house_state
 from core.brain import BrainClient, BrainError
 from core.identity import (TOOLS, capabilities_report, ears_alive,
-                           manifest, tool_names)
+                           ears_diagnosis, manifest, tool_names)
 from core.memory import Memory
 
 
@@ -90,10 +90,12 @@ def test_report_knows_self():
 
 
 def test_report_honest_about_dead_senses():
-    """Мёртвые чувства называются мёртвыми — без фантазий о зрении и слухе."""
+    """Мёртвые чувства называются мёртвыми — без фантазий о зрении и слухе.
+    v2: уши называют ПРИЧИНУ (диагноз из статуса службы), а не
+    отговорку «молчит или микрофона нет»."""
     r = capabilities_report(memory=None, eyes_ok=False, ears_ok=False)
     assert "НЕ запущены" in r
-    assert "молчат" in r
+    assert "не слышу" in r
     r_live = capabilities_report(memory=None, eyes_ok=True, ears_ok=True)
     assert "живы" in r_live and "жив" in r_live
 
@@ -108,20 +110,44 @@ def test_report_counts_memory_or_says_plain():
 
 
 def test_report_names_limits_honestly():
-    """«Чего не умею» — прямо: клики строятся, голоса нет. Обещать нельзя."""
+    """«Чего не умею» — прямо: без резолюции руки не двигаются,
+    голоса нет, кириллицу руками не печатаю. Обещать нельзя."""
     r = capabilities_report(memory=None, eyes_ok=False, ears_ok=False).lower()
     assert "чего не умею" in r
-    assert "кликать" in r and "голосом" in r
+    assert "голосом" in r
     assert "filesystem" in r  # чужое имя помечено чужим
+    assert "не двигают мышью" in r   # руки — только по резолюции Создателя
+
+
+def test_report_tells_hands_truth(tmp_path, monkeypatch):
+    """v2: руки в теле отчёта — модель в чулане и честный режим."""
+    monkeypatch.setattr(config, "HANDS_ENABLED_FILE",
+                        tmp_path / "нет_резолюции.json")
+    monkeypatch.setattr(config, "HANDS_MODEL",
+                        tmp_path / "UI-TARS-7B-DPO.Q4_K_M.gguf")
+    monkeypatch.setattr(config, "HANDS_MMPROJ",
+                        tmp_path / "UI-TARS-7B-DPO.mmproj-f16.gguf")
+    (tmp_path / "UI-TARS-7B-DPO.Q4_K_M.gguf").write_bytes(b"x")
+    (tmp_path / "UI-TARS-7B-DPO.mmproj-f16.gguf").write_bytes(b"x")
+    r = capabilities_report(memory=None, eyes_ok=True, ears_ok=True)
+    assert "UI-TARS" in r
+    assert "сухой режим" in r            # без резолюции — только план
+    assert str(config.PORT_HANDS) in r
 
 
 def test_tools_are_single_source_of_truth():
     """Имена инструментов и их описания едут из одного списка TOOLS."""
     assert tool_names() == ", ".join(name for name, _ in TOOLS)
-    assert len(TOOLS) >= 5
+    assert len(TOOLS) >= 6                # v2: + ui_action (руки)
     for name, what in TOOLS:
         assert name in manifest() and what in capabilities_report(
             memory=None, eyes_ok=False, ears_ok=False)
+
+
+def test_ui_action_tool_exists():
+    """v2: мозг может ДОВЕРИТЬ задание рукам — но не координаты."""
+    names = [name for name, _ in TOOLS]
+    assert "ui_action" in names
 
 
 # ---------- манифест в системном промпте ----------
@@ -150,8 +176,17 @@ def test_manifest_static_prefix_for_kv_cache():
 def test_manifest_mentions_fast_commands():
     """Мозг знает быстрые команды дома — чтобы подсказывать, а не фантазировать."""
     extra = _agent()._system_extra("привет")
-    for cmd in ("посмотри", "помни", "подведи день", "сколько ты не спала"):
+    for cmd in ("посмотри", "помни", "подведи день", "сколько ты не спала",
+                "посмотри в камеру", "руки <задача>"):
         assert cmd in extra, "в манифесте нет команды: " + cmd
+
+
+def test_manifest_warns_about_dry_hands():
+    """Мозг знает: без резолюции Создателя руки не кликают — и не
+    говорит Создателю «уже нажала»."""
+    extra = _agent()._system_extra("привет").lower()
+    assert "сухом режиме" in extra
+    assert "уже нажала" in extra
 
 
 # ---------- поведение агента ----------
@@ -246,10 +281,11 @@ def test_ears_alive_reads_heartbeat(tmp_path, monkeypatch):
     import json
     status = tmp_path / "ears_status.json"
 
-    def write(state, ts):
-        status.write_text(json.dumps(
-            {"ts": ts.isoformat(timespec="seconds"), "state": state}),
-            encoding="utf-8")
+    def write(state, ts, device=""):
+        rec = {"ts": ts.isoformat(timespec="seconds"), "state": state}
+        if device:
+            rec["device"] = device
+        status.write_text(json.dumps(rec), encoding="utf-8")
 
     monkeypatch.setattr(config, "EARS_STATUS_FILE", status)
     write("ok", dt.datetime.now())
@@ -260,6 +296,41 @@ def test_ears_alive_reads_heartbeat(tmp_path, monkeypatch):
     assert ears_alive() is False            # честно: не слышу
     status.unlink()
     assert ears_alive() is False            # файла нет — тоже не слышу
+
+
+# ---------- уши v2: диагноз называет ПРИЧИНУ ----------
+
+def test_ears_diagnosis_names_the_reason(tmp_path, monkeypatch):
+    """Урок 22.11: «молчит или микрофона нет» — отговорка; служба знает
+    точную причину, и Марфа называет её Создателю."""
+    import datetime as dt
+    import json
+    from core.identity import ears_diagnosis
+    status = tmp_path / "ears_status.json"
+
+    def write(state, ts, error="", device=""):
+        rec = {"ts": ts.isoformat(timespec="seconds"), "state": state}
+        if error:
+            rec["error"] = error
+        if device:
+            rec["device"] = device
+        status.write_text(json.dumps(rec, ensure_ascii=False),
+                          encoding="utf-8")
+
+    monkeypatch.setattr(config, "EARS_STATUS_FILE", status)
+    write("ok", dt.datetime.now(), device="HD WebCam Mic")
+    d = ears_diagnosis()
+    assert "живы" in d and "HD WebCam Mic" in d   # каким устройством слушает
+    write("no_mic", dt.datetime.now(), error="PortAudio error -9996")
+    assert "микрофон не найден" in ears_diagnosis()
+    write("no_model", dt.datetime.now())
+    assert "85_fix_ears" in ears_diagnosis()       # что чинить
+    write("no_sounddevice", dt.datetime.now())
+    assert "sounddevice" in ears_diagnosis()
+    write("ok", dt.datetime.now() - dt.timedelta(minutes=10))
+    assert "сердце" in ears_diagnosis() and "замерло" in ears_diagnosis()
+    status.unlink()
+    assert "не запущена" in ears_diagnosis()
 
 
 # ---------- якоря на книгу дома ----------
