@@ -1031,8 +1031,13 @@ class Agent:
                 return Reply(hands.read_file(_s("path")),
                              "brain", "read_file")
             if tool == "run_python":
-                return Reply(hands.run_python(_s("code")),
-                             "brain", "run_python")
+                # Ф5 «сырые числа по-человечески» (23.11): вывод инструмента
+                # остаётся целиком, но крупные голые числа получают
+                # расшифровку с честной оговоркой «если это байты» —
+                # урок лога: [68621991936, ...] без перевода — не ответ
+                from core import humanize as _humanize
+                return Reply(_humanize.humanize_numbers(
+                    hands.run_python(_s("code"))), "brain", "run_python")
             if tool == "browser_search":
                 return Reply(hands.browser_search(_s("query")),
                              "brain", "browser_search")

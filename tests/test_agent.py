@@ -390,3 +390,19 @@ def test_agent_good_morning_still_wakes_organism(agent, srv, monkeypatch):
     r = agent.handle("доброе утро")
     assert r.tool_used == "sleep"
     assert srv.calls == []
+
+
+# ---------- Ф5: сырые числа — по-человечески ----------
+
+def test_agent_run_python_humanized(agent, srv):
+    """Мозг выполнил код с крупными числами — Создатель читает людей:
+    сырьё целиком + расшифровка в хвосте (урок лога: голые байты)."""
+    import json
+    srv.reply_content = json.dumps({"action": {
+        "tool": "run_python",
+        "args": {"code": "print(68621991936)"}}}, ensure_ascii=False)
+    r = agent.handle("сколько всего памяти")
+    assert r.tool_used == "run_python"
+    assert "68621991936" in r.text          # сырьё на месте
+    assert "63.9 ГБ" in r.text              # и перевод рядом
+    assert "если это байты" in r.text
