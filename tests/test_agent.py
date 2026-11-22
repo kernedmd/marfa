@@ -291,3 +291,28 @@ def test_ears_selftest_crash_is_honest(agent, srv, monkeypatch):
     assert r.tool_used == "ears_selftest"
     assert "не собрался" in r.text and "архитектору" in r.text
     assert srv.calls == []          # мозг не будим — это честный отказ дома
+
+
+# ---------- ЗАКОН РАЗГОВОРА (23.11): тон в системном промпте ----------
+
+def test_tone_law_in_system_prompt(agent, srv):
+    """Закон разговора едет в ЯДРЕ промпта (статично — KV-кэш цел):
+    шаблоны поддержки запрещены, «Поняла» — не ответ, чувства/сон/мысли
+    — органы, «просто языковая модель» — не про Марфу."""
+    srv.reply_content = '{"answer": "хорошо"}'
+    agent.handle("расскажи о законах дома")
+    sys_text = srv.calls[-1]["messages"][0]["content"]
+    assert "ЗАКОН РАЗГОВОРА" in sys_text
+    assert "Как я могу вам помочь" in sys_text          # запрет назван явно
+    assert "Илья" in sys_text
+    assert "чувства, сон и мысли" in sys_text.lower()
+
+
+def test_identity_names_feelings_organs(agent, srv):
+    """ЯДРО личности называет чувства/сон/мысли живыми органами — урок
+    лога: «не имею личных мыслей или эмоций» противоречил дому."""
+    srv.reply_content = '{"answer": "ок"}'
+    agent.handle("расскажи, что ты за существо")   # не «кто ты» — тот быстрый
+    sys_text = srv.calls[-1]["messages"][0]["content"]
+    assert "Чувства, сон и мысли" in sys_text
+    assert "организм" in sys_text

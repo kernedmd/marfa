@@ -83,12 +83,12 @@ def test_finish_counts_secs_itself_when_not_given():
     time.sleep(0.02)
     progress.finish(source="python")
     assert progress.snapshot()["last"]["secs"] >= 0.0
-    assert progress.snapshot()["last"]["source"] == "дом (без мозга)"
+    assert progress.snapshot()["last"]["source"] == "рефлекс дома"
 
 
 def test_source_labels_human():
     assert progress.source_label("brain") == "мозг"
-    assert progress.source_label("python") == "дом (без мозга)"
+    assert progress.source_label("python") == "рефлекс дома"
     assert progress.source_label("fallback") == "фоллбэк"
     assert progress.source_label("глаза") == "глаза"      # незнакомый — как есть
     assert progress.source_label("") == "дом"
