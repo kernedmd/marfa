@@ -452,3 +452,93 @@ def test_real_model_silence(model_dir):
     out = s.feed(b"\x00" * s.sample_rate * 2)   # 1 секунда тишины
     assert out["event"] == "silence"
     assert out["text"] == ""
+
+
+# ---------- «проверь уши» (23.11): осмотр по ступеням с рецептом ----------
+
+def _home(monkeypatch, tmp_path, state=None):
+    """tmp-дом со статусом ушей по желанию теста."""
+    from core import config
+    monkeypatch.setenv("MARFA_HOME", str(tmp_path))
+    monkeypatch.setattr(config, "HOME_DIR", tmp_path)
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(config, "EARS_STATUS_FILE",
+                        tmp_path / "data" / "ears_status.json")
+    monkeypatch.setattr(config, "EARS_MODEL_DIR",
+                        tmp_path / "models" / "vosk-model-small-ru-0.22")
+    return config
+
+
+def test_selftest_service_alive_reports_and_rejoices(monkeypatch, tmp_path):
+    """Служба жива — осмотр радуется и зовёт проверить голосом, а не
+    молчит «не могу слышать»."""
+    import datetime as dt
+    cfg = _home(monkeypatch, tmp_path)
+    cfg.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    cfg.EARS_STATUS_FILE.write_text(json.dumps({
+        "ts": dt.datetime.now().isoformat(timespec="seconds"),
+        "state": "ok", "device": "Микрофон веб-камеры"}), encoding="utf-8")
+    text = ears_mod.selftest()
+    assert "живы" in text and "Микрофон веб-камеры" in text
+    assert "позови" in text and "Марфа" in text
+
+
+def test_selftest_dead_service_names_the_fix(monkeypatch, tmp_path):
+    """Служба молчит — осмотр называет РЕЦЕПТ (Старт дома / кнопка 89),
+    урок живого лога: «не могу слышать голос» без пути лечения."""
+    _home(monkeypatch, tmp_path)      # нет статуса — служба не пишет сердце
+    text = ears_mod.selftest()
+    assert "не слышу: служба ушей не пишет сердцебиение" in text
+    assert "89" in text and "Старт_Марфа" in text
+
+
+def test_selftest_nested_model_detected(monkeypatch, tmp_path):
+    """Вложенная распаковка модели — классика «Извлечь всё»: осмотр
+    видит её и зовёт кнопку 85 по имени."""
+    cfg = _home(monkeypatch, tmp_path)
+    nested = cfg.EARS_MODEL_DIR / cfg.EARS_MODEL_DIR.name / "am"
+    nested.mkdir(parents=True, exist_ok=True)
+    (nested / "final.mdl").write_bytes(b"x")
+    text = ears_mod.selftest()
+    assert "ВЛОЖЕННАЯ" in text and "85" in text
+
+
+def test_selftest_no_model_no_sounddevice_honest(monkeypatch, tmp_path):
+    """Нет модели и нет обёртки звука — обе ступени честны, каждая со
+    своей командой; никаких «попробуй позже»."""
+    import sys as _sys
+    _home(monkeypatch, tmp_path)
+    real_import = __import__
+
+    def _no_sd(name, *a, **kw):
+        if name == "sounddevice":
+            raise ImportError("нет пакета")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr("builtins.__import__", _no_sd)
+    text = ears_mod.selftest()
+    monkeypatch.undo()
+    assert "модель ушей: НЕТ" in text
+    assert "sounddevice" in text and "venv" in text
+
+
+def test_selftest_mics_listed(monkeypatch, tmp_path):
+    """Windows видит микрофоны — осмотр называет их по именам (Создатель
+    должен видеть, каким устройством дом слушает)."""
+    _home(monkeypatch, tmp_path)
+
+    class FakeSD:
+        @staticmethod
+        def query_devices(kind=None):
+            if kind == "input":
+                return {"name": "Микрофон (Webcam HD)", "max_input_channels": 1}
+            return [{"name": "Микрофон (Webcam HD)", "max_input_channels": 1},
+                    {"name": "Динамики", "max_input_channels": 0}]
+
+    import sys as _sys
+    _sys.modules["sounddevice"] = FakeSD()
+    try:
+        text = ears_mod.selftest()
+    finally:
+        del _sys.modules["sounddevice"]
+    assert "Webcam HD" in text

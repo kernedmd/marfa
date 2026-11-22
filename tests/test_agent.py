@@ -260,3 +260,34 @@ def test_camera_selftest_not_hijacked(agent, monkeypatch):
     r = agent.handle("проверь камеру")
     assert r.tool_used == "camera_selftest"
     assert "ПРОВЕРКА КАМЕРЫ" in r.text
+
+
+# ---------- УШИ v2 (23.11): осмотр с рецептом, а не «не могу слышать» ----------
+
+def test_ears_selftest_command(agent, srv, monkeypatch):
+    """«проверь уши» / «проверь микрофон» — живой осмотр по ступеням:
+    урок лога («не могу слышать голос» без пути лечения) закрыт."""
+    import sensors.ears as ears_mod
+    monkeypatch.setattr(ears_mod, "selftest",
+                        lambda: "ПРОВЕРКА УШЕЙ (вживую):\n- служба слуха: живы")
+    for msg in ("проверь уши", "проверь микрофон", "уши?",
+                "проверь слух, пожалуйста"):
+        r = agent.handle(msg)
+        assert r.tool_used == "ears_selftest", msg
+        assert "ПРОВЕРКА УШЕЙ" in r.text, msg
+        assert srv.calls == [], msg
+
+
+def test_ears_selftest_crash_is_honest(agent, srv, monkeypatch):
+    """Осмотр упал — чат жив, честный отказ с зовом архитектору
+    (броня №4 р3: орган не роняет дом)."""
+    import sensors.ears as ears_mod
+
+    def boom():
+        raise RuntimeError("статус не читается")
+
+    monkeypatch.setattr(ears_mod, "selftest", boom)
+    r = agent.handle("проверь уши")
+    assert r.tool_used == "ears_selftest"
+    assert "не собрался" in r.text and "архитектору" in r.text
+    assert srv.calls == []          # мозг не будим — это честный отказ дома
