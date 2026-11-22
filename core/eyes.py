@@ -59,6 +59,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import re
 import time
 from typing import Optional, Tuple
 
@@ -251,7 +252,8 @@ def _post_chat(body: dict, timeout: Optional[float] = None) -> dict:
 
 
 def _ask(b64: str, prompt: str, schema: Optional[dict],
-         max_tokens: int = ELEMENTS_MAX_TOKENS) -> Tuple[str, Optional[str]]:
+         max_tokens: int = ELEMENTS_MAX_TOKENS,
+         timeout: Optional[float] = None) -> Tuple[str, Optional[str]]:
     """Спросить глаза. Цепочка грамматик (урок 132 секунд):
     строгая схема → простой json_object → без грамматики.
 
@@ -270,7 +272,7 @@ def _ask(b64: str, prompt: str, schema: Optional[dict],
         attempts.append("schema")
         attempts.append("json_object")
     attempts.append(None)
-    deadline = time.monotonic() + EYES_TIMEOUT
+    deadline = time.monotonic() + (EYES_TIMEOUT if timeout is None else timeout)
     errors: list[str] = []
     for grammar in attempts:
         left = deadline - time.monotonic()
@@ -504,6 +506,203 @@ def describe_text(width: int = WORK_WIDTH) -> str:
         return "\n".join(lines)
     except Exception as e:
         return "глаза ошиблись: " + str(e)
+
+
+# ---------------------------------------------------------------
+# №2 «НАЙДИ НА ЭКРАНЕ» — поиск элемента по описанию: лестница зон
+# (роадмап 30 фишек, №2). Урок v1.4 жив: мелкая надпись в целом
+# кадре теряется — четверть кадра, увеличенная до рабочей ширины,
+# читается лучше. Лестница: целый кадр → 4 четверти с апскейлом.
+# Ответ — надпись, центр ЭКРАНА и рамка: это ищут и Создатель,
+# и руки («руки нажми <надпись>»). Исключений не поднимает.
+# ---------------------------------------------------------------
+
+FIND_MIN_CONF = 0.45        # целый кадр: поиск — не клик, верим шире рук
+FIND_ZONE_MIN_CONF = 0.35   # в зоне элемент крупнее — но и выдумать легче
+FIND_TOTAL_SEC = EYES_TIMEOUT   # H5: ОДИН бюджет на всю лестницу, не 5×240
+
+_QUERY_DROP_WORDS = ("кнопку", "кнопка", "ссылку", "ссылка", "меню",
+                     "пункт", "иконку", "иконка", "поле", "надпись",
+                     "текст", "элемент")
+
+
+def _norm_query(s: str) -> str:
+    """Нормализация для сверки текстов: регистр, ё, пунктуация,
+    «кнопку/ссылку» снимаются — ищем НАДПИСЬ, а не её род."""
+    t = re.sub(r"[^\w\s]", " ", (s or "").lower().replace("ё", "е"))
+    return " ".join(w for w in t.split()
+                    if w and w not in _QUERY_DROP_WORDS)
+
+
+def _el_conf(el: dict) -> float:
+    """Уверенность глаза в элементе (нет поля — 0, мусор — мусор)."""
+    try:
+        return float(el.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _match_element(d: dict, query: str, min_conf: float):
+    """Элемент дескриптора по надписи: точное совпадение → надпись
+    содержит запрос → запрос содержит надпись (короткая цель).
+    Возвращает элемент-словарь или None — выдумок нет."""
+    q = _norm_query(query)
+    if not q:
+        return None
+    best = None
+    best_key = None
+    for el in (d.get("elements") or []):
+        if not isinstance(el, dict):
+            continue
+        text = _norm_query(str(el.get("text", "")))
+        if not text or _el_conf(el) < min_conf:
+            continue
+        if text == q:
+            key = (3, len(text))
+        elif q in text:
+            key = (2, len(text))
+        elif text in q:
+            key = (1, len(text))
+        else:
+            continue
+        if best_key is None or key > best_key:
+            best, best_key = el, key
+    return best
+
+
+def _zone_b64(b64: str, box, width: int = WORK_WIDTH):
+    """Вырезать зону кадра (координаты ОТПРАВЛЕННОГО кадра) и увеличить
+    до рабочей ширины — урок v1.4: мелкое в крупном читается. Апскейл
+    не жаднее ×2: выдумывать пиксели дороже, чем читать честные.
+    Шов для тестов: подменяется вместе с _screenshot_b64/_ask.
+    Возвращает (b64 зоны, размер зоны)."""
+    img = Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
+    crop = img.crop((int(box[0]), int(box[1]), int(box[2]), int(box[3])))
+    if crop.width <= 0 or crop.height <= 0:
+        raise ValueError("зона пустая: %r" % (box,))
+    scale = min(2.0, width / float(crop.width))
+    new = crop.resize((max(1, round(crop.width * scale)),
+                       max(1, round(crop.height * scale))), Image.LANCZOS)
+    buf = io.BytesIO()
+    new.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode(), new.size
+
+
+def _zone_name(box, size) -> str:
+    """Человекоческое имя четверти («левая верхняя»)."""
+    mid_x, mid_y = size[0] / 2.0, size[1] / 2.0
+    return "%s %s четверть" % ("верхняя" if box[1] < mid_y else "нижняя",
+                               "левая" if box[0] < mid_x else "правая")
+
+
+def _to_screen(bbox, sent_size, real_size):
+    """bbox кадра глаз → пиксели ЭКРАНА (масштаб снимка к монитору)."""
+    kx = real_size[0] / float(sent_size[0])
+    ky = real_size[1] / float(sent_size[1])
+    return [round(bbox[0] * kx), round(bbox[1] * ky),
+            round(bbox[2] * kx), round(bbox[3] * ky)]
+
+
+def _find_render(el: dict, zone_box, zone_size, sent_size, real_size,
+                 attempt: int) -> str:
+    """Человеческий ответ о находке: надпись, центр экрана, рамка,
+    уверенность. Координаты зоны честно переводятся в координаты
+    кадра (обратно апскейлу и сдвигу) — центр не может уехать за
+    пределы четверти, где нашли."""
+    bbox = [float(v) for v in el["bbox"]]
+    if zone_box is not None:
+        kx = (zone_box[2] - zone_box[0]) / float(zone_size[0])
+        ky = (zone_box[3] - zone_box[1]) / float(zone_size[1])
+        bbox = [zone_box[0] + bbox[0] * kx, zone_box[1] + bbox[1] * ky,
+                zone_box[0] + bbox[2] * kx, zone_box[1] + bbox[3] * ky]
+        bbox = [max(bbox[0], zone_box[0]), max(bbox[1], zone_box[1]),
+                min(bbox[2], zone_box[2]), min(bbox[3], zone_box[3])]
+        bbox = [int(round(v)) for v in bbox]
+    scr = _to_screen(bbox, sent_size, real_size)
+    cx, cy = (scr[0] + scr[2]) // 2, (scr[1] + scr[3]) // 2
+    label = str(el.get("text") or el.get("type") or "?").strip()
+    where = ("искала по всему кадру" if attempt == 0
+             else "нашла в %s, увеличила её" % _zone_name(zone_box, sent_size))
+    return ("Нашла «%s»: центр экрана (%d, %d), рамка %s, "
+            "уверенность глаз %.2f (%s). Хочешь нажать — скажи "
+            "«руки нажми %s», кликну туда под стражем"
+            % (label, cx, cy, scr, _el_conf(el), where, label))
+
+
+def _read_texts(d: dict, limit: int = 6) -> str:
+    """Что глаза ЧИТАЛИ в дескрипторе — для честного «не нашла»:
+    надписи, а если пусто — ПРИЧИНА из _stats (молчаливый симптом —
+    не диагноз, урок v2.1 рук)."""
+    texts = [str(e.get("text", "")).strip() for e in (d.get("elements") or [])
+             if isinstance(e, dict) and str(e.get("text", "")).strip()]
+    if texts:
+        return ", ".join("«%s»" % t for t in texts[:limit])
+    st = d.get("_stats") if isinstance(d, dict) else None
+    if isinstance(st, dict):
+        raw, dropped = int(st.get("raw") or 0), int(st.get("dropped") or 0)
+        if raw and dropped >= raw:
+            return ("глаза видели %d элемент(ов), но ни один не прошёл "
+                    "проверку координат" % raw)
+        if int(st.get("kept") or 0):
+            return "глаза видят объекты, но надписей не прочитали"
+    return "глаза не прочитали ни одной надписи"
+
+
+def find_on_screen(query: str) -> str:
+    """«найди на экране <что>» — лестница зон с апскейлом (№2).
+
+    Целый кадр (рабочая ширина) → не нашли — 4 четверти, каждая
+    увеличена до рабочей ширины. Один бюджет времени на всю
+    лестницу (H5), честная геометрия в каждой зоне, шаблоны
+    бракуются. Не нашла — говорит, что глаза ЧИТАЮТ, без выдумок.
+    """
+    try:
+        q = (query or "").strip()
+        if not q:
+            return "что найти? скажи «найди на экране <надпись>»"
+        if _VISION_ERROR:
+            return "глаза не готовы: " + _VISION_ERROR
+        if not health():
+            return ("глаза %d не отвечают — сервер зрения не запущен?"
+                    % config.PORT_EYES)
+        progress.stage("ищу на экране: %s…" % q)
+        deadline = time.monotonic() + FIND_TOTAL_SEC
+        b64, real, small = _screenshot_b64(WORK_WIDTH)
+        left = max(1.0, deadline - time.monotonic())
+        out, _ = _ask(b64, ELEMENTS_PROMPT, SCHEMA,
+                      max_tokens=ELEMENTS_MAX_TOKENS, timeout=left)
+        d = parse_json(out)
+        _assert_no_parrot(d)
+        d = _validate_elements(d, small)
+        hit = _match_element(d, q, FIND_MIN_CONF)
+        if hit is not None:
+            return _find_render(hit, None, None, small, real, 0)
+        read_whole = _read_texts(d)
+        w, h = small
+        zones = [(0, 0, w // 2, h // 2), (w // 2, 0, w, h // 2),
+                 (0, h // 2, w // 2, h), (w // 2, h // 2, w, h)]
+        for zb in zones:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return ("Не нашла «%s» — время поиска вышло. Глаза читают: "
+                        "%s. Скажи «посмотри» — опишу экран целиком"
+                        % (q, read_whole))
+            progress.stage("в целом кадре не нашла — смотрю %s…"
+                           % _zone_name(zb, small))
+            zb64, zsize = _zone_b64(b64, zb)
+            out, _ = _ask(zb64, ELEMENTS_PROMPT, SCHEMA,
+                          max_tokens=ELEMENTS_MAX_TOKENS, timeout=left)
+            zd = parse_json(out)
+            _assert_no_parrot(zd)
+            zd = _validate_elements(zd, zsize)
+            zhit = _match_element(zd, q, FIND_ZONE_MIN_CONF)
+            if zhit is not None:
+                return _find_render(zhit, zb, zsize, small, real, 1)
+        return ("Не нашла на экране «%s». Глаза читают: %s. Может, надпись "
+                "звучит иначе — скажи «посмотри», опишу экран целиком"
+                % (q, read_whole))
+    except Exception as e:
+        return "поиск не удался: " + str(e)
 
 
 # ---------------------------------------------------------------
