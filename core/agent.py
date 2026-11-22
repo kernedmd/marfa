@@ -547,6 +547,14 @@ class Agent:
             from core import dayplan
             return Reply(dayplan.today_plan(), "python", "dayplan")
 
+        # Ф9 «цитата» (23.11): случайный кусок из ПРОЧИТАННОГО — дом
+        # цитирует только то, что сам читал (библиотекарь, тег «библиотека»)
+        if lowq in ("цитата", "цитату", "прочитай цитату",
+                    "что почитал", "что прочитала"):
+            from core import quote as _quote
+            return Reply(_quote.quote(memory=self.memory),
+                         "python", "quote")
+
         # СОН: «спи» — Создатель укладывает до утра или «проснись»
         if lowq in ("спи", "спать", "ложись спать", "на боковую"):
             return Reply(sleep.go_to_bed(reason="Илья сказал: спи"),

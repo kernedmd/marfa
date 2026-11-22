@@ -447,3 +447,18 @@ def test_agent_dayplan_command(agent, srv, monkeypatch):
         assert r.tool_used == "dayplan", msg
         assert "ПЛАН" in r.text, msg
     assert srv.calls == []
+
+
+# ---------- Ф9: цитата из прочитанного ----------
+
+def test_agent_quote_command(agent, srv, monkeypatch):
+    """«цитата» — из прочитанной полки, мозг молчит; пустая полка —
+    честная подсказка «почитай»."""
+    from core import quote as _quote
+    monkeypatch.setattr(_quote, "quote",
+                        lambda memory=None: "Из прочитанного (тест): кусок")
+    r = agent.handle("цитата")
+    assert r.tool_used == "quote" and "Из прочитанного" in r.text
+    r2 = agent.handle("что прочитала?")
+    assert r2.tool_used == "quote"
+    assert srv.calls == []
