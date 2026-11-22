@@ -383,6 +383,44 @@ class Agent:
                     return Reply(motor.exam(), "python", "hands_exam")
                 return Reply(motor.run(task), "python", "hands")
 
+        # САМОЛЕЧЕНИЕ v1 (ТЗ_Самолечение_v1, 22.11): кодер-слуга пишет
+        # патчи в ПЕСОЧНИЦУ data\patches — применение за Создателем.
+        # «Марфа сама себя лечит»: мозг (или Создатель) ставит требование,
+        # кодер-7B печатает код, страж проверяет, Создатель применяет.
+        if low in ("патчи", "список патчей"):
+            from core import repair
+            return Reply(repair.list_patches(), "python", "patches")
+        m = re.match(r"^примени\s+патч\s+(\d+)$", low)
+        if m:
+            from core import repair
+            return Reply(repair.apply_patch(int(m.group(1))),
+                         "python", "patch_apply")
+        m = re.match(r"^откати\s+патч\s+(\d+)$", low)
+        if m:
+            from core import repair
+            return Reply(repair.rollback_patch(int(m.group(1))),
+                         "python", "patch_rollback")
+        if low.startswith("почини") or low.startswith("ремонт "):
+            rest = t[len("почини"):] if low.startswith("почини") \
+                else t[len("ремонт"):]
+            rest = rest.strip().lstrip(",;:! ")
+            # «почини <файл>: <что сделать>»; двоеточие диска (C:\...) —
+            # не разделитель
+            idx = rest.find(":")
+            if idx == 1 and len(rest) > 2 and rest[2:3] in "\\/":
+                idx = rest.find(":", 3)
+            if idx < 0:
+                idx = rest.find(" — ")
+                if idx < 0:
+                    path_part, req = rest, ""
+                else:
+                    path_part, req = rest[:idx], rest[idx + 3:]
+            else:
+                path_part, req = rest[:idx], rest[idx + 1:]
+            from core import repair
+            return Reply(repair.make_patch(path_part.strip(), req.strip()),
+                         "python", "repair")
+
         # Г-2.3, самопознание: «изучи себя» — честный динамический отчёт
         # без будоража мозга. Мозг-30B о своих командах и файлах дома
         # знает меньше, чем дом, — тут говорит сам дом.
@@ -443,6 +481,15 @@ class Agent:
                 from core import motor
                 return Reply(motor.run(str(args.get("task", ""))),
                              "brain", "ui_action")
+            if tool == "code_patch":
+                # Доктрина ТЗ_Самолечение_v1: мозг не чинит файлы сам —
+                # он ДОВЕРЯЕТ требование кодеру-слуге. Патч ложится в
+                # песочницу; применяет Создатель («примени патч №») —
+                # «уже починила» можно говорить только после него.
+                from core import repair
+                return Reply(repair.make_patch(str(args.get("path", "")),
+                                               str(args.get("requirement", ""))),
+                             "brain", "code_patch")
             _lesson("неизвестный-инструмент", "мозг позвал «%s»" % tool)
             return Reply("неизвестный инструмент: " + tool +
                          ". Мои инструменты (только эти имена): " +
