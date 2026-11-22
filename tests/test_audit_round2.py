@@ -22,6 +22,31 @@ NOW = dt.datetime(2026, 11, 22, 23, 30, 15)
 
 
 @pytest.fixture()
+def agent_srv(tmp_path, monkeypatch):
+    """Агент + фейк-мозг в tmp-доме (контракт test_agent, для якорей H8)."""
+    from core.agent import Agent
+    from core.brain import BrainClient
+    from core.memory import Memory
+    monkeypatch.setenv("MARFA_HOME", str(tmp_path))
+    monkeypatch.setattr(config, "HOME_DIR", tmp_path)
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(config, "LOGS_DIR", tmp_path / "logs")
+    monkeypatch.setattr(config, "DOCTRINE_FILE",
+                        tmp_path / "data" / "creator_doctrine.json")
+    monkeypatch.setattr(config, "EARS_LOG_FILE", tmp_path / "logs" / "ears_log.jsonl")
+    monkeypatch.setattr(config, "EARS_STATUS_FILE", tmp_path / "data" / "ears_status.json")
+    config.ensure_dirs()
+    from tests.fake_llama_server import start_fake_brain
+    srv = start_fake_brain()
+    monkeypatch.setattr(config, "BRAIN_URL", srv.base_url)
+    agent = Agent(brain=BrainClient(brain_url=srv.base_url),
+                  memory=Memory(data_dir=tmp_path / "data"),
+                  doctrine="Тестовая доктрина")
+    yield agent, srv
+    srv.shutdown()
+
+
+@pytest.fixture()
 def home(tmp_path, monkeypatch):
     """tmp-дом: пути из закона, ничего не трогаем вне его."""
     monkeypatch.setenv("MARFA_HOME", str(tmp_path))
@@ -520,3 +545,136 @@ def test_m6_split_cmd_keeps_windows_paths():
         ["llama.cpp\\llama-server.exe", "-m", "models\\brain.gguf"]
     assert _split_cmd('"C:\\Program Files\\app.exe" --flag') == \
         ["C:\\Program Files\\app.exe", "--flag"]
+
+
+# ================================================================
+# ФАЗА 5 — ГИГИЕНА И КОНТРАКТЫ
+# ================================================================
+
+def test_m10_append_thread_safe(home):
+    """Два потока пишут одну сессию — оба хода живы (раньше: последний
+    replace тихо затирал первого, Марфа «забывала» сообщение)."""
+    import threading
+    from core.dialog import DialogStore
+    store = DialogStore(home / "data" / "dialog")
+    n, workers = 20, 4
+
+    def worker(k):
+        for i in range(n):
+            store.append("race", "user", "ход %d-%d" % (k, i))
+
+    ts = [threading.Thread(target=worker, args=(k,)) for k in range(workers)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert len(store.turns("race")) == n * workers
+
+
+def test_h9_render_accepts_content_key():
+    """История в формате мозга ({role, content}) — валидна для рендера:
+    опечатка в ключе не опустошает разговор молча."""
+    from core.dialog import DialogStore
+    turns = [{"role": "user", "content": "вопрос мозгового формата"},
+             {"role": "assistant", "content": "ответ мозгового формата"}]
+    msgs = DialogStore.render_messages(turns)
+    assert msgs[-1]["content"] == "ответ мозгового формата"
+
+
+def test_h9_ask_json_accepts_text_key():
+    """DialogStore.turns (text) напрямую в ask_json — мозг видит историю."""
+    from tests.fake_llama_server import start_fake_brain
+    from core.brain import BrainClient
+    srv = start_fake_brain()
+    try:
+        client = BrainClient(brain_url=srv.base_url)
+        srv.reply_content = '{"answer": "ок"}'
+        client.ask_json("вопрос", history=[
+            {"role": "user", "text": "привет был"},
+            {"role": "assistant", "text": "привет, Илья"},
+        ])
+        roles = [m["role"] for m in srv.calls[-1]["messages"]]
+        assert "assistant" in roles            # история не отфильтровалась
+        assert any("привет был" in m["content"]
+                   for m in srv.calls[-1]["messages"])
+    finally:
+        srv.shutdown()
+
+
+def test_h8_agent_prompt_under_law(agent_srv):
+    """Промпт агентского трека — через Ф51: бюджет 3072 соблюдается,
+    RAG режется с конца, а не уезжает за контекст 4096 молча."""
+    agent, srv = agent_srv
+    for i in range(60):                        # жирные воспоминания
+        agent.memory.remember("воспоминание %d: %s" % (i, "деталь " * 60))
+    extra = agent._system_extra("о доме")
+    assert config.token_estimate(extra) <= config.PROMPT_BUDGET_TOKENS
+    assert "ЗАКОН СКОРОСТИ" in extra           # ядро живо
+    srv.reply_content = '{"answer": "ок"}'
+    agent.handle("расскажи о доме")
+    sys_msg = next(m for m in srv.calls[-1]["messages"] if m["role"] == "system")
+    assert config.token_estimate(sys_msg["content"]) <= config.PROMPT_BUDGET_TOKENS
+
+
+def test_h8_oversized_doctrine_honest_reply(tmp_path, monkeypatch):
+    """Доктрина-гигант — ЧП дома, но чат отвечает честно, а не 500-й."""
+    monkeypatch.setenv("MARFA_HOME", str(tmp_path))
+    monkeypatch.setattr(config, "HOME_DIR", tmp_path)
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(config, "LOGS_DIR", tmp_path / "logs")
+    monkeypatch.setattr(config, "EARS_LOG_FILE", tmp_path / "logs" / "ears_log.jsonl")
+    monkeypatch.setattr(config, "EARS_STATUS_FILE", tmp_path / "data" / "ears_status.json")
+    config.ensure_dirs()
+    from core.agent import Agent
+    giant = "закон " * 2000                    # ~6600 ток — не влезает
+    r = Agent(brain=None, memory=None, doctrine=giant).handle("привет")
+    assert r.source == "fallback"
+    assert "архитектору" in r.text
+
+
+def test_feature_task_command(home):
+    """Фишка: «задача: ...» — в очередь и в СЕГОДНЯШНИЙ план (force),
+    без будоража мозга; «задача была...» — не команда."""
+    import datetime as dt
+    from core.agent import Agent
+    from core.autonomy import DayPlanner, load_queue
+    from core import autonomy
+
+    class NoBrain:
+        def ask_json(self, *a, **k):
+            raise AssertionError("задача — без мозга")
+
+    # план дня уже построен (после 08:00) — новая задача должна войти в него
+    planner = DayPlanner(data_dir=home / "data")
+    planner.build_plan(day=dt.date.today(),
+                       now=dt.datetime.now().replace(hour=12))
+    agent = Agent(brain=NoBrain(), memory=None, doctrine="")
+    r = agent.handle("задача: проверить микрофон до вечера")
+    assert r.tool_used == "add_task"
+    assert "проверить микрофон" in r.text
+    assert any("проверить микрофон" in t["title"] for t in load_queue())
+    plan = json.loads((home / "data"
+                       / ("plan_%s.json" % dt.date.today().isoformat())).read_text(
+                           encoding="utf-8"))
+    assert any("проверить микрофон" in t["title"] for t in plan["tasks"])
+    # обычная речь — не команда, уходит дальше по диспетчеру
+    fast = agent._fast("задача была в том, чтобы проверить")
+    assert fast is None
+
+
+def test_feature_prompt_tokens_in_stamp(agent_srv):
+    """Штамп несёт и промпт-токены: «165,8 с · 273 ток · промпт 2100» —
+    долгий префикс отличим от долгого декода без консоли."""
+    agent, srv = agent_srv
+    srv.reply_content = '{"answer": "кратко"}'
+    srv.usage_extra = {"prompt_tokens": 2100, "completion_tokens": 273}
+    r = agent.handle("долгий вопрос")
+    assert r.meta and r.meta.get("ptok") == 2100 and r.meta.get("tok") == 273
+
+
+def test_n4_relative_marfa_home_anchored():
+    """Относительный MARFA_HOME живёт от домашнего каталога пользователя —
+    запуск из другой папки не переезжает дом."""
+    from core.config import _resolve_home
+    p = _resolve_home("data/marfa")
+    assert p.is_absolute()
+    assert str(p).startswith(str(Path.home()))
+    assert _resolve_home(str(Path("/tmp") / "x")).is_absolute()

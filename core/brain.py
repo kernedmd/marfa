@@ -262,9 +262,15 @@ class BrainClient:
                 "поздоровайся в ответ внутри JSON.\n" + system_extra)},
         ]
         for t in (history or []):   # только user/assistant, мусор — мимо
-            if isinstance(t, dict) and t.get("role") in ("user", "assistant") \
-                    and isinstance(t.get("content"), str) and t["content"].strip():
-                messages.append({"role": t["role"], "content": t["content"]})
+            if not (isinstance(t, dict) and t.get("role") in ("user", "assistant")):
+                continue
+            content = t.get("content")
+            if not (isinstance(content, str) and content.strip()):
+                # H9 (раунд 2): DialogStore.turns отдаёт text — это тоже
+                # валидная история, а не «мусор мимо»
+                content = t.get("text")
+            if isinstance(content, str) and content.strip():
+                messages.append({"role": t["role"], "content": content})
         messages.append({"role": "user", "content": user_text})
         attempts = max(1, retries)
         mood = mood_params()   # №9: характер — из доктрины Создателя

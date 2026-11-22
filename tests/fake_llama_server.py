@@ -20,6 +20,7 @@ class FakeLlamaServer(ThreadingHTTPServer):
         self.script: list[str] = []   # если задан — ответы по порядку (для ретраев)
         self.reply_status = 200       # 500 имитирует брак сервера
         self.calls: list[dict] = []   # список входящих payload'ов
+        self.usage_extra: dict = {}   # досказать в usage (промпт-токены и пр.)
 
     @property
     def base_url(self) -> str:
@@ -63,9 +64,11 @@ class FakeLlamaHandler(BaseHTTPRequestHandler):
         if isinstance(content, Exception):
             self._send({"error": str(content)}, 500)
             return
+        usage = {"completion_tokens": max(1, len(content) // 3)}
+        usage.update(self.server.usage_extra or {})
         self._send({
             "choices": [{"message": {"role": "assistant", "content": content}}],
-            "usage": {"completion_tokens": max(1, len(content) // 3)},
+            "usage": usage,
         })
 
 
