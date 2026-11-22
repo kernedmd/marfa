@@ -95,11 +95,13 @@ def model_files_ok(model_dir) -> bool:
 
 
 def _write_status(state: str, error: str = "",
-                 last_wake: str = "") -> None:
+                 last_wake: str = "", device: str = "") -> None:
     r"""Сердцебиение службы ушей: data\ears_status.json.
 
-    Панель и старт дома смотрят сюда: живо ли ухо и что оно слышало
-    последним. Ошибки записи (диск/права) — не повод рвать слух.
+    Панель и старт дома смотрят сюда: живо ли ухо, что оно слышало
+    последним и КАКИМ устройством слушает (v2, 22.11: микрофон
+    веб-камеры нашёлся — Создатель должен это видеть). Ошибки записи
+    (диск/права) — не повод рвать слух.
     """
     rec = {"ts": dt.datetime.now().isoformat(timespec="seconds"),
            "sensor": "ears", "state": state}
@@ -107,12 +109,64 @@ def _write_status(state: str, error: str = "",
         rec["error"] = error[:300]
     if last_wake:
         rec["last_wake"] = last_wake
+    if device:
+        rec["device"] = device[:120]
     try:
         Path(config.EARS_STATUS_FILE).parent.mkdir(parents=True, exist_ok=True)
         Path(config.EARS_STATUS_FILE).write_text(
             json.dumps(rec, ensure_ascii=False), encoding="utf-8")
     except OSError:
         pass
+
+
+# ---------------------------------------------------------------
+# v2 (22.11, урок Создателя): веб-камера с микрофоном подключена —
+# но её микрофон часто НЕ выбран устройством по умолчанию, и старая
+# служба честно писала «no_mic», хотя микрофон в доме ЕСТЬ. Теперь
+# служба сама перебирает все входные устройства и берёт первое,
+# которое открылось. Логика — чистые функции: тестируются без железа.
+# ---------------------------------------------------------------
+
+def _input_devices(sd) -> list:
+    """Все входные устройства: [(индекс или None для «по умолчанию», имя)].
+
+    None идёт ПЕРВЫМ — сначала пробуем устройство по умолчанию, потом
+    каждый вход: микрофон веб-камеры часто не «дефолт», но он есть.
+    """
+    devs = []
+    try:
+        d = sd.query_devices(kind="input")
+        devs.append((None, str(d.get("name", "по умолчанию"))))
+    except Exception:
+        pass
+    try:
+        for i, d in enumerate(sd.query_devices()):
+            if int(d.get("max_input_channels", 0) or 0) > 0:
+                devs.append((i, str(d.get("name", "?"))))
+    except Exception:
+        pass
+    return devs
+
+
+def _open_ear_stream(sd, samplerate: int, callback):
+    """Открыть микрофон: сначала «по умолчанию», потом каждый вход.
+
+    Возвращает (поток, имя устройства). Ни одно не открылось —
+    исключение со списком попыток: служба напишет его в статус,
+    и Создатель увидит, ЧТО видит Windows вместо микрофона.
+    """
+    errors = []
+    for idx, name in _input_devices(sd):
+        kw = {"samplerate": samplerate, "blocksize": 4000,
+              "dtype": "int16", "channels": 1, "callback": callback}
+        if idx is not None:
+            kw["device"] = idx
+        try:
+            return sd.RawInputStream(**kw), name
+        except Exception as e:
+            errors.append("%s: %s" % (name, e))
+    raise RuntimeError("ни один микрофон не открылся (пробовал: %s)"
+                       % "; ".join(errors[:3] or ["устройств не найдено"]))
 
 
 class NameSentinel:
@@ -251,8 +305,10 @@ def demo(seconds: float = 60.0) -> None:
                   % (dt.datetime.now().strftime("%H:%M:%S"), out["text"]))
 
     try:
-        with sounddevice.RawInputStream(samplerate=s.sample_rate, blocksize=4000,
-                                        dtype="int16", channels=1, callback=callback):
+        stream, mic_name = _open_ear_stream(sounddevice, s.sample_rate,
+                                            callback)
+        with stream:
+            print("Слушаю «%s»..." % mic_name)
             import time
             try:
                 time.sleep(seconds)
@@ -265,6 +321,8 @@ def demo(seconds: float = 60.0) -> None:
         print("МИКРОФОН НЕ ПОДКЛЮЧЁН или занят: %s" % e)
         print("Проверь, что микрофон вставлен и выбран устройством ввода")
         print("по умолчанию: Параметры -> Система -> Звук -> Вход.")
+        print("Служба ушей (--service) перебирает все входные устройства")
+        print("сама — включая микрофон веб-камеры.")
         raise SystemExit(1)
     print("Демо закончено. Лог: %s" % config.EARS_LOG_FILE)
 
@@ -277,6 +335,9 @@ def serve(retry_secs: float = config.EARS_RETRY_SECS,
       - микрофона нет / занят — пишет честный статус (нет микрофона),
         ждёт и пробует снова: воткнул микрофон — ухо проснулось само,
         дом перезапускать не надо;
+      - v2 (22.11): устройство «по умолчанию» не открывается — служба
+        перебирает ВСЕ входные устройства: микрофон веб-камеры часто
+        не «дефолт», но он есть; нашла — пишет его имя в статус;
       - модели нет — то же самое (кнопка 85_fix_ears чинит параллельно);
       - sounddevice не поставлен — то же самое;
       - пока слушает — пишет сердцебиение в статус-файл: панель и
@@ -322,16 +383,18 @@ def serve(retry_secs: float = config.EARS_RETRY_SECS,
                 _write_status("ok", last_wake=last_wake)
 
         try:
-            with sounddevice.RawInputStream(samplerate=s.sample_rate,
-                                            blocksize=4000, dtype="int16",
-                                            channels=1, callback=callback):
-                print("[%s] УХО ЖИВО: слушаю микрофон (%d Гц, модель %s)"
-                      % (dt.datetime.now().strftime("%H:%M:%S"),
+            stream, mic_name = _open_ear_stream(sounddevice, s.sample_rate,
+                                                callback)
+            with stream:
+                print("[%s] УХО ЖИВО: слушаю «%s» (%d Гц, модель %s)"
+                      % (dt.datetime.now().strftime("%H:%M:%S"), mic_name,
                          s.sample_rate, s.model_dir.name))
-                _write_status("ok", last_wake=last_wake)   # ухо открылось
+                _write_status("ok", last_wake=last_wake,
+                              device=mic_name)   # ухо открылось
                 while True:
                     time.sleep(heartbeat)
-                    _write_status("ok", last_wake=last_wake)  # сердцебиение
+                    _write_status("ok", last_wake=last_wake,
+                                  device=mic_name)  # сердцебиение
         except Exception as e:
             # микрофон выдернули / занят / прав нет — не умираем: ждём и пробуем снова
             print("[%s] микрофон недоступен: %s — жду %.0f с и пробую снова"

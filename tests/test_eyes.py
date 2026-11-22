@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
 """tests/test_eyes.py — Г-2/Г-2.1: глаза дома в агенте (8083, только чтение).
 
-Глаза — сенсор: _screenshot_b64 / _post_chat / health / _VISION_ERROR —
-швы, тесты подменяют их, реальный сервер и экран не нужны. Агентный маршрут
-«посмотри» не будит мозг; граница слова обязательна («посмотрим» — не команда).
-Г-2.1: мозг узнаёт о глазах из состояния дома (health_cached, без пинга
-в каждом сообщении).
+Глаза — сенсор: _screenshot_b64 / _camera_b64 / _post_chat / health /
+_VISION_ERROR — швы, тесты подменяют их, реальный сервер, камера и экран
+не нужны. Агентный маршрут «посмотри» не будит мозг; граница слова
+обязательна («посмотрим» — не команда). Г-2.1: мозг узнаёт о глазах из
+состояния дома (health_cached, без пинга в каждом сообщении).
+
+v2 (22.11, урок живого прогона «один пустой элемент [64,32,412,58]»):
+промпт-антипопугай (модель СПИСАЛА пример из промпта — больше примеру
+нечего списывать), описание первой строкой, цепочка грамматик
+schema → json_object → raw, камера — второй источник зрения.
 """
 import json as _json
 import sys
@@ -19,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core import agent, eyes  # noqa: E402
 
 DESCRIPTOR = {
+    "description": "Открыт браузер с чатом и проводник с моделями",
     "active_window": "Командная строка",
     "elements": [
         {"type": "text", "text": "C:\\Marfa>", "bbox": [64, 32, 412, 58],
@@ -26,6 +32,12 @@ DESCRIPTOR = {
         {"type": "button", "text": "Пуск", "bbox": [0, 1048, 48, 1096],
          "confidence": 0.9},
     ],
+    "summary": "рабочий стол с окнами",
+}
+
+OLD_DESCRIPTOR = {          # без description — как отвечал сенсор до v2
+    "active_window": "Командная строка",
+    "elements": DESCRIPTOR["elements"],
     "summary": "рабочий стол с окнами",
 }
 
@@ -62,33 +74,36 @@ def test_parse_json_garbage_raises():
         eyes.parse_json("тут нет json")
 
 
-# ---------- _ask: грамматика и фолбэк ----------
+# ---------- _ask: цепочка грамматик schema → json_object → raw ----------
 
 def test_ask_schema_accepted(monkeypatch):
     seen = []
 
     def fake_post(body):
-        seen.append("response_format" in body)
+        seen.append(body.get("response_format", {}).get("type"))
         return {"choices": [{"message": {"content": "ок"}}]}
 
     monkeypatch.setattr(eyes, "_post_chat", fake_post)
-    out, ok = eyes._ask("b64", "промпт", {"type": "object"}, 10)
-    assert out == "ок" and ok is True and seen == [True]
+    out, grammar = eyes._ask("b64", "промпт", {"type": "object"}, 10)
+    assert out == "ок" and grammar == "schema" and seen == ["json_schema"]
 
 
-def test_ask_schema_fallback(monkeypatch):
-    """Сервер не знает грамматики (или упал) — повтор без неё."""
+def test_ask_json_object_second_chance(monkeypatch):
+    """Сервер отверг строгую схему, но знает простую «только JSON» —
+    модель скована грамматикой и не rambling до лимита токенов."""
     seen = []
 
     def fake_post(body):
-        seen.append("response_format" in body)
-        if body.get("response_format"):
+        fmt = body.get("response_format", {}).get("type")
+        seen.append(fmt)
+        if fmt == "json_schema":
             raise RuntimeError("400")
         return {"choices": [{"message": {"content": '{"found": true}'}}]}
 
     monkeypatch.setattr(eyes, "_post_chat", fake_post)
-    out, ok = eyes._ask("b64", "промпт", {"type": "object"}, 10)
-    assert out == '{"found": true}' and ok is False and seen == [True, False]
+    out, grammar = eyes._ask("b64", "промпт", {"type": "object"}, 10)
+    assert out == '{"found": true}' and grammar == "json_object"
+    assert seen == ["json_schema", "json_object"]
 
 
 def test_ask_all_attempts_dead(monkeypatch):
@@ -98,6 +113,29 @@ def test_ask_all_attempts_dead(monkeypatch):
     monkeypatch.setattr(eyes, "_post_chat", boom)
     with pytest.raises(RuntimeError):
         eyes._ask("b64", "промпт", {"type": "object"}, 10)
+
+
+def test_ask_budget_bounds_rambling():
+    """Урок 132 секунд: бюджет генерации подрезан — 800, не 1500."""
+    import inspect
+    sig = inspect.signature(eyes._ask)
+    assert sig.parameters["max_tokens"].default == 800
+
+
+# ---------- промпт-антипопугай (урок живого прогона 22.11) ----------
+
+def test_prompt_has_no_parrotable_example():
+    """Живые глаза списали bbox [64,32,412,58] из примера промпта.
+    Теперь пример — шуточно-фейковые [11,22,33,44] + прямой запрет."""
+    assert "[64,32,412,58]" not in eyes.PROMPT
+    assert "[11,22,33,44]" in eyes.PROMPT
+    assert "НЕ копируй" in eyes.PROMPT
+
+
+def test_prompt_demands_reading_text():
+    """Главное требование v2: ЧИТАТЬ надписи — элемент без текста бесполезен."""
+    assert "ЧИТАЙ" in eyes.PROMPT
+    assert "description" in eyes.SCHEMA["properties"]
 
 
 # ---------- describe / describe_text ----------
@@ -118,11 +156,21 @@ def test_describe_fenced_answer(monkeypatch):
 def test_describe_text_readable(monkeypatch):
     _fake_sees(monkeypatch, _json.dumps(DESCRIPTOR, ensure_ascii=False))
     text = eyes.describe_text()
+    assert "Вижу: " in text                     # описание первой строкой
+    assert "браузер" in text                    # человеческое описание
     assert "Командная строка" in text
     assert "Пуск" in text
     assert "button" in text
-    assert "рабочий стол" in text
     assert "глаза думали" in text
+
+
+def test_describe_text_old_answer_still_readable(monkeypatch):
+    """Сенсор без description (старый диалект) — сводка встаёт первой
+    строкой, элементы на месте: совместимость без падения."""
+    _fake_sees(monkeypatch, _json.dumps(OLD_DESCRIPTOR, ensure_ascii=False))
+    text = eyes.describe_text()
+    assert text.startswith("Вижу: рабочий стол")
+    assert "Пуск" in text and "глаза думали" in text
 
 
 def test_describe_text_eyes_down(monkeypatch):
@@ -154,6 +202,46 @@ def test_describe_text_without_elements(monkeypatch):
     _fake_sees(monkeypatch, '{"summary": "пусто"}')
     text = eyes.describe_text()
     assert "без списка элементов" in text
+
+
+# ---------- камера: второй источник зрения ----------
+
+def _fake_camera(monkeypatch, content):
+    monkeypatch.setattr(eyes, "_VISION_ERROR", None)
+    monkeypatch.setattr(eyes, "health", lambda: True)
+    monkeypatch.setattr(eyes, "_camera_b64", lambda width=960: "b64cam")
+    monkeypatch.setattr(eyes, "_post_chat",
+                        lambda body: {"choices": [{"message":
+                                                   {"content": content}}]})
+
+
+def test_camera_describes_human(monkeypatch):
+    _fake_camera(monkeypatch, _json.dumps({
+        "description": "Перед камерой мужчина в свитере, смотрит в экран",
+        "objects": [{"name": "человек", "bbox": [1, 2, 3, 4],
+                     "confidence": 0.9}]}, ensure_ascii=False))
+    text = eyes.describe_camera_text()
+    assert text.startswith("Вижу в камере:")
+    assert "мужчина" in text and "камера думала" in text
+
+
+def test_camera_honest_when_empty(monkeypatch):
+    _fake_camera(monkeypatch, '{"description": ""}')
+    assert "пусто" in eyes.describe_camera_text()
+
+
+def test_camera_no_opencv_honest(monkeypatch):
+    monkeypatch.setattr(eyes, "_VISION_ERROR", None)
+    monkeypatch.setattr(eyes, "health", lambda: True)
+
+    def no_cv2(width=960):
+        raise RuntimeError("нет модуля камеры: No module named 'cv2' "
+                           "(venv\\Scripts\\pip install opencv-python)")
+
+    monkeypatch.setattr(eyes, "_camera_b64", no_cv2)
+    text = eyes.describe_camera_text()
+    assert "камера не смогла" in text
+    assert "opencv-python" in text          # Создателю — что ставить
 
 
 # ---------- агентный маршрут «посмотри» ----------
@@ -194,6 +282,30 @@ def test_agent_posmotri_variants(monkeypatch):
     for msg in ("посмотри на экран", "Посмотри, что там",
                 "что на экране", "опиши экран"):
         assert a.handle(msg).tool_used == "eyes", msg
+
+
+def test_agent_chto_ty_vidish_is_command(monkeypatch):
+    """Урок 22.11: Создатель спрашивает «что ты видишь?» — это и есть
+    команда глазам, а не повод отвечать «дай команду посмотри»."""
+    a = _agent(monkeypatch, "Вижу")
+    for msg in ("что ты видишь", "Что ты видишь?",
+                "что видишь", "что ты видишь сейчас"):
+        r = a.handle(msg)
+        assert r.tool_used == "eyes", msg
+        assert a.brain.calls == 0, msg
+
+
+def test_agent_camera_command(monkeypatch):
+    """«Посмотри в камеру» / «посмотри на меня» — камера, не экран:
+    ветка камеры обязана стоять ДО экранной (начинается с «посмотри »)."""
+    a = _agent(monkeypatch, "Вижу экран")
+    monkeypatch.setattr(eyes, "describe_camera_text",
+                        lambda: "Вижу в камере: мужчина")
+    for msg in ("посмотри в камеру", "включи камеру", "кто в камере",
+                "посмотри на меня"):
+        r = a.handle(msg)
+        assert r.tool_used == "camera", msg
+        assert a.brain.calls == 0, msg
 
 
 def test_agent_word_boundary(monkeypatch):

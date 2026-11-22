@@ -88,9 +88,12 @@ EARS_RETRY_SECS = 60           # служба: пауза между попыт�
 # ПОРТЫ (ТЗ 2.1, 2.2; правило 6.4: порт 5000 НЕ ТРОГАТЬ)
 # ---------------------------------------------------------------
 PORT_BRAIN = 8082          # llama-server (30B на CPU)
+PORT_EYES = 8083           # llama-server (Qwen2.5-VL, CUDA) — сенсор зрения
+PORT_HANDS = 8084          # llama-server (UI-TARS) — СЛУГА ПО ВЫЗОВУ, ТЗ_Руки_v1
 PORT_WEB = 5001            # локальная панель Марфы
 PORT_FORBIDDEN = 5000      # занят чем-то важным — не используем
 BRAIN_URL = os.environ.get("MARFA_BRAIN_URL") or f"http://127.0.0.1:{PORT_BRAIN}"
+HANDS_URL = f"http://127.0.0.1:{PORT_HANDS}"
 
 # ---------------------------------------------------------------
 # МОЗГ И КВАНТЫ (ТЗ 2.1, Раздел 8)
@@ -164,6 +167,28 @@ LIVE_VOICE_TEMPERATURE = 0.7
 LIVE_VOICE_TOP_P = 0.8
 LIVE_VOICE_MAX_TOKENS = 768      # бюджет генерации (0.3): рассказ — не трактат
 LIVE_VOICE_TEXT_CAP = 1500       # символ: рассказ длиннее — честно обрезаем
+
+# ---------------------------------------------------------------
+# РУКИ (ТЗ_Руки_v1): моторная кора — СЛУГА ПО ВЫЗОВУ, порт 8084.
+# VRAM-арифметика: глаза 3.0 + руки 5.4 = 8.4 ГБ > 6 ГБ — вместе не
+# живут; пока задачи рук нет, модель спит на диске. Резолюция Создателя
+# на моторику (реальные клики) — data/hands_enabled.json (кнопка 91);
+# без неё — сухой режим: план действий без движения мыши.
+# ---------------------------------------------------------------
+HANDS_MODEL = MODELS_DIR / "UI-TARS-7B-DPO.Q4_K_M.gguf"
+HANDS_MMPROJ = MODELS_DIR / "UI-TARS-7B-DPO.mmproj-f16.gguf"
+HANDS_CTX_TOKENS = 4096        # контекст моторной коры
+HANDS_TIMEOUT_SEC = 300        # один вопрос рукам (7B на GTX 1060)
+HANDS_START_WAIT_SECS = 180    # подъём Q4 с NVMe — десятки секунд
+HANDS_MAX_STEPS = 8            # бюджет шагов на задачу (анти-вечный-цикл)
+HANDS_TASK_BUDGET_SEC = 600    # секунд на задачу целиком (ТЗ 6: зависла — отказ)
+HANDS_TYPE_LIMIT = 120         # символов печати за одно действие (№20)
+HANDS_ENABLED_FILE = DATA_DIR / "hands_enabled.json"   # резолюция Создателя
+HANDS_LOG_FILE = LOGS_DIR / "hands_log.jsonl"          # правило 6.6: логи — истина
+HANDS_HOTKEY_WHITELIST = (     # №19: список — код, не мнение модели
+    "esc", "enter", "tab", "alt+tab", "up", "down", "left", "right",
+    "ctrl+c", "ctrl+v", "ctrl+a", "space", "backspace",
+)
 
 # ---------------------------------------------------------------
 # Fallback GigaChat (ТЗ 3.2): включается только когда 30B упала

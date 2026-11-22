@@ -14,6 +14,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import sensors.ears as ears_mod
 from sensors.ears import (NameSentinel, heard_wake, levenshtein,
                          model_files_ok, normalize)
 
@@ -250,10 +251,25 @@ class _FakeStream:
         return False
 
 
+_DEVICES = [
+    {"name": "Динамики (RealTek)", "max_input_channels": 0},
+    {"name": "HD WebCam Mic", "max_input_channels": 1},
+]
+
+
 class _SdOk:
     """Фальшивый sounddevice: поток открывается и живёт."""
 
-    RawInputStream = staticmethod(lambda **kw: _FakeStream())
+    @staticmethod
+    def query_devices(kind=None):
+        if kind == "input":
+            return {"name": "Микрофон по умолчанию",
+                    "max_input_channels": 2}
+        return list(_DEVICES)
+
+    @staticmethod
+    def RawInputStream(**kw):
+        return _FakeStream()
 
 
 class _SdNoMic:
@@ -263,8 +279,38 @@ class _SdNoMic:
         pass
 
     @staticmethod
+    def query_devices(kind=None):
+        if kind == "input":
+            return {"name": "микрофон по умолчанию",
+                    "max_input_channels": 0}
+        return []
+
+    @staticmethod
     def RawInputStream(**kw):
         raise _SdNoMic.PortAudioError("Error querying device -1")
+
+
+class _SdWebcamOnly:
+    """Дефолтного микрофона нет (PortAudio -1), но веб-камера со своим есть.
+
+    Урок Создателя 22.11: камера подключена, а её микрофон не выбран
+    системой «по умолчанию» — старая служба честно писала «no_mic»,
+    хотя микрофон в доме ЕСТЬ."""
+
+    opened = []
+
+    @staticmethod
+    def query_devices(kind=None):
+        if kind == "input":
+            raise RuntimeError("Error querying device -1")
+        return list(_DEVICES)
+
+    @staticmethod
+    def RawInputStream(**kw):
+        if "device" not in kw:
+            raise RuntimeError("Error querying device -1")
+        _SdWebcamOnly.opened.append(kw["device"])
+        return _FakeStream()
 
 
 class _SentinelOk:
@@ -311,6 +357,44 @@ def test_service_streams_and_heartbeats(monkeypatch, tmp_path):
                              sentinel=_SentinelOk, stop_after=3)
     assert rec["state"] == "ok"                  # сердцебиение дошло до файла
     assert rec.get("last_wake", "") == ""         # имени ещё не слышали
+    assert "Микрофон по умолчанию" in rec.get("device", "")  # каким слушаем
+
+
+def test_service_finds_webcam_mic(monkeypatch, tmp_path):
+    """v2, урок Создателя 22.11: дефолтного микрофона нет, но веб-камера
+    со своим есть — служба перебирает устройства сама и находит его."""
+    _SdWebcamOnly.opened = []
+    rec, sleeps = _run_serve(monkeypatch, tmp_path, _SdWebcamOnly(),
+                             sentinel=_SentinelOk, stop_after=3)
+    assert rec["state"] == "ok"                  # ухо открылось на веб-камере
+    assert _SdWebcamOnly.opened == [1]           # индекс HD WebCam Mic
+    assert "HD WebCam Mic" in rec.get("device", "")
+
+
+# ---------- v2: чистая логика выбора устройства ----------
+
+def test_input_devices_default_first():
+    """Сначала «по умолчанию» (None), потом все входящие — порядок закона."""
+    devs = ears_mod._input_devices(_SdOk())
+    assert devs[0][0] is None                    # дефолт первым
+    names = [name for _, name in devs]
+    assert "HD WebCam Mic" in names
+    assert "Динамики (RealTek)" not in names     # выход — не ухо
+
+
+def test_open_ear_stream_tries_all_devices():
+    """Дефолт не открылся — берём следующий входящий (веб-камеру)."""
+    stream, name = ears_mod._open_ear_stream(_SdWebcamOnly(), 16000,
+                                             lambda *a: None)
+    assert name == "HD WebCam Mic"
+    assert _SdWebcamOnly.opened[-1] == 1
+
+
+def test_open_ear_stream_nothing_honest():
+    """Ни одно устройство не открылось — исключение перечисляет попытки."""
+    with pytest.raises(RuntimeError) as ei:
+        ears_mod._open_ear_stream(_SdNoMic(), 16000, lambda *a: None)
+    assert "ни один микрофон" in str(ei.value)
 
 
 def test_service_wake_updates_last_wake(monkeypatch, tmp_path):
