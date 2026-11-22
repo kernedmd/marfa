@@ -226,8 +226,8 @@ def capabilities_report(memory=None, eyes_ok: Optional[bool] = None,
         except Exception:
             eyes_ok = False
 
-    eyes_note = ("живы: команда «посмотри» — опишу экран, «что ты видишь» "
-                 "— то же самое" if eyes_ok
+    eyes_note = ("живы: команда «посмотри» — опишу экран и прочитаю "
+                 "надписи, «что ты видишь» — то же самое" if eyes_ok
                  else "сейчас НЕ запущены — зрения в этот момент нет, честно")
     if ears_ok is None:
         ears_note = ears_diagnosis()

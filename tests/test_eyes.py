@@ -7,12 +7,23 @@ _VISION_ERROR — швы, тесты подменяют их, реальный �
 обязательна («посмотрим» — не команда). Г-2.1: мозг узнаёт о глазах из
 состояния дома (health_cached, без пинга в каждом сообщении).
 
-v2 (22.11, урок живого прогона «один пустой элемент [64,32,412,58]»):
-промпт-антипопугай (модель СПИСАЛА пример из промпта — больше примеру
-нечего списывать), описание первой строкой, цепочка грамматик
-schema → json_object → raw, камера — второй источник зрения.
+v2 (22.11): промпт-антипопугай со шуточно-фейковыми [11,22,33,44],
+описание первой строкой, цепочка грамматик schema → json_object → raw,
+камера — второй источник зрения.
+
+v3 (живой прогон v2): антипопугай ПРОВАЛИЛСЯ — модель выдала
+«шуточный» пример как реальность («Экран с текстом и кнопкой», оба
+бокса [11,22,33,44], кнопка «пример-надпись», 148.2 с). Якори v3:
+- в промптах сенсора НЕТ НИ ОДНОГО примера значений (ни цифр, ни
+  JSON-примера) — 3B-модель копирует любой пример;
+- чат («посмотри») — живой текст без JSON; JSON-привычка сенсора —
+  достаётся description;
+- структурный дескриптор (для рук): bbox обязан жить внутри отправленного
+  кадра — выдуманная геометрия выбрасывается;
+- шаблонные значения («пример-надпись») бракуются на корню.
 """
 import json as _json
+import re
 import sys
 import time
 from pathlib import Path
@@ -29,18 +40,11 @@ DESCRIPTOR = {
     "elements": [
         {"type": "text", "text": "C:\\Marfa>", "bbox": [64, 32, 412, 58],
          "confidence": 0.9},
-        {"type": "button", "text": "Пуск", "bbox": [0, 1048, 48, 1096],
+        {"type": "button", "text": "Пуск", "bbox": [0, 698, 32, 720],
          "confidence": 0.9},
     ],
     "summary": "рабочий стол с окнами",
 }
-
-OLD_DESCRIPTOR = {          # без description — как отвечал сенсор до v2
-    "active_window": "Командная строка",
-    "elements": DESCRIPTOR["elements"],
-    "summary": "рабочий стол с окнами",
-}
-
 
 def _fake_sees(monkeypatch, content):
     """Глаза «видят»: экран и сервер подменены, ответ — content."""
@@ -116,26 +120,42 @@ def test_ask_all_attempts_dead(monkeypatch):
 
 
 def test_ask_budget_bounds_rambling():
-    """Урок 132 секунд: бюджет генерации подрезан — 800, не 1500."""
+    """Уроки 132.6 и 148.2 с: бюджеты подрезаны и разведены — чат
+    (естественный текст с EOS) — 400, структурный дескриптор — 500."""
     import inspect
     sig = inspect.signature(eyes._ask)
-    assert sig.parameters["max_tokens"].default == 800
+    assert sig.parameters["max_tokens"].default == eyes.ELEMENTS_MAX_TOKENS
+    assert eyes.SCREEN_MAX_TOKENS <= 400
+    assert eyes.ELEMENTS_MAX_TOKENS <= 500
 
 
-# ---------- промпт-антипопугай (урок живого прогона 22.11) ----------
+# ---------- промпты без примеров (уроки v1/v2/v3) ----------
 
-def test_prompt_has_no_parrotable_example():
-    """Живые глаза списали bbox [64,32,412,58] из примера промпта.
-    Теперь пример — шуточно-фейковые [11,22,33,44] + прямой запрет."""
-    assert "[64,32,412,58]" not in eyes.PROMPT
-    assert "[11,22,33,44]" in eyes.PROMPT
-    assert "НЕ копируй" in eyes.PROMPT
+def test_prompts_have_no_parrotable_example():
+    """Живые прогоны: модель списала [64,32,412,58] (v1), потом —
+    «шуточно-фейковые» [11,22,33,44] с «пример-надписью» (v2). Урок v3:
+    3B-модель копирует ЛЮБОЙ пример значений — в промптах сенсора
+    примеров нет ВООБЩЕ: ни списков цифр, ни JSON-примера с значениями."""
+    for p in (eyes.SCREEN_PROMPT, eyes.ELEMENTS_PROMPT, eyes.CAMERA_PROMPT):
+        assert not re.search(r"\[\s*\d+\s*,\s*\d+\s*,", p)
+        assert "пример-надпись" not in p
+        assert 'Формат: {' not in p
+        assert "НЕ копируй" not in p        # запреты не нужны: нет источника
+
+
+def test_screen_prompt_is_prose_not_json():
+    """Чат — словами: JSON-марафон (800 токенов без EOS) — прошлое;
+    описание картинки — сладкая точка VL-модели."""
+    assert "JSON" not in eyes.SCREEN_PROMPT
+    assert "ЧИТАЙ" in eyes.SCREEN_PROMPT
 
 
 def test_prompt_demands_reading_text():
-    """Главное требование v2: ЧИТАТЬ надписи — элемент без текста бесполезен."""
-    assert "ЧИТАЙ" in eyes.PROMPT
+    """Главное требование всех версий: ЧИТАТЬ надписи — элемент без
+    прочитанного текста бесполезен."""
+    assert "ЧИТАЙ" in eyes.ELEMENTS_PROMPT
     assert "description" in eyes.SCHEMA["properties"]
+    assert "description" in eyes.CAMERA_SCHEMA["properties"]
 
 
 # ---------- describe / describe_text ----------
@@ -145,6 +165,7 @@ def test_describe_ok(monkeypatch):
     d = eyes.describe()
     assert d["active_window"] == "Командная строка"
     assert d["elements"][1]["type"] == "button"
+    assert d["elements"][1]["text"] == "Пуск"
 
 
 def test_describe_fenced_answer(monkeypatch):
@@ -153,24 +174,75 @@ def test_describe_fenced_answer(monkeypatch):
     assert eyes.describe()["summary"] == "рабочий стол с окнами"
 
 
+def test_describe_drops_hallucinated_bbox(monkeypatch):
+    """Честная геометрия (урок v3): bbox вне отправленного кадра —
+    выдумка; выбрасывается, живые элементы остаются."""
+    bad = {
+        "description": "ок",
+        "elements": [
+            {"type": "button", "text": "Пуск", "bbox": [0, 698, 32, 720]},
+            {"type": "button", "text": "за экраном", "bbox": [2000, 5, 3000, 99]},
+            {"type": "text", "text": "перевёрнутый", "bbox": [500, 90, 300, 99]},
+            {"type": "text", "text": "мусор", "bbox": "нет"},
+        ],
+    }
+    _fake_sees(monkeypatch, _json.dumps(bad, ensure_ascii=False))
+    d = eyes.describe()
+    assert len(d["elements"]) == 1
+    assert d["elements"][0]["text"] == "Пуск"
+
+
+def test_describe_rejects_parrot_template(monkeypatch):
+    """Браковщик шаблонов: «пример-надпись» в ответе — сенсор видит
+    промпт, а не экран; ответ забракован, Создателю — честная ошибка."""
+    parrot = {
+        "description": "Экран с текстом и кнопкой",
+        "elements": [
+            {"type": "button", "text": "пример-надпись",
+             "bbox": [11, 22, 33, 44], "confidence": 0.5},
+        ],
+    }
+    _fake_sees(monkeypatch, _json.dumps(parrot, ensure_ascii=False))
+    with pytest.raises(ValueError) as ei:
+        eyes.describe()
+    assert "шаблон" in str(ei.value)
+
+
 def test_describe_text_readable(monkeypatch):
+    """v3: чат получает живое описание — сенсор говорит словами и цитирует
+    надписи; машинные списки элементов в чат не идут."""
+    _fake_sees(monkeypatch,
+               "Открыт блокнот, в нём заметка «Купить молоко». Внизу панель "
+               "задач, слева кнопка «Пуск».")
+    text = eyes.describe_text()
+    assert text.startswith("Вижу: Открыт блокнот")
+    assert "Купить молоко" in text          # надписи прочитаны дословно
+    assert "Пуск" in text
+    assert "глаза думали" in text
+    assert "Элементы" not in text           # чат без машинных списков
+
+
+def test_describe_text_strips_generation_garbage(monkeypatch):
+    """Сенсор — не парсер: fences и «Ответ:» не попадают в чат."""
+    _fake_sees(monkeypatch, "```text\nОткрыт проводник с папками.\n```")
+    text = eyes.describe_text()
+    assert text.startswith("Вижу: Открыт проводник")
+    assert "```" not in text
+
+
+def test_describe_text_json_habit_falls_back(monkeypatch):
+    """Сенсор по привычке ответил JSON — чат всё равно получает суть
+    (description), не сырой JSON."""
     _fake_sees(monkeypatch, _json.dumps(DESCRIPTOR, ensure_ascii=False))
     text = eyes.describe_text()
-    assert "Вижу: " in text                     # описание первой строкой
-    assert "браузер" in text                    # человеческое описание
-    assert "Командная строка" in text
-    assert "Пуск" in text
-    assert "button" in text
-    assert "глаза думали" in text
+    assert text.startswith("Вижу: Открыт браузер")
+    assert "{" not in text and "Элементы" not in text
 
 
-def test_describe_text_old_answer_still_readable(monkeypatch):
-    """Сенсор без description (старый диалект) — сводка встаёт первой
-    строкой, элементы на месте: совместимость без падения."""
-    _fake_sees(monkeypatch, _json.dumps(OLD_DESCRIPTOR, ensure_ascii=False))
+def test_describe_text_empty_answer_honest(monkeypatch):
+    _fake_sees(monkeypatch, "   ")
     text = eyes.describe_text()
-    assert text.startswith("Вижу: рабочий стол")
-    assert "Пуск" in text and "глаза думали" in text
+    assert "пусто" in text or "не поняли" in text
 
 
 def test_describe_text_eyes_down(monkeypatch):
@@ -198,10 +270,12 @@ def test_describe_text_no_module(monkeypatch):
     assert "глаза не готовы" in text
 
 
-def test_describe_text_without_elements(monkeypatch):
+def test_describe_minimal_descriptor_ok(monkeypatch):
+    """Дескриптор-минималист (без description, без активного окна):
+    структурный путь не падает — элементов нет, и это честно."""
     _fake_sees(monkeypatch, '{"summary": "пусто"}')
-    text = eyes.describe_text()
-    assert "без списка элементов" in text
+    d = eyes.describe()
+    assert d["elements"] == []            # нет списка — честный пустой
 
 
 # ---------- камера: второй источник зрения ----------
