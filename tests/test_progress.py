@@ -147,3 +147,42 @@ def test_brain_track_announces_thinking(monkeypatch, tmp_path):
     assert reply.text == "готово"
     assert any("мозг думает" in s for s in seen)
     assert progress.snapshot()["last"]["source"] == "мозг"
+
+
+# ---------- СКОРОСТЬ v1: превью — мозг печатает ответ живьём ----------
+
+def test_preview_lives_only_during_walk():
+    """Превью — часть хода: вне хода мимо (врать некому), finish стирает."""
+    progress.reset()
+    progress.preview("печатаю ответ…")
+    assert progress.snapshot()["preview"] == ""      # вне хода — мимо
+    progress.begin("pv1")
+    progress.preview("печатаю ответ…")
+    snap = progress.snapshot("pv1")
+    assert snap["busy"] is True
+    assert snap["preview"] == "печатаю ответ…"
+    progress.finish(secs=1.0, source="brain")
+    snap = progress.snapshot()
+    assert snap["busy"] is False and snap["preview"] == ""
+
+
+def test_preview_keeps_tail():
+    """Долгий ответ — показываем ХВОСТ: важно то, что печатается сейчас,
+    а не первые слова минутной давности."""
+    progress.reset()
+    progress.begin("pv2")
+    progress.preview("а" * 500)
+    snap = progress.snapshot("pv2")
+    assert snap["preview"].startswith("…")
+    assert len(snap["preview"]) == 401              # …+ хвост 400
+    progress.finish(source="brain")
+
+
+def test_begin_resets_stale_preview():
+    """Новый ход не наследует черновик прошлого (рестарт панели)."""
+    progress.reset()
+    progress.begin("pv3")
+    progress.preview("старый черновик")
+    progress.begin("pv3")
+    assert progress.snapshot("pv3")["preview"] == ""
+    progress.finish(source="")

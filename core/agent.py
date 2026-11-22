@@ -44,6 +44,14 @@
 живую стадию («собираю контекст…», «мозг думает…») и тикающие
 секунды, ответ приходит со штампом «12,4 с · мозг». Консоль
 для этого открывать не нужно.
+
+2026-11-22, вечер-6 (СКОРОСТЬ v1, доклад Создателя: «она даёт ответ
+через две минуты, это очень долго»): краткость стала законом дома —
+у чат-ответа свой бюджет первого захода (BRAIN_ANSWER_TOKENS),
+мозг просится кратко (ЗАКОН СКОРОСТИ в промпте), ответ ПЕЧАТАЕТСЯ
+в чат живьём (стрим → progress.preview), а штамп несёт и токены
+(«40,2 с · мозг · 84 ток»): если снова медленно — по штампу видно,
+кто съел время: декод (токенов много) или промпт/ретрай (мало).
 """
 from __future__ import annotations
 
@@ -94,6 +102,20 @@ IDENTITY = (
     "- Честность важнее уверенности: не знаю — говорю «не знаю». Цифры или ничего."
 )
 
+# ЗАКОН СКОРОСТИ (22.11, «ответ через две минуты — это очень долго»):
+# мозг на CPU печатает ~6 ток/с — каждый лишний токен стоит Создателю
+# секунды ожидания в чате. Статичная часть промпта (после манифеста,
+# до доктрины) — префиксный KV-кэш цел, закон не дорожает ходами.
+SPEED_LAW = (
+    "ЗАКОН СКОРОСТИ: Создатель читает твой ответ живьём, а ты на CPU "
+    "печатаешь медленно — каждая секунда ожидания видна ему в чате. "
+    "Отвечай КРАТКО и сразу по делу: одно-четыре предложения. "
+    "Подробно, с перечислениями и вступлениями — только когда Создатель "
+    "ЯВНО попросил («подробно», «расскажи подробно», «опиши детально»). "
+    "Не повторяй вопрос Создателя, не пиши общих вступлений и итогов — "
+    "начинай с сути."
+)
+
 
 def load_doctrine() -> str:
     """Доктрина Создателя из data/creator_doctrine.json (нерушимо, ТЗ 3.7).
@@ -110,13 +132,19 @@ def load_doctrine() -> str:
 
 
 class Reply:
-    """Ответ дома: текст, откуда пришло (python/brain/fallback), каким инструментом."""
+    """Ответ дома: текст, откуда пришло (python/brain/fallback), каким инструментом.
+
+    СКОРОСТЬ v1: meta — простые факты хода (сколько токенов напечатал
+    мозг) — для штампа «N с · мозг · M ток» в чате.
+    """
 
     def __init__(self, text: str, source: str = "python",
-                 tool_used: Optional[str] = None) -> None:
+                 tool_used: Optional[str] = None,
+                 meta: Optional[dict] = None) -> None:
         self.text = text
         self.source = source
         self.tool_used = tool_used
+        self.meta = meta
 
 
 # ---------------------------------------------------------------
@@ -446,9 +474,11 @@ class Agent:
         Порядок — дисциплина промпта (доктрина §4): ЯДРО ЛИЧНОСТИ первым
         и неизменным (префиксный KV-кэш, №51), затем МАНИФЕСТ возможностей
         (тоже статичный — имена инструментов и команд, Г-2.3), затем
+        ЗАКОН СКОРОСТИ (статичный — краткость не дорожает ходами), затем
         доктрина Создателя, состояние дома и RAG-воспоминания.
         """
-        parts = [IDENTITY, identity.manifest(), self.doctrine, _house_state()]
+        parts = [IDENTITY, identity.manifest(), SPEED_LAW,
+                 self.doctrine, _house_state()]
         if self.memory is not None:
             try:
                 found = self.memory.recall(user_text, top_k=3)
@@ -523,11 +553,13 @@ class Agent:
         # чат обязан видеть, ЧТО происходит, пока он идёт (не молчать)
         progress.stage("собираю контекст: доктрина, воспоминания, состояние дома…")
         system_extra = self._system_extra(user_text)
-        progress.stage("мозг думает — большая модель на CPU, это может занять минуту и больше…")
+        progress.stage("мозг думает — кратко и по делу, ответ напечатается живьём…")
         try:
             decision = self.brain.ask_json(
                 user_text, system_extra=system_extra,
-                history=history)
+                history=history,
+                max_tokens=config.BRAIN_ANSWER_TOKENS,
+                on_text=progress.preview)
         except Exception as e:
             _lesson("мозг-недоступен", str(e))
             # Урок переписки 22.11: голое «timed out» Создатель читает как
@@ -543,5 +575,16 @@ class Agent:
         if isinstance(decision, dict) and isinstance(decision.get("action"), dict):
             return self._act(decision["action"])
         if isinstance(decision, dict):
-            return Reply(str(decision.get("answer", "Нет ответа")), "brain", None)
+            # СКОРОСТЬ v1: штамп несёт и токены — «40,2 с · мозг · 84 ток»;
+            # снова две минуты? по токенам сразу видно, кто съел время
+            usage = getattr(self.brain, "last_usage", None)
+            tok = None
+            if isinstance(usage, dict):
+                try:
+                    tok = int(usage.get("completion_tokens") or 0) or None
+                except (TypeError, ValueError):
+                    tok = None
+            meta = {"tok": tok} if tok else None
+            return Reply(str(decision.get("answer", "Нет ответа")), "brain", None,
+                         meta=meta)
         return Reply(str(decision), "brain", None)

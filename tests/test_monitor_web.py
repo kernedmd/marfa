@@ -313,3 +313,58 @@ def test_panel_has_now_card(client, home):
     assert 'id="now"' in html
     assert "Сейчас делает" in html
     assert "/api/progress" in html
+
+# ---------- СКОРОСТЬ v1: штамп несёт токены, превью — в эфире ----------
+
+def test_api_chat_stamp_with_tokens(client, home, monkeypatch):
+    """«40,2 с · мозг · 84 ток»: сколько токенов напечатал мозг —
+    в ответе И в память диалога (F5 не сотрёт). Снова две минуты?
+    По токенам сразу видно, кто съел время."""
+    import web.app as webapp
+    from core.agent import Reply
+
+    class FakeAgent:
+        def handle(self, text, history=None):
+            return Reply("кратко", source="brain", meta={"tok": 84})
+
+    monkeypatch.setattr(webapp, "Agent", lambda: FakeAgent())
+    monkeypatch.setattr(webapp, "DIALOGS", DialogStore(home / "data" / "dialog"))
+    data = client.post("/api/chat",
+                       json={"text": "вопрос", "session": "tok1"}).get_json()
+    assert data["tok"] == 84
+    turns = webapp.DIALOGS.turns("tok1")
+    assert turns[1]["meta"]["tok"] == 84
+
+
+def test_api_chat_no_tokens_old_style_ok(client, home, monkeypatch):
+    """Ответ без токенов (руки, глаза, быстрые команды) — штамп как
+    раньше, без «0 ток»."""
+    import web.app as webapp
+    from core.agent import Reply
+
+    class FakeAgent:
+        def handle(self, text, history=None):
+            return Reply("готово", source="python")
+
+    monkeypatch.setattr(webapp, "Agent", lambda: FakeAgent())
+    monkeypatch.setattr(webapp, "DIALOGS", DialogStore(home / "data" / "dialog"))
+    data = client.post("/api/chat",
+                       json={"text": "вопрос", "session": "tok2"}).get_json()
+    assert data["tok"] is None
+    assert "tok" not in webapp.DIALOGS.turns("tok2")[1]["meta"]
+
+
+def test_api_progress_carries_preview(client, home):
+    """Превью печатается в эфир: /api/progress несёт живой черновик —
+    чат показывает ответ ПО МЕРЕ генерации мозга."""
+    from core import progress
+    progress.reset()
+    progress.begin("pv-web")
+    progress.stage("мозг думает — кратко и по делу…")
+    progress.preview('{"answer": "Ку')
+    data = client.get("/api/progress?session=pv-web").get_json()
+    assert data["busy"] is True
+    assert data["preview"] == '{"answer": "Ку'
+    assert data["stage"].startswith("мозг думает")
+    progress.finish(secs=2.0, source="brain")
+    progress.reset()

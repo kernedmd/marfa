@@ -65,6 +65,13 @@ CONTEXT_TOKENS = 4096
 PROMPT_BUDGET_TOKENS = 3072
 HISTORY_BUDGET_TOKENS = 1000     # Ф53: сжатая история внутри промпта
 GENERATION_BUDGET_TOKENS = 768
+# СКОРОСТЬ v1 (22.11, доклад Создателя: «ответ через две минуты — это
+# очень долго»): первый заход мозгового трека в ЧАТ — краткий ответ.
+# 320 токенов ≈ 40-50 с при ~6 ток/с на CPU (вместо 128 с на 768).
+# Обрезанный JSON — не приговор: ретрай уходит с ПОЛНЫМ бюджетом.
+# Дневник, рефлексия и живой голос остаются на 768 — им можно думать.
+BRAIN_ANSWER_TOKENS = 320
+assert BRAIN_ANSWER_TOKENS <= GENERATION_BUDGET_TOKENS
 assert PROMPT_BUDGET_TOKENS + GENERATION_BUDGET_TOKENS <= CONTEXT_TOKENS
 
 # Грубая оценка токенов офлайн (без tokenizer'а): усреднённо ~3 символа/токен
