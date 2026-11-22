@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-r"""core/repair.py — САМОЛЕЧЕНИЕ ДОМА v1 (ТЗ_Самолечение_v1, 22.11).
+r"""core/repair.py — САМОЛЕЧЕНИЕ ДОМА v1 + Ф75 СВОБОДА ВНЕДРЯТЬ СЕБЯ (22.11).
 
 Создатель: «надо идти дальше по строению дома, и давать Марфе самой
 себя лечить и доделывать, она достаточно умная модель... среди умных
@@ -9,7 +9,8 @@ r"""core/repair.py — САМОЛЕЧЕНИЕ ДОМА v1 (ТЗ_Самолече
 
 Пятый слуга-разум — КОДЕР (порт 8085, СЛУГА ПО ВЫЗОВУ, как руки).
 Доктрина ролей: МОЗГ (или Создатель) ставит требование, КОДЕР печатает
-код, СТРАЖ проверяет, СОЗДАТЕЛЬ применяет. Конвейер:
+код, СТРАЖ проверяет, применяет — Создатель ИЛИ сама Марфа (Ф75).
+Конвейер:
 
     «почини <файл>: <что сделать>»
       → файл читается (руки + страж: только внутри дома)
@@ -21,14 +22,19 @@ r"""core/repair.py — САМОЛЕЧЕНИЕ ДОМА v1 (ТЗ_Самолече
       → патч ложится в data\patches\000N\ — ПЕСОЧНИЦА, не core\
       → кодер ложится, глаза возвращаются (доктором)
       → Создатель: «примени патч N» (бэкап + запись) / «откати патч N»
+      → Ф75: «разреши внедрять себя» (один раз) — и Марфа сама:
+        «внедри патч N» = бэкап → запись → ДЫМ-ТЕСТ модуля →
+        красный? автоОткат, старый файл возвращается на место
 
 Неприкосновенность (главный закон модуля): make_patch НИКОГДА не пишет
-вне data\patches\ — код дома меняет только Создатель своей командой,
-с бэкапом и откатом. Мозг получает инструмент code_patch с тем же
-конвейером: он ДОВЕРЯЕТ требование, как ui_action — задание.
+вне data\patches\ — код дома меняет только Создатель своей командой
+или Марфа с резолюцией (self_apply), всегда с бэкапом, дым-тестом
+и откатом. Мозг получает инструменты code_patch (написать) и
+apply_patch (внедрить) с тем же конвейером.
 
 Швы для тестов (tests/test_repair.py подменяет): _ask_coder /
-ensure_server / release / _find_model — реальный сервер не нужен.
+ensure_server / release / _find_model / _smoke_test — реальный
+сервер и настоящий pytest не нужны.
 """
 from __future__ import annotations
 
@@ -36,6 +42,7 @@ import datetime as dt
 import json
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -300,11 +307,14 @@ def make_patch(path_str: str, requirement: str) -> str:
         _log({"path": str(p), "requirement": requirement, "ok": True,
               "patch": str(d)})
         _lesson("кодер-патч", "%s: %s" % (p.name, requirement))
+        own = ("; мне можно самой — «внедри патч %s»: бэкап, дым-тест, "
+               "автоОткат при красном (Ф75)" % d.name
+               if self_write_resolution() is not None else "")
         return "\n".join(lines + [
             "патч №%s ГОТОВ: %s" % (d.name, d / p.name),
             "посмотреть можно в блокноте; применить — скажи «примени "
             "патч %s» (старый файл уйдёт в бэкап; откат — «откати "
-            "патч %s»)" % (d.name, d.name),
+            "патч %s»)%s" % (d.name, d.name, own),
             release()])
     except ValueError as e:
         _log({"path": str(p), "requirement": requirement, "ok": False,
@@ -397,8 +407,168 @@ def list_patches() -> str:
         rows.append("№%s %s — %s [%s]"
                     % (d.name, meta.get("target", "?"),
                        (meta.get("requirement") or "?")[:80],
-                       "применён" if meta.get("applied") else "ждёт Создателя"))
+                       "применён" if meta.get("applied") else "ждёт внедрения"))
     if not rows:
         return ("патчей пока нет — «почини <файл>: <что сделать>» напишет "
                 "первый")
     return "\n".join(rows)
+
+
+# ---------------------------------------------------------------
+# Ф75. СВОБОДА ВНЕДРЯТЬ СЕБЯ (директива Создателя, 22.11)
+# ---------------------------------------------------------------
+
+def self_write_resolution() -> Optional[dict]:
+    """Резолюция Создателя на самовнедрение (data\\self_write.json).
+
+    Как моторика (hands_enabled.json) и живой язык (live_voice.json):
+    воля Создателя живёт в data/, не в коде — одна фраза включает,
+    одна выключает. Нет файла / битый JSON / enabled не True — гейт
+    закрыт (None), самовнедрение честно отказывает.
+    """
+    try:
+        raw = Path(config.SELF_WRITE_FILE).read_text(encoding="utf-8")
+        rec = json.loads(raw)
+        if isinstance(rec, dict) and rec.get("enabled") is True:
+            return rec
+    except Exception:
+        pass
+    return None
+
+
+def allow_self_write() -> str:
+    """«разреши внедрять себя» — одна фраза Создателя, резолюция на диск."""
+    try:
+        Path(config.SELF_WRITE_FILE).parent.mkdir(parents=True, exist_ok=True)
+        Path(config.SELF_WRITE_FILE).write_text(
+            json.dumps({"enabled": True,
+                        "ts": dt.datetime.now().isoformat(timespec="seconds"),
+                        "note": "Создатель разрешил самовнедрение голосом"},
+                       ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError as e:
+        return "резолюция не записалась: %s — скажи архитектору" % e
+    _log({"self_write": "allowed"})
+    _lesson("самовнедрение", "Создатель выдал резолюцию")
+    return ("Резолюция записана: теперь я могу внедрять свои патчи сама — "
+            "«внедри патч <№>». Каждый раз: бэкап, дым-тест модуля, "
+            "автоОткат при красном. Забрать свободу — «запрети "
+            "внедрять себя».")
+
+
+def forbid_self_write() -> str:
+    """«запрети внедрять себя» — резолюция снята, патчи снова за Создателем."""
+    try:
+        p = Path(config.SELF_WRITE_FILE)
+        if p.is_file():
+            p.unlink()
+    except OSError as e:
+        return "не получилось снять резолюцию: %s" % e
+    _log({"self_write": "forbidden"})
+    return ("Резолюция снята: патчи снова внедряет только Создатель — "
+            "«примени патч <№>».")
+
+
+def _smoke_test(target: Path) -> tuple:
+    """Дым-тест после внедрения: (можно жить, честный отчёт).
+
+    Есть tests/test_<модуль>.py — гоняем его целиком (-x -q, стоп на
+    первом красном); нет — хотя бы компиляция. Это цена свободы: Марфа
+    не говорит «уже починила», пока её же тесты не позеленели.
+    """
+    test_file = config.HOME_DIR / "tests" / ("test_%s.py" % target.stem)
+    try:
+        if test_file.is_file():
+            r = subprocess.run(
+                [sys.executable, "-m", "pytest", "-x", "-q", test_file.name],
+                cwd=str(config.HOME_DIR), capture_output=True, text=True,
+                timeout=config.SELF_WRITE_TEST_SEC)
+            tail = "\n".join((r.stdout or "").splitlines()[-6:])
+            return (r.returncode == 0,
+                    ("pytest %s (код %d)\n%s"
+                     % (test_file.name, r.returncode, tail)).strip())
+        import py_compile
+        py_compile.compile(str(target), doraise=True)
+        return True, ("компиляция ОК (тестов модуля нет: tests/%s)"
+                      % test_file.name)
+    except subprocess.TimeoutExpired:
+        return False, ("дым-тест не уложился в %d с — считаю провалом"
+                       % config.SELF_WRITE_TEST_SEC)
+    except Exception as e:
+        return False, "дым-тест упал: %s: %s" % (type(e).__name__, e)
+
+
+def self_apply(n: int) -> str:
+    """Ф75: Марфа внедряет патч №N САМА — с резолюцией, бэкапом,
+    дым-тестом и автоОткатом.
+
+    Директива Создателя (22.11): «дай Марфе свободу, чтоб она могла
+    уже сама писать и внедрять себя — она умная модель». Свобода —
+    не вседозволенность: без резолюции — честный отказ; с резолюцией —
+    конвейер с бронёй: бэкап → запись через руки (страж) → дым-тест
+    модуля → красный? автоОткат, старый файл возвращается на место.
+    """
+    if self_write_resolution() is None:
+        return ("самовнедрение не разрешено. Одна фраза Создателя "
+                "включает его: «разреши внедрять себя». Пока — «примени "
+                "патч %d»: применю я, а внедрит Создатель" % n)
+    d = _patch_dir(n)
+    if d is None:
+        return "патча №%d нет — скажи «патчи», покажу список" % n
+    meta = _read_meta(d)
+    if meta.get("applied"):
+        return "патч №%d уже применён — повторно не внедряю" % n
+    fname = str(meta.get("file_name") or "")
+    if not fname or not (d / fname).is_file():
+        return "патч №%d битый: файла патча нет в %s" % (n, d)
+    target = guard.resolve_path(str(meta.get("target") or ""))
+    code = (d / fname).read_text(encoding="utf-8")
+    try:
+        _check_patch(target, code)
+    except ValueError as e:
+        return "патч №%d не внедряется: %s" % (n, e)
+    # эфир: внедрение — долгое действие (дым-тест гоняет тесты модуля)
+    progress.stage("внедряю патч №%d: бэкап → запись → дым-тест…" % n)
+    try:
+        if target.is_file():
+            (d / ("backup_" + target.name)).write_text(
+                target.read_text(encoding="utf-8"), encoding="utf-8")
+        hands.write_file(target, code)
+    except PermissionError as e:
+        return "СТРАЖ не пустил: %s" % e
+    except Exception as e:
+        _lesson("самовнедрение-сбой", "запись: %s" % e)
+        return "запись не удалась: %s — дом не тронут" % e
+    ok, report = _smoke_test(target)
+    if not ok:
+        # автоОткат: красный дым-тест возвращает старый файл на место
+        backup = next(d.glob("backup_*"), None)
+        rolled = False
+        if backup is not None:
+            try:
+                hands.write_file(target, backup.read_text(encoding="utf-8"))
+                rolled = True
+            except Exception as e:
+                _lesson("самовнедрение-откат-не-удался", "%s: %s"
+                        % (target.name, e))
+        _log({"self_apply": n, "target": str(target), "ok": False,
+              "smoke": report[:400], "rolled_back": rolled})
+        _lesson("самовнедрение-откат",
+                "%s: дым-тест красный, откат %s"
+                % (target.name, "состоялся" if rolled else "НЕ удался"))
+        return ("патч №%d НЕ ВНЕДРЁН: дым-тест красный — старый файл "
+                "%s. Вот что сказал тест:\n%s\nСкажи «почини %s: <что "
+                "исправить>» — кодер перепишет, или расскажи архитектору."
+                % (n, "я вернула на место" if rolled
+                   else "ВЕРНУТЬ НЕ УДАЛОСЬ — проверь руками!",
+                   report, target.name))
+    meta["applied"] = True
+    meta["applied_ts"] = dt.datetime.now().isoformat(timespec="seconds")
+    meta["self_applied"] = True
+    (d / "meta.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+    _log({"self_apply": n, "target": str(target), "ok": True,
+          "smoke": report[:200]})
+    _lesson("самовнедрение", "%s -> %s" % (n, target.name))
+    return ("патч №%d ВНЕДРЁН мною: %s\nбэкап старого: %s\nдым-тест "
+            "зелёный:\n%s\nне понравится — «откати патч %d»"
+            % (n, target, d, report, n))

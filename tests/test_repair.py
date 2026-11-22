@@ -243,7 +243,9 @@ def test_rollback_new_file_no_backup_honest(home, monkeypatch):
 def test_list_patches_statuses(home, monkeypatch):
     _make_patch_0001(home, monkeypatch)
     listing = repair.list_patches()
-    assert "ждёт Создателя" in listing and "№0001" in listing
+    # Ф75: статус «ждёт внедрения» — внедрить может Создатель или сама
+    # Марфа (с резолюцией); «ждёт Создателя» больше не вся правда
+    assert "ждёт внедрения" in listing and "№0001" in listing
     repair.apply_patch(1)
     listing = repair.list_patches()
     assert "применён" in listing
@@ -323,12 +325,17 @@ def test_agent_brain_tool_code_patch(home, monkeypatch):
 # ---------- самопознание знает о ремонтной бригаде ----------
 
 def test_identity_knows_coder(home):
-    assert ("code_patch", identity.TOOLS[-1][0]) == \
-        ("code_patch", "code_patch")
+    names = [name for name, _ in identity.TOOLS]
+    # Ф75: после code_patch приехал apply_patch — свобода внедрять себя;
+    # оба имени — из одного списка TOOLS (единая истина)
+    assert names[-2:] == ["code_patch", "apply_patch"]
     assert "code_patch" in identity.tool_names()
+    assert "apply_patch" in identity.tool_names()
     assert "почини <файл>: <что сделать>" in identity.FAST_COMMANDS
+    assert "внедри патч" in " ".join(identity.FAST_COMMANDS)
     m = identity.manifest()
     assert "code_patch" in m and "песочницу" in m
+    assert "apply_patch" in m and "разреши внедрять себя" in m
     rep = identity.capabilities_report(memory=None, eyes_ok=True, ears_ok=True)
     assert "кодер" in rep.lower()
 
