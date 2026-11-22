@@ -50,7 +50,7 @@ from typing import Optional, Tuple
 
 import requests
 
-from core import config
+from core import config, progress
 
 try:
     import mss
@@ -374,7 +374,9 @@ def describe_with_sizes(width: int = WORK_WIDTH) -> tuple:
     Поднимает исключения (сервер, парс, шаблон)."""
     if _VISION_ERROR:
         raise RuntimeError("глаза не готовы: " + _VISION_ERROR)
+    progress.stage("снимаю экран для рук…")
     b64, real, small = _screenshot_b64(width)
+    progress.stage("глаза читают экран: элементы и координаты…")
     out, _ = _ask(b64, ELEMENTS_PROMPT, SCHEMA,
                   max_tokens=ELEMENTS_MAX_TOKENS)
     d = parse_json(out)
@@ -409,7 +411,9 @@ def describe_text(width: int = WORK_WIDTH) -> str:
             return ("глаза %d не отвечают — сервер зрения не запущен?"
                     % config.PORT_EYES)
         t0 = time.time()
+        progress.stage("снимаю экран…")
         b64, _real, _small = _screenshot_b64(width)
+        progress.stage("глаза читают экран: надписи и кнопки…")
         out, _ = _ask(b64, SCREEN_PROMPT, None,
                       max_tokens=SCREEN_MAX_TOKENS)
         secs = time.time() - t0
@@ -521,6 +525,7 @@ def camera_selftest() -> str:
     устройство. Без выдумок «всё ещё недоступна» по памяти.
     """
     lines = ["ПРОВЕРКА КАМЕРЫ (вживую, не по памяти):"]
+    progress.stage("проверяю камеру вживую: модуль, сенсор, кадр…")
     ver = _cv2_import()
     if not ver:
         return "\n".join(lines + [
@@ -562,7 +567,9 @@ def describe_camera_text() -> str:
                     "Камере нужен тот же сенсор, что и экрану"
                     % config.PORT_EYES)
         t0 = time.time()
+        progress.stage("беру кадр с веб-камеры…")
         b64 = _camera_b64()
+        progress.stage("глаза смотрят в камеру…")
         out, _ = _ask(b64, CAMERA_PROMPT, CAMERA_SCHEMA)
         d = parse_json(out)
         lines = []

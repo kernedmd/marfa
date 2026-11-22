@@ -68,6 +68,37 @@ def test_append_rejects_junk(store):
         store.append("s1", "user", "   ")
 
 
+# ---------- эфир: штампы времени в ходах ----------
+
+def test_append_meta_roundtrip(store):
+    """Штамп хода («сколько думала, кто отвечал») живёт в файле — F5 не сотрёт."""
+    store.append("m1", "user", "вопрос")
+    store.append("m1", "assistant", "ответ", meta={"secs": 12.4, "src": "brain"})
+    turns = store.turns("m1")
+    assert turns[1]["meta"]["secs"] == 12.4
+    assert turns[1]["meta"]["src"] == "brain"
+    assert "meta" not in turns[0]           # реплики Ильи — без штампов
+
+
+def test_meta_sanitized_no_nested_junk(store):
+    """В файл ложатся только простые значения — никакой вложенной мути."""
+    store.append("m2", "assistant", "x",
+                 meta={"src": "brain", "junk": {"вложенный": "мусор"},
+                       "ok": True, "secs": 1.0})
+    m = store.turns("m2")[0]["meta"]
+    assert m["src"] == "brain" and m["ok"] is True and m["secs"] == 1.0
+    assert "junk" not in m
+
+
+def test_old_turns_without_meta_still_readable(store, home):
+    """Истории до эфира читаются как раньше — апгрейд ничего не ломает."""
+    p = home / "data" / "dialog" / "session_old.json"
+    p.write_text(json.dumps({"session": "old", "turns": [
+        {"role": "user", "text": "старый ход без мета", "ts": "01.01 00:00"}]},
+        ensure_ascii=False), encoding="utf-8")
+    assert store.turns("old")[0]["text"].startswith("старый ход")
+
+
 def test_prune_old_sessions(store, home):
     import os
     store.append("old", "user", "старый разговор")

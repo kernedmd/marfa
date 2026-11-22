@@ -42,7 +42,7 @@ from typing import Optional
 
 import requests
 
-from core import config, hands
+from core import config, hands, progress
 from safety import guard
 
 CODER_PROMPT = (
@@ -265,6 +265,9 @@ def make_patch(path_str: str, requirement: str) -> str:
             src = ""      # новый файл — самый лёгкий случай для кодера
     except PermissionError as e:
         return "СТРАЖ не пустил к файлу: %s" % e
+    # эфир: VRAM-танец — САМОЕ долгое действие дома (десятки секунд,
+    # дважды: глаза приседают, кодер поднимается) — чат обязан это видеть
+    progress.stage("поднимаю кодера: VRAM-танец — глаза присядут, это десятки секунд…")
     ok, note = ensure_server()
     if not ok:
         _log({"path": str(p), "requirement": requirement, "ok": False,
@@ -278,6 +281,7 @@ def make_patch(path_str: str, requirement: str) -> str:
             prompt += "ФАЙЛ (целиком):\n```python\n" + src + "```\n"
         else:
             prompt += "ФАЙЛ НОВЫЙ — создай его с нуля по требованию.\n"
+        progress.stage("кодер печатает патч: 7B пишет файл целиком…")
         answer = _ask_coder(prompt)
         code = _extract_code(answer)
         _check_patch(p, code)

@@ -50,7 +50,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from core import config
+from core import config, progress
 from safety import guard
 
 # Задание на РАЗГЛЯДЫВАНИЕ — не для рук (урок живого прогона 22.11:
@@ -446,6 +446,8 @@ def run(task: str) -> str:
     mode = ("моторика ВКЛЮЧЕНА (резолюция Создателя)" if enabled()
             else "сухой режим: план без кликов (включить — кнопка 91)")
     lines = ["РУКИ — задание: %s [%s]" % (task, mode)]
+    # эфир: самый долгий шаг рук — взгляд глаз; дальше план мгновенен
+    progress.stage("руки: смотрю на экран глазами и ищу цель…")
     started = time.time()
     try:
         if plan["verb"] == "click":
@@ -576,6 +578,7 @@ def exam() -> str:
     не танцует: сервер зрения один и не гаснет — в этом и экзамен.
     """
     lines = ["ЭКЗАМЕН Р-0 v2 (цепочка глаза→руки, единое зрение)"]
+    progress.stage("экзамен Р-0: глаза ищут «Пуск», руки меряют клик…")
     try:
         eyes = _eyes_or_honest()
         d, real, sent = eyes.describe_with_sizes()

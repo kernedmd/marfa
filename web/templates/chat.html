@@ -30,6 +30,13 @@
         button { padding: 12px 20px; background: #238636; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
         button:hover { background: #2ea043; }
         .meta { font-size: 11px; color: #6e7681; align-self: center; }
+        /* ЭФИР: индикатор думания — Марфа показывает, что жива и чем занята */
+        .typing { background: var(--card); border: 1px dashed var(--border); color: var(--text);
+                  align-self: flex-start; padding: 10px 15px; border-radius: 10px; font-size: 13px; }
+        .typing .dots::after { content: ''; animation: dots 1.2s steps(4, end) infinite; }
+        @keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } }
+        .typing .stage { display: block; margin-top: 4px; opacity: 0.75; max-width: 320px; }
+        .stamp { font-size: 11px; color: #6e7681; align-self: flex-start; margin-top: -6px; padding-left: 8px; }
     </style>
 </head>
 <body>
@@ -60,6 +67,22 @@
         function esc(s) {
             return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
                             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        // ЭФИР: секунды по-русски — «12,4», не «12.4»
+        function fmtSecs(x) {
+            return (Math.round(Number(x || 0) * 10) / 10).toString().replace('.', ',');
+        }
+
+        // штамп под ответом: «12,4 с · мозг» — время видно в самом чате
+        function addStamp(secs, label) {
+            if (secs === null || secs === undefined) return;
+            const c = document.getElementById('chat');
+            const d = document.createElement('div');
+            d.className = 'stamp';
+            d.textContent = fmtSecs(secs) + ' с · ' + (label || '');
+            c.appendChild(d);
+            c.scrollTop = c.scrollHeight;
         }
 
         function add(role, text, html) {
@@ -99,16 +122,32 @@
         }
         applyTheme(localStorage.getItem('marfa-theme') || 'dark');
 
-        // при входе: поднять прошлый разговор из дома
+        // при входе: поднять прошлый разговор из дома (со штампами времени)
         fetch('/api/dialog/' + encodeURIComponent(SID))
             .then(r => r.json())
             .then(d => {
                 if (d.turns && d.turns.length) {
                     document.getElementById('chat').innerHTML = '';
-                    d.turns.forEach(t => add(t.role, t.text, t.html));
+                    d.turns.forEach(t => {
+                        add(t.role, t.text, t.html);
+                        if (t.role === 'assistant') addStamp(t.secs, t.src_label);
+                    });
                     add('meta', '— разговор продолжается, Марфа помнит —');
                 }
             }).catch(() => {});
+
+        // ЭФИР: индикатор думания — тикающие секунды + живая стадия.
+        // «Непонятно, пока не запустишь консоль» — больше не про этот чат:
+        // что делает Марфа, видно здесь, консоль не нужна.
+        function thinkingBox() {
+            const box = document.createElement('div');
+            box.className = 'typing';
+            box.innerHTML = '<span class="dots">думает</span> <span id="think-secs">0,0 с</span>' +
+                            '<span class="stage" id="think-stage"></span>';
+            document.getElementById('chat').appendChild(box);
+            document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
+            return box;
+        }
 
         async function send() {
             const i = document.getElementById('inp');
@@ -116,6 +155,24 @@
             if(!t) return;
             add('user', t);
             i.value = '';
+            const box = thinkingBox();
+            const sentAt = Date.now();
+            const chatEl = document.getElementById('chat');
+            const tick = setInterval(() => {                     // секундомер — свой, не ждём сервера
+                const el = document.getElementById('think-secs');
+                if (el) el.textContent = fmtSecs((Date.now() - sentAt) / 1000) + ' с';
+            }, 500);
+            const poll = setInterval(() => {                      // живая стадия из эфира дома
+                fetch('/api/progress?session=' + encodeURIComponent(SID))
+                    .then(r => r.json())
+                    .then(p => {
+                        const st = document.getElementById('think-stage');
+                        if (!st) return;
+                        if (p.busy) {
+                            st.textContent = p.mine ? (p.stage || '') : 'отвечает в другом разговоре…';
+                        }
+                    }).catch(() => {});
+            }, 1500);
             try {
                 const r = await fetch('/api/chat', {
                     method: 'POST',
@@ -124,8 +181,14 @@
                 });
                 const d = await r.json();
                 add('ai', d.reply || 'Нет ответа', d.html);
+                addStamp(d.secs, d.source_label);
             } catch(e) {
                 add('ai', 'Ошибка: ' + e);
+            } finally {
+                clearInterval(tick);
+                clearInterval(poll);
+                box.remove();
+                chatEl.scrollTop = chatEl.scrollHeight;
             }
         }
     </script>
