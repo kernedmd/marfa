@@ -724,6 +724,63 @@ def screen_context_line(force: bool = False) -> Optional[str]:
 
 
 # ---------------------------------------------------------------
+# №14 «КНОПКА ГЛАЗ» — снимок экрана по клику из панели: превью +
+# описание + время ответа. Один клик — один взгляд: превью ужимается
+# до полэкрана ширины (это картинка для взгляда Создателя, не для
+# сенсора), описание — живой прозой (чему 3B-модель и рада).
+# ---------------------------------------------------------------
+
+GLANCE_PREVIEW_WIDTH = 480    # превью для панели: маленькое и быстрое
+GLANCE_PREVIEW_JPEG_Q = 70
+
+
+def glance_with_preview(preview_width: int = GLANCE_PREVIEW_WIDTH) -> dict:
+    """Взгляд для кнопки «глаз» (№14): {ok, description, preview,
+    secs, error?}. Превью — data:image/jpeg;base64 (маленькое),
+    описание — живая проза, секунды — честные. Взгляд — тоже взгляд:
+    кадр становится эталоном «что изменилось» (№3). Исключений не
+    поднимает — панель получает ok=False с причиной, а не 500-ю."""
+    try:
+        if _VISION_ERROR:
+            return {"ok": False, "error": "глаза не готовы: " + _VISION_ERROR}
+        if not health_cached():
+            return {"ok": False,
+                    "error": ("сенсор зрения %d не отвечает — запущен ли "
+                              "сервер?" % config.PORT_EYES)}
+        t0 = time.time()
+        progress.stage("снимаю экран для кнопки «глаз»…")
+        b64, _real, small = _screenshot_b64(WORK_WIDTH)
+        remember_frame(b64, small)          # взгляд есть взгляд (№3)
+        progress.stage("глаза читают экран: надписи и кнопки…")
+        out, _ = _ask(b64, SCREEN_PROMPT, None,
+                      max_tokens=SCREEN_MAX_TOKENS)
+        prose = _clean_prose(out)
+        if prose.startswith("{"):
+            try:
+                d = parse_json(prose)
+                prose = str(d.get("description") or "").strip() or prose
+            except Exception:
+                pass
+        # превью: ужимаем кадр до preview_width, JPEG — по проводу дёшево
+        from PIL import Image
+        img = Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
+        small_img = _shrink(img, preview_width)
+        buf = io.BytesIO()
+        small_img.save(buf, format="JPEG", quality=GLANCE_PREVIEW_JPEG_Q)
+        preview = ("data:image/jpeg;base64," +
+                   base64.b64encode(buf.getvalue()).decode())
+        secs = round(time.time() - t0, 1)
+        if not prose:
+            return {"ok": False,
+                    "error": "глаза ответили пусто — скажи «посмотри» "
+                             "ещё раз", "secs": secs, "preview": preview}
+        return {"ok": True, "description": prose,
+                "preview": preview, "secs": secs}
+    except Exception as e:
+        return {"ok": False, "error": "глаза не смогли: " + str(e)}
+
+
+# ---------------------------------------------------------------
 # №4 «ЗАПОМНИ ЭКРАН» — снимок + дескриптор в зрительную память
 # (роадмап 30, №4): data\screenshots\screen_*.png + .json-сайдкар
 # рядом + строка в память дома. «вспомни экран» находит обычным

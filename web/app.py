@@ -240,6 +240,22 @@ def api_health():
     })
 
 
+@app.get("/api/eyes")
+def api_eyes():
+    """№14 «кнопка глаз»: снимок экрана по клику — превью + описание
+    + время ответа. Один клик — один взгляд: глаза читают экран
+    живой прозой, кадр ужимается в маленькое JPEG-превью. Глаза
+    мертвы — 200 с ok=False и честной причиной: кнопка показывает
+    правду, а не красную страницу. Мозг не участвует. Броня: даже
+    крах органа не роняет панель (глубина защиты, как у быстрых
+    команд агента)."""
+    from core.eyes import glance_with_preview
+    try:
+        return jsonify(glance_with_preview())
+    except Exception as e:
+        return jsonify({"ok": False, "error": "глаза не смогли: %s" % e})
+
+
 @app.get("/api/status")
 def api_status():
     ram = RAMMonitor().sample()
