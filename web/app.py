@@ -85,10 +85,13 @@ fetch("/api/status").then(r => r.json()).then(s => {
   if (e.state === "ok") {
     document.getElementById("ears").innerHTML =
       "<b class='ok'>слушают</b>" +
+      (e.device ? " («" + e.device + "»)" : "") +
       (e.last_wake ? " — последний зов: " + e.last_wake : " — имени ещё не слышали");
   } else if (e.state === "no_mic") {
     document.getElementById("ears").innerHTML =
-      "<b class='warn'>ждут микрофон</b> — воткни или выбери устройством ввода";
+      "<b class='warn'>микрофон не найден или занят</b> — воткни камеру/микрофон; " +
+      "служба перебирает устройства сама и проснётся" +
+      (e.error ? "<br><small>" + e.error + "</small>" : "");
   } else if (e.state === "no_model") {
     document.getElementById("ears").innerHTML =
       "<b class='warn'>модель ушей не найдена</b> — нажми scripts\\85_fix_ears.bat";
@@ -177,9 +180,12 @@ def _ears_state() -> dict:
         rec = json.loads(Path(config.EARS_STATUS_FILE).read_text(encoding="utf-8"))
         return {"state": rec.get("state", "down"),
                 "last_wake": rec.get("last_wake", ""),
+                "device": rec.get("device", ""),
+                "error": str(rec.get("error", ""))[:160],
                 "ts": rec.get("ts", "")}
     except (OSError, ValueError):
-        return {"state": "down", "last_wake": "", "ts": ""}
+        return {"state": "down", "last_wake": "", "device": "", "error": "",
+                "ts": ""}
 
 
 @app.get("/health")

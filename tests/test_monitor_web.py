@@ -110,15 +110,17 @@ def test_api_status_reports_ears_states(client, home):
         encoding="utf-8")
     r = client.get("/api/status")
     assert r.get_json()["ears"]["state"] == "no_mic"
+    assert "device -1" in r.get_json()["ears"]["error"]   # ПРИЧИНА доезжает
     # ухо живо и слышало зов
     config.EARS_STATUS_FILE.write_text(
         json.dumps({"ts": "2026-11-20T12:01:00", "sensor": "ears",
-                    "state": "ok",
+                    "state": "ok", "device": "HD WebCam Mic",
                     "last_wake": "11:59 | марфа включи свет"}),
         encoding="utf-8")
     data = client.get("/api/status").get_json()["ears"]
     assert data["state"] == "ok"
     assert "марфа включи свет" in data["last_wake"]
+    assert data["device"] == "HD WebCam Mic"   # v2: каким устройством слушают
     # мусор в файле — панель не падает, честный down
     config.EARS_STATUS_FILE.write_text("не json", encoding="utf-8")
     assert _ears_state()["state"] == "down"
