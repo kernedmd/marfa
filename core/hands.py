@@ -33,9 +33,12 @@ def read_file(path: str | Path) -> str:
     Читается ТОЛЬКО путь, который резолвнул СТРАЖ — расхождение исключено."""
     p = guard.resolve_path(path)
     guard.enforce(guard.check_path(p), {"tool": "read_file"})
-    data = p.read_bytes()
-    if len(data) > MAX_READ_BYTES:
+    # K2 аудита: размер — ДО чтения. 18-гигабайтный файл весов внутри дома
+    # проходит калитку стража, и read_bytes() тащил его в RAM целиком
+    size = p.stat().st_size
+    if size > MAX_READ_BYTES:
         raise ValueError(f"файл больше {MAX_READ_BYTES} байт: {p.name}")
+    data = p.read_bytes()
     return data.decode("utf-8", errors="replace")
 
 
@@ -58,11 +61,18 @@ def run_python(code: str, timeout: int = MAX_RUN_SECONDS) -> str:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("PYTHON", "MARFA"))}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
-    proc = subprocess.run(
-        [sys.executable, "-I", "-c", code],          # -I: без site/user-пакетов — изоляция
-        capture_output=True, text=True, timeout=timeout,
-        cwd=str(config.HOME_DIR), env=env,
-    )
+    # K3 аудита: TimeoutExpired — не OSError, долетал до панели 500-й.
+    # Ловим здесь и возвращаем честный текст: код прерван, дом жив.
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-I", "-c", code],          # -I: без site/user-пакетов — изоляция
+            capture_output=True, text=True, timeout=timeout,
+            cwd=str(config.HOME_DIR), env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return f"ошибка: код выполнялся дольше {timeout} с, прерван"
+    except OSError as e:            # питон не поднялся — тоже честный текст
+        return f"ошибка запуска: {e}"
     out = proc.stdout.strip()
     err = proc.stderr.strip()
     if proc.returncode != 0:
@@ -123,14 +133,21 @@ def _ddg_provider(query: str) -> list[dict]:
 
 
 def browser_search(query: str, provider: Optional[Callable[[str], list[dict]]] = None) -> str:
-    """Поиск в интернете. Без провайдера и без сети — честная ошибка, не выдумка."""
-    guard.enforce(guard.check_injection(query), {"tool": "browser_search"})
-    if query.strip().startswith("!"):  # запрет операторов DDG-фильтров через руки
-        guard.enforce(guard.Verdict("MEDIUM", "deny", "оператор ! в запросе", "search.bang"))
-    prov = provider or _search_provider or _ddg_provider
+    """Поиск в интернете. Без провайдера и без сети — честная ошибка, не выдумка.
+
+    M1 аудита: кривой запрос (None/не-строка) и падение провайдера не
+    должны долетать до панели 500-й. Законный отказ СТРАЖА (PermissionError)
+    пропускаем наружу — _act превратит его в честный отказ."""
+    query = str(query or "")
     try:
+        guard.enforce(guard.check_injection(query), {"tool": "browser_search"})
+        if query.strip().startswith("!"):  # запрет операторов DDG-фильтров через руки
+            guard.enforce(guard.Verdict("MEDIUM", "deny", "оператор ! в запросе", "search.bang"))
+        prov = provider or _search_provider or _ddg_provider
         results = prov(query)
-    except Exception as exc:  # noqa: BLE001 — сеть может быть чем угодно
+    except PermissionError:
+        raise                        # отказ СТРАЖА — законный путь отказа
+    except Exception as exc:        # noqa: BLE001 — сеть/провайдер может быть чем угодно
         return f"поиск недоступен: {type(exc).__name__}: {exc}"
     if not results:
         return "ничего не найдено"

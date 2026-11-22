@@ -62,8 +62,32 @@ def test_run_python_dangerous_denied(home):
 
 
 def test_run_python_timeout(home):
-    with pytest.raises(subprocess.TimeoutExpired):
-        hands.run_python("import time; time.sleep(5)", timeout=1)
+    """K3 аудита: TimeoutExpired — не OSError, долетал до панели 500-й.
+    Теперь run_python возвращает честный текст: код прерван, дом жив."""
+    out = hands.run_python("import time; time.sleep(5)", timeout=1)
+    assert "дольше" in out and "прерван" in out
+
+
+def test_read_file_too_big_refused_before_reading(home):
+    """K2 аудита: размер проверяется ДО read_bytes — файл весов не грузится в RAM."""
+    big = config.HOME_DIR / "weights.gguf"
+    big.write_bytes(b"x" * (hands.MAX_READ_BYTES + 1024))
+    with pytest.raises(ValueError):
+        hands.read_file(big)
+
+
+def test_browser_search_bad_query_no_crash(home):
+    """M1 аудита: кривой запрос не роняет панель — честный текст."""
+    out = hands.browser_search(None)
+    assert isinstance(out, str) and out        # не исключение
+
+
+def test_browser_search_provider_crash_honest(home):
+    def broken(_query):
+        raise RuntimeError("сеть отвалилась")
+
+    out = hands.browser_search("что-то", provider=broken)
+    assert "поиск недоступен" in out
 
 
 # ---------- скобки ----------

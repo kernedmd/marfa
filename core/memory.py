@@ -21,9 +21,12 @@ from core import config   # FIX 2026-11-18: config.DATA_DIR использова
 
 
 def _clean_metadata(md):
-    """Готовит метаданные для ChromaDB add/upsert: убирает None и пустые списки."""
+    """Готовит метаданные для ChromaDB add/upsert: убирает None и пустые списки.
+
+    Пустая метадата — {} (не None): metadatas=[None] разные версии ChromaDB
+    трактуют по-разному (H10 аудита 22.11) — предсказуемость важнее."""
     if not md:
-        return None
+        return {}
     out = {}
     for k, v in md.items():
         if v is None:
@@ -39,7 +42,7 @@ def _clean_metadata(md):
             continue
         if isinstance(v, (bool, int, float, str)):
             out[k] = v
-    return out if out else None
+    return out
 
 
 def _norm(text: str) -> str:
@@ -67,6 +70,21 @@ def _cosine_tokens(a: set[str], b: set[str]) -> float:
     return inter / math.sqrt(len(a) * len(b))
 
 
+def _ts(v, default=None) -> Optional[float]:
+    """Честный таймстамп из чего угодно (K5 аудита 22.11): число — как есть,
+    ISO-строка — в float, мусор/None — default. Одна запись с created_at
+    строкой (импорт, ручная правка, будущая миграция) не должна ронять
+    recall/compress_old всего дома."""
+    if v is None:
+        return default
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return dt.datetime.fromisoformat(str(v)).timestamp()
+    except ValueError:
+        return default
+
+
 # ---------------------------------------------------------------
 # Бэкенды
 # ---------------------------------------------------------------
@@ -80,7 +98,24 @@ class JsonBackend:
             self.path.write_text("[]", encoding="utf-8")
 
     def _load(self) -> list[dict]:
-        return json.loads(self.path.read_text(encoding="utf-8"))
+        """Битый файл не убивает память (H2 аудита): нечитаемое — [],
+        битый JSON откладывается рядом с меткой времени (.broken-<ts>) —
+        данные не затираются молча, их можно спасти руками."""
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except OSError:
+            return []
+        except ValueError:
+            aside = self.path.with_name(
+                "%s.broken-%d" % (self.path.name, int(time.time())))
+            try:
+                self.path.replace(aside)
+            except OSError:
+                pass
+            return []
+        if not isinstance(data, list):
+            return []
+        return [r for r in data if isinstance(r, dict)]
 
     def _save(self, items: list[dict]) -> None:
         tmp = self.path.with_suffix(".tmp")
@@ -112,6 +147,21 @@ class JsonBackend:
         self._save(rest)
         return True
 
+    def find_by_norm(self, norm: str) -> Optional[dict]:
+        """Дедуп без полного перебора чужих путей: точное совпадение norm.
+        Старые записи без norm (до v4) — досчитываем на лету (M8 аудита)."""
+        for rec in self._load():
+            if rec.get("norm") == norm:
+                return rec
+            if not rec.get("norm") and rec.get("text") \
+                    and _norm(rec["text"]) == norm:
+                return rec
+        return None
+
+    def get_by_ids(self, ids: list[str]) -> list[dict]:
+        wanted = set(ids)
+        return [r for r in self._load() if r["id"] in wanted]
+
 
 class ChromaBackend:
     """ChromaDB (основной путь на Z440, где пакет установлен)."""
@@ -122,22 +172,51 @@ class ChromaBackend:
         self.client = chromadb.PersistentClient(path=str(path))
         self.col = self.client.get_or_create_collection(collection)
 
-    def add(self, rec: dict) -> None:
-        self.col.add(ids=[rec["id"]], documents=[rec["text"]],
-                     metadatas=[_clean_metadata({k: v for k, v in rec.items() if k not in ("id", "text", "links")})])
-
-    def all_records(self) -> list[dict]:
-        got = self.col.get()
+    @staticmethod
+    def _rows_to_records(got) -> list[dict]:
         out = []
-        for i, doc, meta in zip(got["ids"], got["documents"], got["metadatas"]):
-            rec = {"id": i, "text": doc, **(meta or {})}
-            out.append(rec)
+        ids = got.get("ids") or []
+        docs = got.get("documents") or []
+        metas = got.get("metadatas") or []
+        for i, doc, meta in zip(ids, docs, metas):
+            out.append({"id": i, "text": doc, **(meta or {})})
         return out
 
+    def add(self, rec: dict) -> None:
+        # K4 аудита: links больше НЕ выкидывается из метаданных —
+        # remember(links=...) молча терял связи, а link() их не находил
+        self.col.add(ids=[rec["id"]], documents=[rec["text"]],
+                     metadatas=[_clean_metadata({k: v for k, v in rec.items()
+                                                 if k not in ("id", "text")})])
+
+    def all_records(self) -> list[dict]:
+        return self._rows_to_records(self.col.get())
+
+    def get_by_ids(self, ids: list[str]) -> list[dict]:
+        """Точечный запрос — без полного скана коллекции (H1 аудита)."""
+        if not ids:
+            return []
+        return self._rows_to_records(self.col.get(ids=ids))
+
+    def find_by_norm(self, norm: str) -> Optional[dict]:
+        """Точный дедуп через where-фильтр по norm — без полного скана
+        на каждый remember (H1). Старые записи без norm — досчёт (M8)."""
+        recs = self._rows_to_records(self.col.get(where={"norm": norm}))
+        if recs:
+            return recs[0]
+        for rec in self.all_records():
+            if not rec.get("norm") and rec.get("text") \
+                    and _norm(rec["text"]) == norm:
+                return rec
+        return None
+
     def update(self, rec_id: str, patch: dict) -> bool:
-        if not any(r["id"] == rec_id for r in self.all_records()):
+        if not self.get_by_ids([rec_id]):
             return False
-        self.col.update(ids=[rec_id], metadatas=[_clean_metadata(patch)])
+        # дедуп обновляет и текст записи, не только метаданные
+        docs = [patch["text"]] if "text" in patch else None
+        self.col.update(ids=[rec_id], documents=docs,
+                        metadatas=[_clean_metadata(patch)])
         return True
 
     def delete(self, rec_id: str) -> bool:
@@ -148,6 +227,9 @@ class ChromaBackend:
 # ---------------------------------------------------------------
 # Память
 # ---------------------------------------------------------------
+_fallback_lesson_done = False     # M13: урок фоллбэка — раз за процесс, не спамим
+
+
 class Memory:
     """remember/recall/forget. Дедуп: тот же текст → обновление. TTL: expire_at."""
 
@@ -161,17 +243,36 @@ class Memory:
         except Exception:  # ImportError или сбой ChromaDB → ADR-006 фоллбэк
             root = data_dir or Path(config.DATA_DIR)
             self.fallback = JsonBackend(root / "memory" / "memory.json")
+            # M13 аудита: тихий откат на пустой JSON — потеря дня памяти.
+            # Пишем урок один раз за процесс: Создатель и доктор увидят.
+            global _fallback_lesson_done
+            if not _fallback_lesson_done:
+                _fallback_lesson_done = True
+                try:
+                    from evolution.journal import log_lesson
+                    log_lesson("память-фоллбэк",
+                               "ChromaDB не поднялась — живу на JSON-фоллбэке; "
+                               "если он пуст, а Chroma раньше работала — "
+                               "скажи Создателю, свежие данные могли не доехать")
+                except Exception:
+                    pass
         self.ttl_hours = ttl_hours
 
     # ---------- внутреннее ----------
     def _records(self) -> list[dict]:
         return self.backend.all_records() if self.backend else self.fallback.all_records()
 
+    def _backend(self):
+        """Активный бэкенд (chroma или JSON-фоллбэк)."""
+        return self.backend or self.fallback
+
     def _now(self) -> float:
         return time.time()
 
     def _alive(self, rec: dict) -> bool:
-        exp = rec.get("expire_at")
+        # K5 аудита: expire_at может прийти строкой (импорт/ручная правка) —
+        # str > float кидал TypeError и ронял recall целиком
+        exp = _ts(rec.get("expire_at"))
         return exp is None or exp > self._now()
 
     def count(self) -> int:
@@ -191,17 +292,19 @@ class Memory:
         now = self._now()
         expire = now + (ttl_hours if ttl_hours is not None else self.ttl_hours) * 3600
 
-        for rec in self._records():
-            if rec.get("norm") == norm and self._alive(rec):
-                patch = {"text": text, "tags": tags or rec.get("tags", []),
-                         "importance": max(importance, float(rec.get("importance", 1))),
-                         "expire_at": expire, "updated_at": now, "hits": rec.get("hits", 0)}
-                if self.backend:
-                    self.backend.update(rec["id"], patch)
-                else:
-                    self.fallback.update(rec["id"], patch)
-                rec.update(patch)
-                return rec
+        # Дедуп — ТОЧНЫЙ поиск по norm (H1 аудита: без полного скана
+        # коллекции на каждый remember; M8: старые записи без norm
+        # находятся досчётом внутри find_by_norm)
+        dup = self._backend().find_by_norm(norm)
+        if dup is not None and self._alive(dup):
+            # M2 аудита: tags=[] — честная очистка, а не «оставить как было»
+            patch = {"text": text,
+                     "tags": tags if tags is not None else (dup.get("tags") or []),
+                     "importance": max(importance, float(dup.get("importance", 1))),
+                     "expire_at": expire, "updated_at": now, "hits": dup.get("hits", 0)}
+            self._backend().update(dup["id"], patch)
+            dup.update(patch)
+            return dup
 
         rec = {
             "id": uuid.uuid4().hex[:12],
@@ -229,7 +332,9 @@ class Memory:
             if not self._alive(rec):
                 continue
             rel = _cosine_tokens(q, _tokens(rec["text"]))
-            age_h = max(0.0, (self._now() - rec.get("created_at", self._now())) / 3600)
+            # K5 аудита: created_at строкой не роняет recall
+            created = _ts(rec.get("created_at"), self._now())
+            age_h = max(0.0, (self._now() - created) / 3600)
             score = rel * (0.5 + 0.5 * min(1.0, float(rec.get("importance", 1)) / 5)) \
                     + 0.05 * math.exp(-age_h / 24)
             if score > 0.01:
@@ -244,8 +349,8 @@ class Memory:
     def forget(self, rec_id: str) -> bool:
         """Забыть по id. Чужой id — False, не исключение."""
         if self.backend:
-            known = any(r["id"] == rec_id for r in self._records())
-            if not known:
+            # H1 аудита: точечный запрос вместо полного скана коллекции
+            if not self.backend.get_by_ids([rec_id]):
                 return False
             return self.backend.delete(rec_id)
         return self.fallback.delete(rec_id)
@@ -282,13 +387,18 @@ class Memory:
                 continue
             if float(rec.get("importance", 1)) >= 4:
                 continue
-            if float(rec.get("created_at", now)) > horizon:
+            # K5 аудита: created_at строкой/мусором — не роняет сжатие;
+            # битую дату не сжимаем вслепую — пропускаем запись
+            created = _ts(rec.get("created_at"))
+            if created is None or created > horizon:
                 continue
-            day = dt.datetime.fromtimestamp(float(rec["created_at"])).strftime("%d.%m.%Y")
+            day = dt.datetime.fromtimestamp(created).strftime("%d.%m.%Y")
             by_day.setdefault(day, []).append(rec)
 
         stats = {"compressed": 0, "digests": 0, "days": []}
-        for day, recs in sorted(by_day.items()):
+        # дни — по датам, не по строкам («01.02» < «31.01» лексикографически)
+        for day, recs in sorted(by_day.items(),
+                                key=lambda kv: dt.datetime.strptime(kv[0], "%d.%m.%Y")):
             if len(recs) < min_group:
                 continue
             recs = sorted(recs, key=lambda r: -float(r.get("importance", 1)))
@@ -299,25 +409,23 @@ class Memory:
                       % (day, len(recs), "\n".join(lines)))
             self.remember(digest, tags=["выжимка"], importance=3,
                           ttl_hours=24 * 90)
-            for r in recs:
-                self.forget(r["id"])
-            stats["compressed"] += len(recs)
+            # M4 аудита: считаем только реально забытые — не врём в отчёте
+            gone = sum(1 for r in recs if self.forget(r["id"]))
+            stats["compressed"] += gone
             stats["digests"] += 1
             stats["days"].append(day)
         return stats
 
     def link(self, id_a: str, id_b: str) -> bool:
-        """Граф связей: двусторонняя ссылка между воспоминаниями."""
-        known = {r["id"] for r in self._records()}
-        if id_a not in known or id_b not in known:
+        """Граф связей: двусторонняя ссылка между воспоминаниями.
+
+        M3 аудита: один проход по записям — раньше было три полных скана
+        плюс два повторных (на 10 000 записей — заметные секунды)."""
+        recs = {r["id"]: r for r in self._records()}
+        if id_a not in recs or id_b not in recs:
             return False
         for a, b in ((id_a, id_b), (id_b, id_a)):
-            rec = next(r for r in self._records() if r["id"] == a)
-            links = rec.get("links", [])
+            links = recs[a].get("links") or []
             if b not in links:
-                patch = {"links": links + [b]}
-                if self.backend:
-                    self.backend.update(a, patch)
-                else:
-                    self.fallback.update(a, patch)
+                self._backend().update(a, {"links": links + [b]})
         return True

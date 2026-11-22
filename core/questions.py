@@ -45,6 +45,9 @@ class QuestionBank:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
             if isinstance(data, dict) and isinstance(data.get("items"), list):
+                # H6 аудита: элементы-не-словари (ручная правка файла) —
+                # фильтруются здесь, а не роняют open_items/дедуп AttributeError'ом
+                data["items"] = [it for it in data["items"] if isinstance(it, dict)]
                 return data
         except (OSError, ValueError):
             pass
@@ -123,6 +126,15 @@ class QuestionBank:
             if key in seen_titles:
                 t["status"] = "cancelled"
                 changed = True
+                # H5 аудита: тихая отмена дубля — видимый урок, а не молчаливая
+                # пропажа задачи Создателя из очереди
+                try:
+                    from evolution.journal import log_lesson
+                    log_lesson("вопросы-дедуп",
+                               "дубль задачи «%s» отменён автоматически (Ф74)"
+                               % str(t.get("title", "?"))[:80])
+                except Exception:
+                    pass
                 continue
             seen_titles.add(key)
             deduped.append(t)
@@ -143,8 +155,12 @@ class QuestionBank:
                     asked.append(q["text"])
 
         # 2) уши: почему молчат (если служба вообще поднималась)
+        #    H4 аудита: статус-файл пишут люди и службы — массив вместо словаря,
+        #    null в поле — не повод ронять всю службу стремления
         try:
             rec = json.loads(config.EARS_STATUS_FILE.read_text(encoding="utf-8"))
+            if not isinstance(rec, dict):
+                raise ValueError("статус ушей — не словарь")
             ts = dt.datetime.fromisoformat(rec.get("ts", ""))
             silent_h = (now - ts).total_seconds() / 3600
             state = rec.get("state", "")
@@ -157,19 +173,22 @@ class QuestionBank:
                              "поправить?" % reason, source="уши")
                 if q:
                     asked.append(q["text"])
-        except (OSError, ValueError, KeyError):
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
             pass
 
         # 3) мозг: служба стремления видит его молчание (файл статуса)
         try:
             rec = json.loads(config.DRIVE_STATUS_FILE.read_text(encoding="utf-8"))
-            down_since = dt.datetime.fromisoformat(rec.get("brain_down_since", ""))
+            if not isinstance(rec, dict):
+                raise ValueError("статус стремления — не словарь")
+            raw_down = rec.get("brain_down_since") or ""
+            down_since = dt.datetime.fromisoformat(raw_down)
             if (now - down_since).total_seconds() / 3600 >= BRAIN_SILENT_HOURS:
                 q = self.add("Мозг молчит с %s — посмотреть его консоль?"
                              % down_since.strftime("%H:%M"), source="мозг")
                 if q:
                     asked.append(q["text"])
-        except (OSError, ValueError, KeyError):
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
             pass
 
         return asked
