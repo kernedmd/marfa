@@ -88,18 +88,50 @@ def default_jobs() -> list[dict]:
         from core import backup
         return backup.tick()
 
+    # ВНУТРЕННЯЯ ЖИЗНЬ (23.11): сон и мысли в ритме стремления.
+    # Ночью дом спит: вопросы и библиотекарь молчат (врач и бэкап —
+    # вегетативная нервная система, работают всегда); мысль и сон
+    # пишутся только бодрствующим организмом с живым языком (гейт §5)
+    def _dream() -> str:
+        from core import musing
+        _text, status = musing.dream()
+        return status
+
+    def _muse() -> str:
+        from core import musing
+        _text, status = musing.muse()
+        return status
+
+    def _questions_awake() -> str:
+        from core import sleep as _sleep
+        if _sleep.is_asleep():
+            return "дом спит — вопросы подождут утра"
+        from core import questions
+        return questions.tick()
+
+    def _librarian_awake() -> str:
+        from core import sleep as _sleep
+        if _sleep.is_asleep():
+            return "дом спит — полка подождёт утра"
+        from core import librarian
+        return librarian.tick()
+
     return [
         job("plan", "daily", at="08:00", what="план дня (Ф71)", run=_plan),
         job("diary", "daily", at="21:00", what="вечерний дневник (№8)",
             run=_diary_day),
+        job("dream", "daily", at="07:10",
+            what="сон-сновидение после ночи (мысли)", run=_dream),
         job("backup", "daily", at="23:30", what="бэкап души дома (№23)",
             run=_backup),
         job("queue", "interval", every=60,
-            what="очередь и вопросы (Ф74)", run=_questions.tick),
+            what="очередь и вопросы (Ф74)", run=_questions_awake),
         job("doctor", "interval", every=300,
             what="автодоктор: осмотр и лечение дома (№21)", run=_doctor_tick),
         job("librarian", "interval", every=3600,
-            what="библиотекарь: чтение дома", run=_librarian.tick),
+            what="библиотекарь: чтение дома", run=_librarian_awake),
+        job("musing", "interval", every=config.MUSING_INTERVAL_SECS,
+            what="фоновая мысль в тишине (мысли)", run=_muse),
         job("memory-compress", "weekly", weekday="sun", at="23:00",
             what="сжатие памяти (№7)", run=_compress),
     ]
