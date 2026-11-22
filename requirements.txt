@@ -10,6 +10,14 @@ chromadb>=0.5; platform_system == "Windows"
 # колесо для Windows несёт PortAudio внутри, отдельных драйверов не надо ---
 sounddevice>=0.4.6; platform_system == "Windows"
 
+# --- Руки: моторика (реальные клики/печать, core\motor.py). Без него —
+# честный сухой режим: план действий без движения мыши ---
+pyautogui>=0.9.54; platform_system == "Windows"
+
+# --- Камера: «посмотри в камеру» (веб-камера как второй источник зрения,
+# core\eyes.py). Без него — честная ошибка с командой установки ---
+opencv-python>=4.9; platform_system == "Windows"
+
 # --- QLoRA-стек ставится отдельной командой с CUDA-индексом (см. 04_install_qlora.ps1):
 # torch --index-url https://download.pytorch.org/whl/cu118
 # bitsandbytes peft trl transformers accelerate huggingface_hub
