@@ -403,3 +403,120 @@ def test_n5_disk_uninspectable_is_not_ok(home, monkeypatch):
     report = doctor.check_all()
     c = report["checks"]["disk"]
     assert c["ok"] is False and "не посмотреть" in c["note"]
+
+
+# ================================================================
+# ФАЗА 4 — НЕ ВИСЕТЬ (+ M6 поднят из фазы 5: тот же файл доктора)
+# ================================================================
+
+def test_h5_ask_one_deadline_for_whole_chain(monkeypatch):
+    """Висяк сенсора: цепочка грамматик ест ОДИН бюджет времени —
+    3×240 с тишины (до 12 минут блокировки панели) больше невозможно."""
+    import time as _time
+    from core import eyes
+    calls = []
+
+    def slow_fail(body, timeout=None):
+        calls.append(body.get("response_format", {}).get("type"))
+        _time.sleep(0.05)
+        raise RuntimeError("сенсор молчит")
+
+    monkeypatch.setattr(eyes, "_post_chat", slow_fail)
+    monkeypatch.setattr(eyes, "EYES_TIMEOUT", 0.06)
+    t0 = _time.monotonic()
+    with pytest.raises(RuntimeError) as ei:
+        eyes._ask("b64", "промпт", {"type": "object"}, 10)
+    assert _time.monotonic() - t0 < 0.5          # не 12 минут
+    assert len(calls) <= 2                        # не вся цепочка
+    assert "время вопроса вышло" in str(ei.value)  # честная причина
+
+
+def test_n9_ask_reports_all_attempts(monkeypatch):
+    """Обе попытки упали — в ошибке ОБЕ, а не только последняя."""
+    from core import eyes
+
+    def two_flavors(body, timeout=None):
+        fmt = body.get("response_format", {}).get("type")
+        if fmt == "json_schema":
+            raise RuntimeError("схема отвергнута")
+        raise RuntimeError("таймаут")
+
+    monkeypatch.setattr(eyes, "_post_chat", two_flavors)
+    with pytest.raises(RuntimeError) as ei:
+        eyes._ask("b64", "промпт", {"type": "object"}, 10)
+    msg = str(ei.value)
+    assert "схема отвергнута" in msg and "таймаут" in msg
+
+
+def test_m12_no_upscale():
+    """Маленький экран/камера не растягиваются до 1280 — апскейл кормил
+    сенсор лишними пикселями и секундами инференса."""
+    Image = pytest.importorskip("PIL.Image")
+    from core.eyes import _shrink
+    small = Image.new("RGB", (800, 600))
+    assert _shrink(small, 1280).size == (800, 600)     # не апскейлим
+    big = Image.new("RGB", (1920, 1080))
+    assert _shrink(big, 1280).size == (1280, 720)      # даунскейл жив
+
+
+def test_m7_crit_servants_get_longer_timeout(monkeypatch):
+    """Разогревающийся 30B (--mlock, 19 ГБ с диска) отвечает первые
+    секунды медленно: crit-слуги — 10 с, warn — 2 с; поспешный «мозг
+    мёртв» поднимал второго llama-server на том же порту."""
+    from core import doctor
+    seen = {}
+
+    class _Resp:
+        status = 200
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    def fake(url, timeout=None):
+        seen[url] = timeout
+        return _Resp()
+
+    monkeypatch.setattr(doctor.urllib.request, "urlopen", fake)
+    assert doctor._http_ok("http://127.0.0.1:8082/health")   # мозг — crit
+    assert seen["http://127.0.0.1:8082/health"] == doctor.CRIT_CHECK_TIMEOUT_SECS
+    assert doctor._http_ok("http://127.0.0.1:5001/api/status")  # панель — crit
+    assert doctor._http_ok("http://127.0.0.1:8083/health")      # глаза — warn
+    assert seen["http://127.0.0.1:8083/health"] == doctor.CHECK_TIMEOUT_SECS
+
+
+def test_n6_urls_come_from_services_table(monkeypatch):
+    """Порты осмотра — из таблицы SERVICES, мозг — из закона дома;
+    переопределение BRAIN_URL (тест/переезд) уважается."""
+    from core import doctor
+    urls = doctor._service_urls()
+    assert urls["eyes"] == "http://127.0.0.1:8083/health"
+    assert urls["panel"] == "http://127.0.0.1:5001/api/status"
+    monkeypatch.setattr(config, "BRAIN_URL", "http://127.0.0.1:9")
+    assert doctor._service_urls()["brain"] == "http://127.0.0.1:9/health"
+
+
+def test_m6_spawn_without_shell(monkeypatch):
+    """Команда из start_marfa.json исполняется СПИСКОМ без shell —
+    конфиг, подменённый через write_file, не становится RCE."""
+    import subprocess as _sp
+    from core import doctor
+    spawned = []
+    monkeypatch.setattr(doctor.subprocess, "Popen",
+                        lambda argv, **kw: spawned.append((argv, kw)))
+    doctor._spawn('venv\\Scripts\\python.exe -m flask --port 5001')
+    argv, kw = spawned[0]
+    assert argv == ["venv\\Scripts\\python.exe", "-m", "flask",
+                    "--port", "5001"]
+    assert kw.get("shell") is False
+    with pytest.raises(ValueError):
+        doctor._spawn("del C:\\Marfa & calc")     # метасимволы — отказ
+
+
+def test_m6_split_cmd_keeps_windows_paths():
+    """Слэши путей Windows живы, кавычки путей с пробелами сняты."""
+    from core.doctor import _split_cmd
+    assert _split_cmd("llama.cpp\\llama-server.exe -m models\\brain.gguf") == \
+        ["llama.cpp\\llama-server.exe", "-m", "models\\brain.gguf"]
+    assert _split_cmd('"C:\\Program Files\\app.exe" --flag') == \
+        ["C:\\Program Files\\app.exe", "--flag"]

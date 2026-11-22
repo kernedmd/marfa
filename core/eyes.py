@@ -215,6 +215,16 @@ def health_cached(period: float = 30.0) -> bool:
     return ok
 
 
+def _shrink(img, width: int):
+    """Ужать кадр до width БЕЗ апскейла (M12 аудита: маленький экран/камера
+    не растягиваем — апскейл кормил сенсор лишними пикселями и секундами).
+    PIL — лениво: модуль камеры живёт своей жизнью от mss."""
+    from PIL import Image
+    width = min(width, img.width)
+    scale = width / float(img.width)
+    return img.resize((width, max(1, round(img.height * scale))), Image.LANCZOS)
+
+
 def _screenshot_b64(width: int = WORK_WIDTH):
     """Снимок основного монитора -> PNG base64, ужатый до width (LANCZOS).
 
@@ -223,17 +233,19 @@ def _screenshot_b64(width: int = WORK_WIDTH):
     with _MSS() as sct:
         raw = sct.grab(sct.monitors[1])
         img = Image.frombytes("RGB", raw.size, raw.rgb)
-    scale = width / float(img.width)
-    small = img.resize((width, max(1, round(img.height * scale))), Image.LANCZOS)
+    small = _shrink(img, width)
     buf = io.BytesIO()
     small.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode(), img.size, small.size
 
 
-def _post_chat(body: dict) -> dict:
-    """Единый шов HTTP: POST /v1/chat/completions к глазам."""
+def _post_chat(body: dict, timeout: Optional[float] = None) -> dict:
+    """Единый шов HTTP: POST /v1/chat/completions к глазам.
+
+    H5 аудита: timeout задаёт вызывающий из ОБЩЕГО дедлайна вопроса —
+    цепочка грамматик не превращается в 3×240 с тишины."""
     r = requests.post(EYES + "/v1/chat/completions", json=body,
-                      timeout=EYES_TIMEOUT)
+                      timeout=EYES_TIMEOUT if timeout is None else timeout)
     r.raise_for_status()
     return r.json()
 
@@ -247,14 +259,24 @@ def _ask(b64: str, prompt: str, schema: Optional[dict],
     («ответ — только JSON») — модель скована грамматикой и не разговаривает
     в пустоту до лимита токенов. Возвращает (текст ответа, какая грамматика
     сработала: "schema" / "json_object" / None).
-    """
-    attempts = []
+
+    H5 аудита (раунд 2): у вопроса к глазам ОДИН общий бюджет времени
+    (EYES_TIMEOUT) на ВСЮ цепочку — раньше висяк сенсора ждал 240 с,
+    падал и ждал ЕЩЁ 240 с: до 12 минут блокировки панели. N9: в ошибке —
+    ВСЕ попытки, а не только последняя (первая часто информативнее:
+    «schema rejected» против голого timeout)."""
+    attempts: list = []
     if schema:
-        attempts.append(("schema",))
-        attempts.append(("json_object",))
-    attempts.append((None,))
-    last = None
-    for (grammar,) in attempts:
+        attempts.append("schema")
+        attempts.append("json_object")
+    attempts.append(None)
+    deadline = time.monotonic() + EYES_TIMEOUT
+    errors: list[str] = []
+    for grammar in attempts:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            errors.append("общее время вопроса вышло (%.0f с)" % EYES_TIMEOUT)
+            break
         body = {
             "model": "vlm",
             "temperature": 0.1,
@@ -277,11 +299,11 @@ def _ask(b64: str, prompt: str, schema: Optional[dict],
         elif grammar == "json_object":
             body["response_format"] = {"type": "json_object"}
         try:
-            data = _post_chat(body)
+            data = _post_chat(body, timeout=left)
             return data["choices"][0]["message"]["content"], grammar
         except Exception as e:
-            last = e
-    raise RuntimeError("глаза не ответили: %s" % last)
+            errors.append("%s: %s" % (grammar or "без грамматики", e))
+    raise RuntimeError("глаза не ответили: %s" % "; ".join(errors))
 
 
 def parse_json(text: str) -> dict:
@@ -510,9 +532,7 @@ def _camera_b64(width: int = CAMERA_WIDTH) -> str:
         img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     finally:
         cap.release()
-    scale = width / float(img.width)
-    small = img.resize((width, max(1, round(img.height * scale))),
-                       Image.LANCZOS)
+    small = _shrink(img, width)
     buf = io.BytesIO()
     small.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode()
