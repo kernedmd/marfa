@@ -22,6 +22,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -39,6 +40,16 @@ def _safe_session(session_id: str) -> str:
     if not _SESSION_RE.match(sid):
         raise ValueError("имя сессии: только буквы/цифры/_/- , до 64 знаков")
     return sid
+
+
+def _turn_text(t: dict) -> str:
+    """H9 аудита (раунд 2): ход хранится как text (DialogStore) или
+    content (формат мозга) — контракт не зависит от случайного выбора
+    ключа вызывающим: одна опечатка больше не опустошает историю молча."""
+    v = t.get("text")
+    if not (isinstance(v, str) and v.strip()):
+        v = t.get("content")
+    return v if isinstance(v, str) else ""
 
 
 def _first_sentence(text: str, max_chars: int = 100) -> str:
@@ -62,11 +73,16 @@ def _cap_words(text: str, budget_tokens: int) -> str:
 
 
 class DialogStore:
-    """Сессии диалогов на диске. Один вызов — один файл, всё атомарно."""
+    """Сессии диалогов на диске. Один вызов — один файл, всё атомарно.
+
+    M10 аудита (раунд 2): append под замком — два потока (web-хендлер +
+    CLI) пишут одну сессию одновременно без тихой потери хода: раньше
+    оба читали одинаковый список и последний replace затирал первого."""
 
     def __init__(self, data_dir: Optional[Path] = None) -> None:
         self.dir = Path(data_dir) if data_dir else config.DATA_DIR / "dialog"
         self.dir.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
 
     # ---------- пути ----------
 
@@ -102,25 +118,26 @@ class DialogStore:
         if not text:
             raise ValueError("пустой ход не записывается")
         path = self._path(session_id)
-        turns = self.turns(session_id)
-        turn = {"role": role, "text": text[:8000],
-                "ts": dt.datetime.now().strftime("%d.%m %H:%M")}
-        if meta:
-            clean = {}
-            for k, v in meta.items():
-                if isinstance(v, (int, float, str, bool)) and len(clean) < 8:
-                    clean[str(k)[:32]] = v
-            if clean:
-                turn["meta"] = clean
-        turns.append(turn)
-        if len(turns) > _MAX_TURNS:               # потолок: свежее важнее
-            turns = turns[-_MAX_TURNS:]
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"session": _safe_session(session_id),
-                                   "turns": turns},
-                                  ensure_ascii=False, indent=1),
-                       encoding="utf-8")
-        tmp.replace(path)                          # атомарно: цельный или старый
+        with self._lock:                      # M10: чтение+запись — одна транзакция
+            turns = self.turns(session_id)
+            turn = {"role": role, "text": text[:8000],
+                    "ts": dt.datetime.now().strftime("%d.%m %H:%M")}
+            if meta:
+                clean = {}
+                for k, v in meta.items():
+                    if isinstance(v, (int, float, str, bool)) and len(clean) < 8:
+                        clean[str(k)[:32]] = v
+                if clean:
+                    turn["meta"] = clean
+            turns.append(turn)
+            if len(turns) > _MAX_TURNS:               # потолок: свежее важнее
+                turns = turns[-_MAX_TURNS:]
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"session": _safe_session(session_id),
+                                       "turns": turns},
+                                      ensure_ascii=False, indent=1),
+                           encoding="utf-8")
+            tmp.replace(path)                          # атомарно: цельный или старый
         return turn
 
     def sessions(self) -> list[str]:
@@ -150,9 +167,11 @@ class DialogStore:
 
         Гарантии Ф53: новейший ход всегда дословно; старое за пределами
         бюджета — одной выжимкой в начале (без LLM, гейт §5 уважен).
+        H9: ходы принимаются и в формате DialogStore (text), и в формате
+        мозга (content) — контракт устойчив к выбору вызывающего.
         """
         clean = [t for t in turns if t.get("role") in ("user", "assistant")
-                 and (t.get("text") or "").strip()]
+                 and _turn_text(t).strip()]
         if not clean:
             return []
 
@@ -161,15 +180,15 @@ class DialogStore:
         used = 0
         reserve = budget // 3
         for t in reversed(clean):
-            need = config.token_estimate(t["text"]) + 2
+            need = config.token_estimate(_turn_text(t)) + 2
             if tail and used + need > budget - reserve:
                 break
             if not tail and need > budget:
                 # крайний случай: даже новейший ход длиннее всего бюджета —
                 # честная выжимка фразы, не пустота и не обрубок посередине слова
                 return [{"role": t["role"],
-                         "content": _cap_words(_first_sentence(t["text"]), budget)}]
-            tail.insert(0, {"role": t["role"], "content": t["text"]})
+                         "content": _cap_words(_first_sentence(_turn_text(t)), budget)}]
+            tail.insert(0, {"role": t["role"], "content": _turn_text(t)})
             used += need
 
         # 2) более старые ходы — одной строкой-выжимкой
@@ -178,7 +197,7 @@ class DialogStore:
         if older:
             lines = []
             for t in older[-12:]:                   # глубже 12 ходов не тянем
-                line = "- %s: %s" % (t["role"], _first_sentence(t["text"]))
+                line = "- %s: %s" % (t["role"], _first_sentence(_turn_text(t)))
                 if config.token_estimate("\n".join(lines + [line])) > reserve:
                     break
                 lines.append(line)

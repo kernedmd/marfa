@@ -54,7 +54,7 @@ def _fake_sees(monkeypatch, content):
                         ("b64", (1920, 1080), (1280, 720)))
     monkeypatch.setattr(eyes, "health", lambda: True)
     monkeypatch.setattr(eyes, "_post_chat",
-                        lambda body: {"choices": [{"message":
+                        lambda body, timeout=None: {"choices": [{"message":
                                                    {"content": content}}]})
 
 
@@ -83,7 +83,7 @@ def test_parse_json_garbage_raises():
 def test_ask_schema_accepted(monkeypatch):
     seen = []
 
-    def fake_post(body):
+    def fake_post(body, timeout=None):
         seen.append(body.get("response_format", {}).get("type"))
         return {"choices": [{"message": {"content": "ок"}}]}
 
@@ -97,7 +97,7 @@ def test_ask_json_object_second_chance(monkeypatch):
     модель скована грамматикой и не rambling до лимита токенов."""
     seen = []
 
-    def fake_post(body):
+    def fake_post(body, timeout=None):
         fmt = body.get("response_format", {}).get("type")
         seen.append(fmt)
         if fmt == "json_schema":
@@ -111,7 +111,7 @@ def test_ask_json_object_second_chance(monkeypatch):
 
 
 def test_ask_all_attempts_dead(monkeypatch):
-    def boom(body):
+    def boom(body, timeout=None):
         raise RuntimeError("timeout")
 
     monkeypatch.setattr(eyes, "_post_chat", boom)
@@ -293,7 +293,7 @@ def test_describe_text_server_error(monkeypatch):
     monkeypatch.setattr(eyes, "_VISION_ERROR", None)
     monkeypatch.setattr(eyes, "health", lambda: True)
 
-    def boom(body):
+    def boom(body, timeout=None):
         raise RuntimeError("timeout")
 
     monkeypatch.setattr(eyes, "_post_chat", boom)
@@ -322,7 +322,7 @@ def _fake_camera(monkeypatch, content):
     monkeypatch.setattr(eyes, "health", lambda: True)
     monkeypatch.setattr(eyes, "_camera_b64", lambda width=960: "b64cam")
     monkeypatch.setattr(eyes, "_post_chat",
-                        lambda body: {"choices": [{"message":
+                        lambda body, timeout=None: {"choices": [{"message":
                                                    {"content": content}}]})
 
 

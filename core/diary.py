@@ -23,6 +23,25 @@ from typing import Optional
 from core import config
 
 
+def _parse_ts(raw) -> Optional[dt.datetime]:
+    """H1 аудита (раунд 2): created_at бывает ЧИСЛОМ (пишет Memory) и
+    ISO-строкой (ручная правка, импорт) — оба формата честно читаются,
+    дневник видит новые воспоминания, а не «0» навсегда."""
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        try:
+            return dt.datetime.fromtimestamp(float(raw))
+        except (ValueError, OSError, OverflowError):
+            return None
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return dt.datetime.fromisoformat(raw.strip())
+        except ValueError:
+            return None
+    return None
+
+
 def _read_json(path: Path) -> Optional[dict]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -32,7 +51,10 @@ def _read_json(path: Path) -> Optional[dict]:
 
 
 def _count_day_lines(path: Path, day: dt.date) -> int:
-    """Сколько записей JSONL приходится на дату day (поле ts = ISO)."""
+    """Сколько записей JSONL приходится на дату day (поле ts = ISO).
+
+    H2 аудита: битая строка с "ts": null (или не-словарём) — не повод
+    ронять дневник: TypeError ловится наравне с ValueError."""
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -40,10 +62,11 @@ def _count_day_lines(path: Path, day: dt.date) -> int:
     n = 0
     for line in lines:
         try:
-            ts = json.loads(line).get("ts", "")
-            if ts[:10] == day.isoformat():
+            rec = json.loads(line)
+            ts = rec.get("ts", "") if isinstance(rec, dict) else ""
+            if isinstance(ts, str) and ts[:10] == day.isoformat():
                 n += 1
-        except ValueError:
+        except (ValueError, TypeError, AttributeError):
             continue
     return n
 
@@ -85,11 +108,23 @@ def resolution() -> Optional[dict]:
 
 
 def _sanitize_voice(raw: str) -> str:
-    """Почистить ответ мозга: think-обрывки, заголовки, кавычки, лимит."""
+    """Почистить ответ мозга: think-обрывки, заголовки, кавычки, лимит.
+
+    N1 аудита (раунд 2): абзацы — часть живого рассказа: пустые строки
+    не выбрасываются (одиночные остаются), рассказ не слипается в
+    простыню — «тёплый тон хозяйки дома» живёт в абзацах."""
     text = re.sub(r"</?[a-zA-Z]+>", "", (raw or ""))
     lines = [ln.strip() for ln in text.strip().splitlines()]
-    lines = [ln for ln in lines if ln and not ln.startswith("#")]
-    text = "\n".join(lines).strip()
+    kept: list[str] = []
+    for ln in lines:
+        if not ln:
+            if kept and kept[-1]:
+                kept.append("")            # граница абзаца — живёт
+            continue
+        if ln.startswith("#"):
+            continue
+        kept.append(ln)
+    text = "\n".join(kept).strip()
     if len(text) >= 2 and (
             (text[0] == text[-1] and text[0] in "\"'")
             or (text[0] == "«" and text[-1] == "»")):
@@ -215,9 +250,13 @@ class Diary:
         memory_file = self.data_dir / "memory" / "memory.json"
         try:
             recs = json.loads(memory_file.read_text(encoding="utf-8"))
-            new_mem = [r for r in recs if isinstance(r, dict)
-                       and dt.datetime.fromtimestamp(
-                           float(r.get("created_at", 0))).date() == day]
+            new_mem = []
+            for r in recs:
+                if not isinstance(r, dict):
+                    continue
+                ts = _parse_ts(r.get("created_at"))
+                if ts is not None and ts.date() == day:
+                    new_mem.append(r)
             if new_mem:
                 facts["memory_new"] = len(new_mem)
         except (OSError, ValueError, TypeError, OverflowError):

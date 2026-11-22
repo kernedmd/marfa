@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import shlex
 import shutil
 import subprocess
 import sys
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Optional
@@ -33,6 +35,11 @@ from typing import Optional
 from core import config
 
 CHECK_TIMEOUT_SECS = 2          # осмотр лёгкий: мёртвый порт отвечает отказом
+# M7 аудита (раунд 2): критичному слуге доверяем больше — 30B с --mlock
+# честно разминается дольше 2 с после старта; поспешный вердикт «мозг
+# мёртв» поднимал ВТОРОЙ llama-server на том же порту и устраивал
+# драку за RAM. Warn-слуги остаются на лёгком таймауте.
+CRIT_CHECK_TIMEOUT_SECS = 10
 EARS_FRESH_SECS = 600           # сердце ушей свежее 10 минут — служба слушает
 DISK_WARN_GB = 20               # меньше — предупреждение
 DISK_CRIT_GB = 10               # меньше — критично, лечить нечем
@@ -67,9 +74,30 @@ START_CONFIG_FILE = config.HOME_DIR / "start_marfa.json"
 
 # ---------- инструменты осмотра ----------
 
+def _service_urls() -> dict:
+    """N6 аудита: адреса осмотра — из таблицы SERVICES (порты больше не
+    мёртвая декларация); мозг — из закона дома с env-переопределением
+    (тесты и переезд мозга живут на BRAIN_URL)."""
+    urls = {}
+    for sid, port, path, _key, _level in SERVICES:
+        if sid == "brain":
+            urls[sid] = config.BRAIN_URL.rstrip("/") + path
+        else:
+            urls[sid] = "http://127.0.0.1:%d%s" % (port, path)
+    return urls
+
+
 def _http_ok(url: str) -> bool:
+    """Жив ли HTTP-слуга. M7: таймаут — по критичности слуги из SERVICES
+    (crit разминается дольше warn — не хороним разогревающийся мозг)."""
     try:
-        with urllib.request.urlopen(url, timeout=CHECK_TIMEOUT_SECS) as r:
+        port = urllib.parse.urlsplit(url).port
+    except ValueError:
+        port = None
+    level = {s[1]: s[4] for s in SERVICES}.get(port)
+    timeout = CRIT_CHECK_TIMEOUT_SECS if level == "crit" else CHECK_TIMEOUT_SECS
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
             return r.status == 200
     except Exception:
         return False
@@ -94,9 +122,7 @@ def check_all(now: Optional[dt.datetime] = None) -> dict:
     now = now or dt.datetime.now()
     checks: dict = {}
 
-    urls = {"brain": config.BRAIN_URL.rstrip("/") + "/health",
-            "eyes": "http://127.0.0.1:8083/health",
-            "panel": "http://127.0.0.1:%d/api/status" % config.PORT_WEB}
+    urls = _service_urls()
     for sid, _port, _path, _key, level in SERVICES:
         ok = _http_ok(urls[sid])
         checks[sid] = _check(level, ok, "жив" if ok else "не отвечает")
@@ -121,10 +147,15 @@ def check_all(now: Optional[dt.datetime] = None) -> dict:
         free_gb = shutil.disk_usage(str(config.HOME_DIR)).free / 2**30
     except OSError:
         free_gb = -1.0
-    checks["disk"] = _check(
-        "crit" if 0 <= free_gb < DISK_CRIT_GB else "warn",
-        free_gb < 0 or free_gb >= DISK_WARN_GB,
-        "свободно %.1f ГБ" % free_gb if free_gb >= 0 else "не посмотреть")
+    if free_gb < 0:
+        # N5 аудита: «не смогли посмотреть» — это НЕ «всё ок»: осмотр
+        # честно говорит, что не посмотрел, и не рисует зелёную галочку
+        checks["disk"] = _check("warn", False, "не посмотреть — осмотр диска не удался")
+    else:
+        checks["disk"] = _check(
+            "crit" if free_gb < DISK_CRIT_GB else "warn",
+            free_gb >= DISK_WARN_GB,
+            "свободно %.1f ГБ" % free_gb)
     head = _git_head()
     checks["canon"] = _check("warn", head is not None,
                              head or "git молчит")
@@ -167,9 +198,32 @@ def render(report: dict) -> str:
 # ---------- лечение ----------
 
 def _spawn(cmd: str) -> None:
-    """Поднять слугу в отдельной консоли — как старт дома."""
-    subprocess.Popen(cmd, shell=True, cwd=str(config.HOME_DIR),
+    """Поднять слугу в отдельной консоли — как старт дома.
+
+    M6 аудита (раунд 2): shell=True + команда из start_marfa.json — путь
+    к RCE (write_file под стражем писал бы конфиг — доктор выполнял его
+    ЦЕЛОЙ shell-строкой: «del C:\\Marfa» уезжал бы исполнителем). Теперь —
+    список аргументов без shell; shell-метасимволы отвергаются на корню."""
+    if any(c in cmd for c in "&|<>^\n\r"):
+        raise ValueError("команда старта содержит shell-метасимволы — не выполняю: %s"
+                         % cmd)
+    argv = _split_cmd(cmd)
+    if not argv:
+        raise ValueError("пустая команда старта")
+    subprocess.Popen(argv, shell=False, cwd=str(config.HOME_DIR),
                      creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+
+
+def _split_cmd(cmd: str) -> list:
+    """Строку команды — в список аргументов. posix=False: обратные слэши
+    путей Windows живут; кавычки путей с пробелами снимаем."""
+    parts: list[str] = []
+    for tok in shlex.split(cmd, posix=False):
+        if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in "\"'":
+            tok = tok[1:-1]
+        if tok:
+            parts.append(tok)
+    return parts
 
 
 def _load_start_config() -> dict:

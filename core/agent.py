@@ -56,6 +56,7 @@
 from __future__ import annotations
 
 import ast
+import datetime as dt
 import json
 import operator as _op
 import re
@@ -63,7 +64,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from core import config, creator_gate, diary, eyes, hands, identity, progress
+from core import config, context, creator_gate, diary, eyes, hands, identity, progress
 from core import uptime as _uptime   # H7 аудита: момент рождения процесса — импорт модуля
                                     # (панель поднимает агента на старте), а не первый запрос
 from core.brain import BrainClient
@@ -474,30 +475,67 @@ class Agent:
             return Reply(identity.capabilities_report(memory=self.memory),
                          "python", "self_inspect")
 
+        # Ф74 + фишка аудита-2: задача в очередь одной фразой — «задача: проверить
+        # микрофон». План дня пересобирается (force): новая задача видна
+        # СЕГОДНЯ, а не завтра (M4). Двоеточие/тире обязательны — «задача была
+        # в том…» остаётся обычной речью для мозга.
+        m = re.match(r"^задача\s*[:—-]\s*(.+)$", t.strip()) \
+            or re.match(r"^добавь задачу\s*[:—-]?\s*(.+)$", t.strip())
+        if m:
+            from core.autonomy import DayPlanner, add_task, load_queue
+            title = m.group(1).strip()[:200]
+            task = add_task(title)
+            planner = DayPlanner()
+            rebuilt = False
+            if planner.load_plan(dt.date.today()) is not None:
+                planner.build_plan(force=True)
+                rebuilt = True
+            note = ("План дня пересобрала — она уже в нём."
+                    if rebuilt else
+                    "Войдёт в план дня в 08:00.")
+            return Reply("В очередь: «%s» (приоритет %s). %s"
+                         % (task["title"], task["priority"], note),
+                         "python", "add_task")
+
         return None
 
     # ---------- системный контекст мозгового трека ----------
 
     def _system_extra(self, user_text: str) -> str:
-        """Системный контекст мозгового трека.
+        """Системный контекст мозгового трека — ЧЕРЕЗ Ф51 (H8 аудита раунда 2).
 
-        Порядок — дисциплина промпта (доктрина §4): ЯДРО ЛИЧНОСТИ первым
-        и неизменным (префиксный KV-кэш, №51), затем МАНИФЕСТ возможностей
-        (тоже статичный — имена инструментов и команд, Г-2.3), затем
-        ЗАКОН СКОРОСТИ (статичный — краткость не дорожает ходами), затем
-        доктрина Создателя, состояние дома и RAG-воспоминания.
+        Раньше промпт собирался руками: идентичность + манифест + закон
+        скорости + доктрина + состояние + RAG — без бюджета и обрезки;
+        PROMPT_BUDGET_TOKENS=3072 был фикцией (context.build_system не звал
+        никто, кроме тестов). Теперь порядок тот же (статичное ядро —
+        первым, KV-кэш цел), но бюджет — ЗАКОН: RAG режется с конца,
+        переполнение — ЧП с уроком архитектору, а не молчаливый вылет
+        за контекст 4096.
         """
-        parts = [IDENTITY, identity.manifest(), SPEED_LAW,
-                 self.doctrine, _house_state()]
+        core = IDENTITY + "\n\n" + identity.manifest() + "\n\n" + SPEED_LAW
+        state = _house_state()
+        rag: list[str] = []
         if self.memory is not None:
             try:
                 found = self.memory.recall(user_text, top_k=3)
             except Exception:
                 found = []
-            if found:
-                rag = "\n".join("- " + r["text"] for r in found)
-                parts.append("Воспоминания (RAG):\n" + rag)
-        return "\n\n".join(parts)
+            rag = [str(r.get("text", "")) for r in found
+                   if isinstance(r, dict) and r.get("text")]
+        try:
+            prompt, rep = context.build_system(
+                doctrine=self.doctrine, state_text=state, genome_rules=[],
+                rag_memories=rag, core=core)
+        except ValueError as e:
+            _lesson("контекст-чп", str(e))
+            # ЧП дома не должно молча ронять чат: ядро и доктрина нерушимы,
+            # жертвуем состоянием и воспоминаниями — и честно говорим архитектору
+            prompt, rep = context.build_system(
+                doctrine=self.doctrine, state_text="", genome_rules=[],
+                rag_memories=[], core=core)
+        for d in rep.dropped:
+            _lesson("контекст-обрезан", d)   # что не влезло — видно архитектору
+        return prompt
 
     # ---------- действия мозга через РУКИ (надзор СТРАЖА) ----------
 
@@ -569,7 +607,15 @@ class Agent:
         # эфир: быстрые команды мгновенны, а вот мозговой трек — долгий;
         # чат обязан видеть, ЧТО происходит, пока он идёт (не молчать)
         progress.stage("собираю контекст: доктрина, воспоминания, состояние дома…")
-        system_extra = self._system_extra(user_text)
+        try:
+            system_extra = self._system_extra(user_text)
+        except Exception as e:
+            # ЧП контекста не должно отравлять чат 500-й: честный ответ
+            # с зовами архитектору (урок летит из _system_extra)
+            _lesson("контекст-сломался", "%s: %s" % (type(e).__name__, e))
+            return Reply("промпт не влез в закон дома (%d ток) — скажи "
+                         "архитектору, вот что вышло: %s"
+                         % (config.PROMPT_BUDGET_TOKENS, e), "fallback", None)
         progress.stage("мозг думает — кратко и по делу, ответ напечатается живьём…")
         try:
             decision = self.brain.ask_json(
@@ -593,15 +639,28 @@ class Agent:
             return self._act(decision["action"])
         if isinstance(decision, dict):
             # СКОРОСТЬ v1: штамп несёт и токены — «40,2 с · мозг · 84 ток»;
-            # снова две минуты? по токенам сразу видно, кто съел время
+            # снова две минуты? по токенам сразу видно, кто съел время.
+            # Фишка аудита-2: и ПРОМПТ-тоже — «165,8 с · мозг · 273 ток
+            # · промпт 2100»: большой промпт = долгий префикс, диагноз
+            # виден без консоли (штамп 22.11: 165,8 с при 273 ток — это
+            # промпт так думал, а не декод разошёлся)
             usage = getattr(self.brain, "last_usage", None)
             tok = None
+            ptok = None
             if isinstance(usage, dict):
                 try:
                     tok = int(usage.get("completion_tokens") or 0) or None
                 except (TypeError, ValueError):
                     tok = None
-            meta = {"tok": tok} if tok else None
+                try:
+                    ptok = int(usage.get("prompt_tokens") or 0) or None
+                except (TypeError, ValueError):
+                    ptok = None
+            meta: dict = {}
+            if tok:
+                meta["tok"] = tok
+            if ptok:
+                meta["ptok"] = ptok
             return Reply(str(decision.get("answer", "Нет ответа")), "brain", None,
-                         meta=meta)
+                         meta=meta or None)
         return Reply(str(decision), "brain", None)

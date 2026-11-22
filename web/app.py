@@ -287,22 +287,32 @@ def api_chat():
     # СКОРОСТЬ v1: сколько токенов напечатал мозг — в штамп и в память
     # диалога: «40,2 с · мозг · 84 ток». Снова две минуты? По токенам
     # сразу видно, кто съел время: декод (много ток) или промпт/ретрай.
+    # Аудит-2: и ПРОМПТ-токены тоже (метка ptok) — штамп «165,8 с ·
+    # мозг · 273 ток · промпт 2100» отличает долгий декод от долгого
+    # префикса без всякой консоли
     tok = None
+    ptok = None
     if isinstance(getattr(reply, "meta", None), dict):
         try:
             tok = int(reply.meta.get("tok")) or None
         except (TypeError, ValueError):
             tok = None
+        try:
+            ptok = int(reply.meta.get("ptok")) or None
+        except (TypeError, ValueError):
+            ptok = None
     meta = {"secs": secs, "src": reply.source}
     if tok:
         meta["tok"] = tok
+    if ptok:
+        meta["ptok"] = ptok
     DIALOGS.append(session, "user", text)          # ходы — после ответа:
     DIALOGS.append(session, "assistant", reply.text,  # неудача не портит память
                    meta=meta)
     # №12: готовый безопасный HTML — панель не доверяет мозгу ни байтом
     return jsonify({"reply": reply.text, "html": to_safe_html(reply.text),
                     "session": session, "secs": secs,
-                    "source": reply.source, "tok": tok,
+                    "source": reply.source, "tok": tok, "ptok": ptok,
                     "source_label": progress.source_label(reply.source)})
 
 
@@ -340,10 +350,12 @@ def api_dialog(session):
     for t in turns:
         meta = t.get("meta") if isinstance(t.get("meta"), dict) else {}
         tok = meta.get("tok")
+        ptok = meta.get("ptok")
         out.append({"role": t["role"], "text": t["text"],
                     "html": to_safe_html(t["text"]) if t["role"] == "assistant" else "",
                     "secs": meta.get("secs"),
                     "tok": int(tok) if isinstance(tok, (int, float)) else None,
+                    "ptok": int(ptok) if isinstance(ptok, (int, float)) else None,
                     "src_label": progress.source_label(str(meta.get("src", "")))
                     if meta.get("secs") is not None else ""})
     return jsonify({"session": sid, "turns": out})

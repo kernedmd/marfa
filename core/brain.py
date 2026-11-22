@@ -30,6 +30,18 @@ class BrainError(Exception):
     """Мозг не ответил или ответил не-JSON. Наверх уходит как честная ошибка."""
 
 
+def _extract_content(data) -> str:
+    """H6 аудита: сервер вернул 200 с телом без choices ("error", пустой
+    список) — это BrainError с честным диагнозом, а не KeyError.
+    «Мозг недоступен» и «мозг ответил криво» — разные болезни, разное
+    лечение: вторая лечится ретраем, первая — доктором."""
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as e:
+        raise BrainError("мозг вернул ответ без choices (%s): %s"
+                         % (type(e).__name__, str(data)[:200]))
+
+
 # ---------------------------------------------------------------
 # №9 «Темперамент из доктрины»: настроение Марфы читается из
 # data/creator_doctrine.json (поле mood), а не зашито в код.
@@ -180,7 +192,7 @@ class BrainClient:
                 if not sse:
                     data = json.loads(
                         b"".join(raw_lines).decode("utf-8", errors="replace"))
-                    content = data["choices"][0]["message"]["content"]
+                    content = _extract_content(data)
                     try:
                         on_text(content)
                     except Exception:
@@ -207,7 +219,9 @@ class BrainClient:
         настроение из доктрины > параметр не шлётся вовсе.
         """
         cap = config.GENERATION_BUDGET_TOKENS
-        mt = cap if gen_tokens is None else min(int(gen_tokens), cap)
+        # M1 аудита: gen_tokens=0/-1 не превращается в max_tokens=0
+        # (сервер вернул бы пустоту или ошибку) — нижняя граница 1
+        mt = cap if gen_tokens is None else max(1, min(int(gen_tokens), cap))
         mood = mood_params()
         temp = (float(temperature) if temperature is not None
                 else mood.get("temperature", DEFAULT_TEMPERATURE))
@@ -217,7 +231,7 @@ class BrainClient:
         if top_p_val is not None:
             payload["top_p"] = top_p_val
         data = self._post("/v1/chat/completions", payload)
-        return data["choices"][0]["message"]["content"]
+        return _extract_content(data)
 
     # ---------- строгий JSON (ADR-002) ----------
 
@@ -248,9 +262,15 @@ class BrainClient:
                 "поздоровайся в ответ внутри JSON.\n" + system_extra)},
         ]
         for t in (history or []):   # только user/assistant, мусор — мимо
-            if isinstance(t, dict) and t.get("role") in ("user", "assistant") \
-                    and isinstance(t.get("content"), str) and t["content"].strip():
-                messages.append({"role": t["role"], "content": t["content"]})
+            if not (isinstance(t, dict) and t.get("role") in ("user", "assistant")):
+                continue
+            content = t.get("content")
+            if not (isinstance(content, str) and content.strip()):
+                # H9 (раунд 2): DialogStore.turns отдаёт text — это тоже
+                # валидная история, а не «мусор мимо»
+                content = t.get("text")
+            if isinstance(content, str) and content.strip():
+                messages.append({"role": t["role"], "content": content})
         messages.append({"role": "user", "content": user_text})
         attempts = max(1, retries)
         mood = mood_params()   # №9: характер — из доктрины Создателя
@@ -270,7 +290,7 @@ class BrainClient:
                 data = self._post_stream("/v1/chat/completions", payload, on_text)
             else:
                 data = self._post("/v1/chat/completions", payload)
-            raw = data["choices"][0]["message"]["content"]
+            raw = _extract_content(data)
             raw = _strip_think(raw)
             usage = data.get("usage")
             if isinstance(usage, dict):

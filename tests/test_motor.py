@@ -69,7 +69,7 @@ def _armed_eyes(monkeypatch, descriptor=DESCRIPTOR, real=REAL, sent=SENT,
     monkeypatch.setattr(eyes, "_screenshot_b64",
                         lambda width=1280: ("b64", real, sent))
     monkeypatch.setattr(eyes, "_post_chat",
-                        lambda body: {"choices": [{"message": {"content":
+                        lambda body, timeout=None: {"choices": [{"message": {"content":
                          json.dumps(descriptor, ensure_ascii=False)}}]})
 
 

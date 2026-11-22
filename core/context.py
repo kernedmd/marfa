@@ -60,23 +60,42 @@ def _fit_block(title: str, body: str, remaining: int, report: ContextReport,
 def build_system(doctrine: str, state_text: str, genome_rules: list[str],
                  rag_memories: Optional[list[str]] = None,
                  history_text: str = "",
-                 budget: int = config.PROMPT_BUDGET_TOKENS) -> tuple[str, ContextReport]:
+                 budget: int = config.PROMPT_BUDGET_TOKENS,
+                 core: str = "") -> tuple[str, ContextReport]:
     """Собрать системный промпт по иерархии с гарантией бюджета (0.3).
 
     Возвращает (промпт, отчёт). История (Ф53) вписывается первой из остатка —
     у неё свой жёсткий лимит 1000; иерархия занимает остальное.
+
+    H8 аудита: core — статичное нерушимое ядро ДО доктрины (личность,
+    манифест, закон скорости): агент сводит свой промпт сюда, и бюджет
+    3072 перестаёт быть пожеланием. Ядро не режется никогда; ядро+доктрина
+    не влезают в бюджет — ЧП дома (ValueError), а не молчаливое переполнение.
     """
     report = ContextReport()
     if budget > config.PROMPT_BUDGET_TOKENS:
         raise ValueError("бюджет промпта выше закона 3072 — 0.3")
 
     # L0: доктрина нерушима (Раздел 7). Слишком длинная доктрина — ЧП дома.
+    core = (core or "").strip()
+    c_tok = config.token_estimate(core)
     d_tok = config.token_estimate(doctrine)
     if d_tok > HIERARCHY_BUDGET // 2:
         raise ValueError(f"доктрина раздулась до {d_tok} ток — нарушение Раздела 7, чинить руками Ильи")
+    l0 = ((core + "\n\n" + doctrine.strip()) if core else doctrine.strip())
+    l0_tok = c_tok + d_tok + (1 if core else 0)
+    # Ф53-резерв: история заказана — её 1000 неприкосновенны, ядро+доктрина
+    # обязаны влезть БЕЗ них
+    reserve = config.HISTORY_BUDGET_TOKENS if history_text else 0
+    if l0_tok > budget - reserve:
+        raise ValueError(
+            f"ядро+доктрина {l0_tok} ток не влезают в бюджет {budget} "
+            f"(минус {reserve} на историю) — ЧП дома, чинить руками Ильи")
+    if core:
+        report.level_tokens["L0_core"] = c_tok
     report.level_tokens["L0_doctrine"] = d_tok
-    parts = [doctrine.strip()]
-    used = d_tok
+    parts = [l0]
+    used = l0_tok
 
     remaining = budget - used
     # L1: состояние (короткое)
@@ -99,11 +118,14 @@ def build_system(doctrine: str, state_text: str, genome_rules: list[str],
     parts.append(block)
     remaining = budget - used
 
-    # L4: сжатая история Ф53 — свой лимит, иначе последняя
+    # L4: сжатая история Ф53 — свой лимит, иначе последняя.
+    # K1 аудита: блок ВЫЧИСЛЯЛСЯ, считался в used и level_tokens — но не
+    # ложился в parts. Отчёт говорил «история включена», а её не было.
     if history_text:
         h_budget = min(config.HISTORY_BUDGET_TOKENS, remaining)
         block = _fit_block("ИСТОРИЯ", history_text, h_budget, report, "L4_history")
         used += config.token_estimate(block)
+        parts.append(block)
 
     prompt = "\n".join(p for p in parts if p)
     report.prompt_tokens = config.token_estimate(prompt)

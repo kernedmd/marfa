@@ -79,14 +79,17 @@
         }
 
         // штамп под ответом: «12,4 с · мозг · 84 ток» — время И объём:
-        // если снова медленно — по токенам видно, кто съел время
-        function addStamp(secs, label, tok) {
+        // если снова медленно — по токенам видно, кто съел время.
+        // Аудит-2: большой промпт (ptok >= 1000) подписывается честно —
+        // «165,8 с · мозг · 273 ток · промпт 2100»: это префикс так думал
+        function addStamp(secs, label, tok, ptok) {
             if (secs === null || secs === undefined) return;
             const c = document.getElementById('chat');
             const d = document.createElement('div');
             d.className = 'stamp';
             d.textContent = fmtSecs(secs) + ' с · ' + (label || '') +
-                            (tok ? ' · ' + tok + ' ток' : '');
+                            (tok ? ' · ' + tok + ' ток' : '') +
+                            (ptok && ptok >= 1000 ? ' · промпт ' + ptok : '');
             c.appendChild(d);
             c.scrollTop = c.scrollHeight;
         }
@@ -136,7 +139,7 @@
                     document.getElementById('chat').innerHTML = '';
                     d.turns.forEach(t => {
                         add(t.role, t.text, t.html);
-                        if (t.role === 'assistant') addStamp(t.secs, t.src_label, t.tok);
+                        if (t.role === 'assistant') addStamp(t.secs, t.src_label, t.tok, t.ptok);
                     });
                     add('meta', '— разговор продолжается, Марфа помнит —');
                 }
@@ -197,7 +200,7 @@
                 });
                 const d = await r.json();
                 add('ai', d.reply || 'Нет ответа', d.html);
-                addStamp(d.secs, d.source_label, d.tok);
+                addStamp(d.secs, d.source_label, d.tok, d.ptok);
             } catch(e) {
                 add('ai', 'Ошибка: ' + e);
             } finally {
