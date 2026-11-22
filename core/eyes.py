@@ -61,6 +61,7 @@ import io
 import json
 import re
 import time
+from pathlib import Path
 from typing import Optional, Tuple
 
 import requests
@@ -625,6 +626,75 @@ def whats_changed_text() -> str:
         return head + tail + ". Порог — %.0f%% (пиксели, не мнение)" % CHANGE_PCT
     except Exception as e:
         return "сверка не удалась: " + str(e)
+
+
+# ---------------------------------------------------------------
+# №4 «ЗАПОМНИ ЭКРАН» — снимок + дескриптор в зрительную память
+# (роадмап 30, №4): data\screenshots\screen_*.png + .json-сайдкар
+# рядом + строка в память дома. «вспомни экран» находит обычным
+# recall — экран становится воспоминанием, а не мгновением.
+# ---------------------------------------------------------------
+
+def save_snapshot(memory=None) -> str:
+    """«запомни экран»: один взгляд — и экран в памяти надолго.
+
+    Что ложится: PNG-снимок (байты как есть, без пережатий) и
+    .json-сайдкар с тем же именем (описание, окно, элементы,
+    размеры, время) — в data\\screenshots\\; строка «Экран в ЧЧ:ММ:
+    <описание> (читаю: …)» — в память дома с тегом «экран».
+    Память споткнулась — файлы всё равно целы, честно докладываем.
+    Исключений не поднимает.
+    """
+    try:
+        if _VISION_ERROR:
+            return "глаза не готовы: " + _VISION_ERROR
+        progress.stage("запоминаю экран: смотрю и снимаю…")
+        d, real, small = describe_with_sizes()
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        shots = Path(str(config.SCREENSHOTS_DIR))
+        shots.mkdir(parents=True, exist_ok=True)
+        png = shots / ("screen_%s.png" % stamp)
+        json_path = shots / ("screen_%s.json" % stamp)
+        # уникальность в одну секунду: если файл уже есть — суффикс
+        n = 1
+        while png.exists():
+            png = shots / ("screen_%s_%d.png" % (stamp, n))
+            json_path = shots / ("screen_%s_%d.json" % (stamp, n))
+            n += 1
+        # эталон №3 — ЭТОТ ЖЕ кадр, что видит дескриптор: снимок и
+        # описание из одного взгляда, а не два раза «посмотри»
+        png.write_bytes(base64.b64decode(_last_frame.get("b64") or ""))
+        sidecar = {
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "description": d.get("description", ""),
+            "active_window": d.get("active_window", ""),
+            "elements": d.get("elements", []),
+            "screen_size": list(real),
+            "frame_size": list(small),
+            "png": png.name,
+        }
+        json_path.write_text(
+            json.dumps(sidecar, ensure_ascii=False, indent=1),
+            encoding="utf-8")
+        mem_note = ""
+        read = _read_texts(d, limit=4)
+        line = ("Экран в %s: %s%s" % (
+            time.strftime("%H:%M"),
+            str(d.get("description", "")).strip() or "экран",
+            (" (читаю: %s)" % read) if read and read.startswith("«") else ""))
+        if memory is not None:
+            try:
+                memory.remember(line, tags=["экран"], importance=2.0)
+            except Exception as e:
+                mem_note = ("; в память не легло (%s) — но снимок и "
+                            "описание целы" % e)
+        return ("Запомнила экран: снимок %s и описание рядом (%s). "
+                "%sСкажи «вспомни экран» — найду это воспоминание%s"
+                % (png.name, json_path.name,
+                   ("В строку памяти: «%s». " % line) if not mem_note else "",
+                   mem_note))
+    except Exception as e:
+        return "не смогла запомнить экран: " + str(e)
 
 
 # ---------------------------------------------------------------
