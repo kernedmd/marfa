@@ -669,6 +669,21 @@ class Agent:
                              " — скажи «проверь модуль pyperclip», аптечка "
                              "поставит сама", "python", "clipboard")
 
+        # №24 «логбук» (роадмап 30): CHANGELOG.md из истории git —
+        # первая строка каждого коммита и есть выжимка фичи
+        if lowq in ("логбук", "обнови логбук", "changelog", "журнал фишек"):
+            from evolution.changelog import commits_note, write_changelog
+            try:
+                rep = write_changelog()
+                return Reply("Логбук собран: %s за %d дней — CHANGELOG.md "
+                             "в корне дома. Первая строка каждого коммита "
+                             "и есть история фичи"
+                             % (commits_note(rep), rep["days"]),
+                             "python", "changelog")
+            except Exception as e:
+                return Reply("логбук не собрался: %s — расскажи "
+                             "архитектору" % e, "python", "changelog")
+
         # №2 «найди на экране» (роадмап 30): поиск элемента по описанию —
         # лестница зон с апскейлом; ответ: надпись, центр экрана, рамка.
         # Мозг молчит: координаты даёт сенсор, а не мудрость 30B
