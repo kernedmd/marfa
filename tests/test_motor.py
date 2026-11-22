@@ -286,10 +286,13 @@ def test_run_logs_to_hands_log(home, monkeypatch):
 
 # ---------- экзамен Р-0 (ТЗ 7) ----------
 
+# Пуск в координатах ОТПРАВЛЕННОГО кадра 1280×720 (экран 1920×1080 / 1.5):
+# экран [0, 1040, 96, 1080] -> кадр [0, 693, 64, 720]. Урок v3 глаз:
+# bbox обязан жить внутри кадра — валидатор глаз бракует всё за краем.
 DESCRIPTOR_PUSK = {
     "description": "рабочий стол",
     "elements": [{"type": "button", "text": "Пуск",
-                  "bbox": [0, 1040, 96, 1096], "confidence": 0.9}],
+                  "bbox": [0, 693, 64, 720], "confidence": 0.9}],
 }
 
 
@@ -301,7 +304,7 @@ def test_exam_hit(home, monkeypatch):
     monkeypatch.setattr(motor, "release", lambda: "руки легли (шов)")
     monkeypatch.setattr(motor, "_screenshot", lambda: ("b64", SENT, SENT))
     monkeypatch.setattr(motor, "_ask_hands",
-                        lambda task, b64: "click(48, 1068)")
+                        lambda task, b64: "click(32, 706)")
     from core import eyes
     monkeypatch.setattr(eyes, "_VISION_ERROR", None)
     monkeypatch.setattr(eyes, "_screenshot_b64",
@@ -330,6 +333,29 @@ def test_exam_miss_reports_numbers(home, monkeypatch):
                          json.dumps(DESCRIPTOR_PUSK, ensure_ascii=False)}}]})
     out = motor.exam()
     assert "мимо" in out and "НЕ совпали" in out
+
+
+def test_exam_hallucinated_pusk_bbox_dropped(home, monkeypatch):
+    """Урок v3 (честная геометрия): глаза назвали Пуск за краем кадра —
+    валидатор выбросил бокс, экзамен честно не состоялся, а не мерял
+    диалект по выдуманным цифрам."""
+    monkeypatch.setattr(motor, "server_alive", lambda: True)
+    monkeypatch.setattr(motor, "ensure_server", lambda wait_secs=None: (True, "на посту"))
+    monkeypatch.setattr(motor, "release", lambda: "руки легли (шов)")
+    hallucinated = {
+        "description": "рабочий стол",
+        "elements": [{"type": "button", "text": "Пуск",
+                      "bbox": [0, 1040, 96, 1096], "confidence": 0.9}],
+    }
+    from core import eyes
+    monkeypatch.setattr(eyes, "_VISION_ERROR", None)
+    monkeypatch.setattr(eyes, "_screenshot_b64",
+                        lambda width=1280: ("b64", SENT, SENT))
+    monkeypatch.setattr(eyes, "_post_chat",
+                        lambda body: {"choices": [{"message": {"content":
+                         json.dumps(hallucinated, ensure_ascii=False)}}]})
+    out = motor.exam()
+    assert "не состоялся" in out or "не нашли Пуск" in out
 
 
 def test_exam_no_pusk_honest(home, monkeypatch):
