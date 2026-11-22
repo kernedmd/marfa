@@ -540,6 +540,13 @@ class Agent:
                              "python", "chance")
             return Reply(chance.choose(opts), "python", "chance")
 
+        # Ф8 «план дня» (23.11): план + очередь одним снимком — мозг
+        # молчит, планировщик живёт своей жизнью в 08:00 (стремление)
+        if lowq in ("план дня", "план", "план на сегодня",
+                    "что по плану", "задачи на сегодня"):
+            from core import dayplan
+            return Reply(dayplan.today_plan(), "python", "dayplan")
+
         # СОН: «спи» — Создатель укладывает до утра или «проснись»
         if lowq in ("спи", "спать", "ложись спать", "на боковую"):
             return Reply(sleep.go_to_bed(reason="Илья сказал: спи"),

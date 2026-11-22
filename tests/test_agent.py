@@ -434,3 +434,16 @@ def test_agent_chance_commands(agent, srv):
     r4 = agent.handle("выбери")
     assert "что выбрать" in r4.text
     assert srv.calls == []
+
+
+# ---------- Ф8: план дня одной командой ----------
+
+def test_agent_dayplan_command(agent, srv, monkeypatch):
+    """«план дня» — снимок планировщика без консоли, мозг молчит."""
+    from core import dayplan
+    monkeypatch.setattr(dayplan, "today_plan", lambda now=None: "ПЛАН НА СЕГОДНЯ: тест")
+    for msg in ("план дня", "план", "что по плану?"):
+        r = agent.handle(msg)
+        assert r.tool_used == "dayplan", msg
+        assert "ПЛАН" in r.text, msg
+    assert srv.calls == []
