@@ -150,9 +150,10 @@ def parse_task(task: str) -> dict:
 
 
 _HINT = ("Формат задания: «нажми <надпись>» (клик по элементу с этой "
-         "надписью), «напечатай <текст>» (латиница), «клавиши <ctrl+c>», "
-         "«прокрути вверх/вниз». Пример: «руки нажми Пуск». Экзамен "
-         "цепочки глаза→руки — «руки, экзамен»")
+         "надписью), «напечатай <текст>» (латиница — напрямую, кириллица — "
+         "через буфер и ctrl+v), «клавиши <ctrl+c>», «прокрути вверх/вниз». "
+         "Пример: «руки нажми Пуск». Экзамен цепочки глаза→руки — «руки, "
+         "экзамен»")
 
 
 # ---------------------------------------------------------------
@@ -278,11 +279,31 @@ def guard_action(name: str, args, real_size) -> guard.Verdict:
         if not v.allowed():
             return v
         if any(ord(c) > 127 for c in text):
+            # Р-4 закрыт буфером (№18): не-латиница печатается ВСТАВКОЙ
+            # ctrl+v из буфера — прямой ввод pyautogui.write кириллицу
+            # не умеет. Исполнитель сам уводит такой текст в paste —
+            # сюда он попадёт, только если его позвали напрямую
             return guard.Verdict("HIGH", "deny",
-                                 "печать кириллицы/не-латиницы пока не умею "
-                                 "(Круг Р-4: буфер обмена)", "hands.type.charset")
+                                 "прямой ввод — только латиница; кириллица "
+                                 "печатается через буфер (ctrl+v)",
+                                 "hands.type.charset")
         return guard.Verdict("MEDIUM", "allow",
                              "печать %d символов" % len(text), "hands.type")
+    if name == "paste":
+        # №18+Р-4: текст кладётся в буфер и вставляется ctrl+v —
+        # так печатаются кириллица и любой юникод. Лимит — общий закон
+        # печати, секреты — мимо (буфер живёт дольше чата)
+        text = args[0] or ""
+        if len(text) > config.HANDS_TYPE_LIMIT:
+            return guard.Verdict("HIGH", "deny",
+                                 "вставка длиннее %d символов"
+                                 % config.HANDS_TYPE_LIMIT, "hands.paste.len")
+        v = guard.check_secrets(text)
+        if not v.allowed():
+            return v
+        return guard.Verdict("MEDIUM", "allow",
+                             "вставка из буфера %d символов" % len(text),
+                             "hands.paste")
     if name == "hotkey":
         key = (args[0] or "").strip().lower()
         if key not in config.HANDS_HOTKEY_WHITELIST:
@@ -453,8 +474,14 @@ def run(task: str) -> str:
         if plan["verb"] == "click":
             lines += _do_click(task, plan["target"], enabled())
         elif plan["verb"] == "type":
-            lines += _do_simple(task, "type", (plan["text"],),
-                                'напечатать «%s»' % plan["text"], enabled())
+            text = plan["text"]
+            if any(ord(ch) > 127 for ch in text):
+                # Р-4 закрыт (№18): кириллица/юникод — через буфер и
+                # ctrl+v, прямой ввод pyautogui.write их не умеет
+                lines += _do_paste(task, text, enabled())
+            else:
+                lines += _do_simple(task, "type", (text,),
+                                    'напечатать «%s»' % text, enabled())
         elif plan["verb"] == "hotkey":
             lines += _do_simple(task, "hotkey", (plan["combo"],),
                                 'нажать %s' % plan["combo"], enabled())
@@ -568,6 +595,40 @@ def _do_click(task: str, target: str, motor: bool) -> list:
                      "возможно, клик не сработал; скажи «посмотри», "
                      "проверю глазами" % (frac * 100))
     return lines
+
+
+def _do_paste(task: str, text: str, motor: bool) -> list:
+    """Печать кириллицы/юникода — через буфер и ctrl+v (№18+Р-4):
+
+    текст ложится в clipboard (страж: лимит печати, секреты мимо) и
+    вставляется hotkey ctrl+v из whitelist. Сухой режим — честный
+    план без движения мыши. Буфер споткнулся — честный отказ,
+    вставки не будет (ctrl+v без буфера вставил бы ПРОШЛЫЙ текст —
+    это хуже, чем ничего).
+    """
+    from core import hands as _hands
+    v = guard_action("paste", (text,), (1920, 1080))
+    guard.decide(v, {"tool": "ui_action", "task": task, "verb": "paste"})
+    _log_act({"task": task, "verb": "paste", "args": [len(text)],
+              "verdict": v.to_dict(), "mode": "motor" if motor else "dry"})
+    if not v.allowed():
+        _lesson("руки-страж", "%s: %s" % (task, v.reason))
+        return ["СТРАЖ ОТКАЗАЛ: %s" % v.reason]
+    if not motor:
+        return [("СУХОЙ РЕЖИМ: положила бы «%s» (%d симв.) в буфер и "
+                 "вставила ctrl+v. Включить моторику — кнопка 91"
+                 % (text[:40], len(text)))]
+    try:
+        clip_note = _hands.clipboard_write(text)
+    except Exception as e:
+        _lesson("руки-буфер", "%s: %s" % (task, e))
+        return [("БУФЕР не принял текст: %s — вставки не будет: ctrl+v "
+                 "без нового буфера вставил бы ПРОШЛОЕ, это хуже, чем "
+                 "ничего. Скажи «в буфер %s» — проверим буфер отдельно"
+                 % (e, text[:20]))]
+    res = _execute("hotkey", ("ctrl+v",))
+    return ["%s; вставила ctrl+v — «%s» (%d симв.)"
+            % (clip_note.split(".")[0], text[:40], len(text)), res]
 
 
 def _do_simple(task: str, name: str, args, human: str,

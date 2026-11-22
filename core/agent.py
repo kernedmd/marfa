@@ -650,6 +650,25 @@ class Agent:
                     "не следи за экран", "перестань следить за экраном"):
             return Reply(eyes.set_watch(False), "python", "screen_watch")
 
+        # №18 «запиши в буфер» (роадмап 30 + закрытие Р-4): текст в
+        # clipboard — только по прямой команде; кириллица теперь
+        # печатается руками ИМЕННО через буфер и ctrl+v
+        m = re.match(r"^(?:в\s+буфер|запиши\s+в\s+буфер|скопируй\s+в\s+буфер|"
+                     r"скопируй)\s*[:;,—-]?\s*(.+?)\s*[?.!…]*$", t, re.IGNORECASE)
+        if m:
+            from core import hands as _hands
+            payload = m.group(1).strip()
+            try:
+                return Reply(_hands.clipboard_write(payload),
+                             "python", "clipboard")
+            except PermissionError as e:
+                return Reply("СТРАЖ отказал: " + str(e),
+                             "python", "clipboard")
+            except Exception as e:
+                return Reply("буфер не принял: " + str(e) +
+                             " — скажи «проверь модуль pyperclip», аптечка "
+                             "поставит сама", "python", "clipboard")
+
         # №2 «найди на экране» (роадмап 30): поиск элемента по описанию —
         # лестница зон с апскейлом; ответ: надпись, центр экрана, рамка.
         # Мозг молчит: координаты даёт сенсор, а не мудрость 30B

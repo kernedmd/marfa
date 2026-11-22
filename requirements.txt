@@ -19,6 +19,11 @@ sounddevice>=0.4.6; platform_system == "Windows"
 # честный сухой режим: план действий без движения мыши ---
 pyautogui>=0.9.54; platform_system == "Windows"
 
+# --- Буфер обмена (№18 роадмапа 30, core\hands.py clipboard_write):
+# «в буфер <текст>» и печать кириллицы руками (кладу и вставляю ctrl+v).
+# Без него — честный отказ, аптечка поставит сама ---
+pyperclip>=1.8; platform_system == "Windows"
+
 # --- Камера: «посмотри в камеру» (веб-камера как второй источник зрения,
 # core\eyes.py). Без него — честная ошибка с командой установки ---
 opencv-python>=4.9; platform_system == "Windows"
