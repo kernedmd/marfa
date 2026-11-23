@@ -25,6 +25,11 @@ r"""start_marfa.py — №22: автозапуск дома одной кома�
   ожидания прятал смерть команды (кавычки терапии §15 убили сервер
   в первый же рестарт, а старт говорил «проверь позже»); не ожил —
   старт говорит посмотреть консоль мозга, а не молчит надеждой;
+- KV-ПРЕФИКС (день-9, Ф42): сборка llama-server пробуется на
+  --cache-reuse (запуск --help); знает — brain_cmd получает флаг, и
+  статичное ядро промпта не пересчитывается на каждом ходу.
+  Не знает — честный отказ, флаг не ставится (закон дня-8: неизвестный
+  флаг убивает сервер на старте);
 - --в-планировщик вписывает в планировщик Windows ДВЕ задачи:
   «Марфа» — поднять дом при входе в систему;
   «Марфа-синхронизация» — scripts\80_sync_github.bat /auto каждые 2 часа
@@ -135,6 +140,12 @@ def ensure_config(path: Path) -> dict:
     День-8: конфиг с ядовитой командой мозга (кавычки терапии §15)
     лечится при каждом старте — бомба ждала первого рестарта,
     не дать ей ждать второго.
+    День-9 (Ф42): сборка сервера ПРОБИЕТСЯ на знание --cache-reuse и,
+    если знает, команда мозга получает KV-префикс — статичное ядро
+    промпта (~2-3 тыс ток) больше не пересчитывается на каждом ходу.
+    Проба не угадывает: только ответ --help решает (закон дня-8 —
+    неизвестный флаг убивает сервер на старте). Ответ пробы живёт
+    в data/server_caps.json и перепроверяется по времени бинарника.
     """
     if not path.exists():
         path.write_text(json.dumps(TEMPLATE, ensure_ascii=False, indent=2),
@@ -148,7 +159,87 @@ def ensure_config(path: Path) -> dict:
               "сервера (WinError 10061) — хвост снят, мышление выключено "
               "на клиенте; старая команда — в журнале старта")
         _log("конфиг: brain_cmd вылечен от кавычек терапии §15 (день-8)")
+    if _ensure_kv_prefix(cfg):
+        path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
+                        encoding="utf-8")
+        print("KV-ПРЕФИКС: сборка llama-server знает --cache-reuse — "
+              "статичное ядро промпта больше не пересчитывается на "
+              "каждом ходу (мозг на CPU ускоряется на длинных промптах)")
+        _log("конфиг: brain_cmd получил --cache-reuse (Ф42, проба сборки)")
     return cfg
+
+
+# Ф42: сколько токенов должен иметь общий кусок, чтобы кэш имел смысл.
+# Ядро промпта (личность+манифест+законы+доктрина) — ~2-3 тыс ток,
+# 256 — консервативный минимум куска переиспользования.
+KV_REUSE_CHUNK = 256
+
+
+def _caps_file() -> Path:
+    return HOME / "data" / "server_caps.json"
+
+
+def _probe_cache_reuse(exe: str):
+    """Спросить у бинарника, знает ли он --cache-reuse. True/False —
+    ответ сборки; None — спросить не вышло (не угадываем, флага не
+    ставим: неизвестный флаг убивает сервер — урок дня-8)."""
+    try:
+        r = subprocess.run([exe, "--help"], capture_output=True, text=True,
+                           timeout=30, cwd=str(HOME))
+        blob = (r.stdout or "") + (r.stderr or "")
+        return "cache-reuse" in blob
+    except Exception:
+        return None
+
+
+def _ensure_kv_prefix(cfg: dict) -> bool:
+    """Добавить --cache-reuse в brain_cmd, если сборка его знает.
+
+    Возвращает True, если команда ИЗМЕНИЛАСЬ (конфиг надо сохранить).
+    Закон дня-8 не нарушается: флаг и значение — без кавычек. Проба
+    стоит один запуск --help (доли секунды) и кэшируется в
+    data/server_caps.json по пути+времени бинарника: смена сборки
+    llama.cpp — новая проба, обычный старт — без пробы.
+    """
+    cmd = (cfg.get("brain_cmd") or "").strip()
+    if not cmd or "--cache-reuse" in cmd:
+        return False
+    exe = cmd.split()[0]
+    exe_path = Path(exe)
+    if not exe_path.is_absolute():
+        exe_path = HOME / exe_path
+    try:
+        mtime = exe_path.stat().st_mtime
+    except OSError:
+        return False  # бинарника нет — старт сам скажет честно, не гадаем
+    caps = {}
+    try:
+        caps = json.loads(_caps_file().read_text(encoding="utf-8"))
+        if not isinstance(caps, dict):
+            caps = {}
+    except (OSError, ValueError):
+        caps = {}
+    if caps.get("exe") == str(exe_path) and caps.get("mtime") == mtime \
+            and isinstance(caps.get("cache_reuse"), bool):
+        supported = caps["cache_reuse"]
+    else:
+        supported = _probe_cache_reuse(str(exe_path))
+        if supported is None:
+            return False
+        try:
+            _caps_file().parent.mkdir(parents=True, exist_ok=True)
+            _caps_file().write_text(json.dumps(
+                {"exe": str(exe_path), "mtime": mtime,
+                 "cache_reuse": bool(supported)},
+                ensure_ascii=False, indent=1), encoding="utf-8")
+        except OSError:
+            pass  # кэш пробы не записался — просто спросим в следующий раз
+    if not supported:
+        _log("конфиг: сборка не знает --cache-reuse — KV-префикс не ставлю "
+             "(честный отказ, Ф42)")
+        return False
+    cfg["brain_cmd"] = cmd + " --cache-reuse %d" % KV_REUSE_CHUNK
+    return True
 
 
 def _alive(port: int, path: str) -> bool:
