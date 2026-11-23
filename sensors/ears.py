@@ -266,6 +266,67 @@ def check(model_dir: Optional[Path] = None) -> str:
             % (s.model_dir.name, out["event"]))
 
 
+def selftest() -> str:
+    r"""«проверь уши» — живой осмотр слуха ПО СТУПЕНЯМ, ничего не запуская.
+
+    Урок живого лога 23.11: Марфа повторяла «не могу слышать голос», а
+    ЧТО чинить — не называла (и на «проверь микрофон» уходила в общие
+    слова). Осмотр называет ступень поломки и ТОЧНОЕ лечение:
+      1) СЛУЖБА — сердце data\ears_status.json свежее? Диагноз из статуса
+         (no_mic / no_model / no_sounddevice / висит), не выдумка;
+      2) МОДЕЛЬ — файлы vosk на месте? (быстрая проверка по маркеру
+         am/final.mdl, без загрузки; вложенная распаковка — по имени);
+      3) ЗВУК — sounddevice видит входные устройства? (нет обёртки —
+         команда установки в venv, не в системный Python).
+    Исключений не поднимает: каждая ступень честна отдельно.
+    """
+    lines = ["ПРОВЕРКА УШЕЙ (вживую, не по памяти):"]
+
+    # --- 1. служба ---
+    from core import identity   # config-only, цикла нет
+    diag = identity.ears_diagnosis()
+    service_alive = diag.startswith("живы")
+    lines.append("- служба слуха: " + diag)
+
+    # --- 2. модель ---
+    model_dir = Path(config.EARS_MODEL_DIR)
+    if model_files_ok(model_dir):
+        lines.append("- модель ушей: на месте (%s)" % model_dir.name)
+    elif model_files_ok(model_dir / model_dir.name):
+        lines.append("- модель ушей: ВЛОЖЕННАЯ распаковка — кнопка 85 "
+                     "(scripts\\85_fix_ears.bat) поднимет файлы на уровень")
+    else:
+        lines.append("- модель ушей: НЕТ — кнопка 85 (scripts\\85_fix_ears.bat) "
+                     "скачает и положит сама")
+
+    # --- 3. звук ---
+    try:
+        import sounddevice as sd  # noqa: F401 — наличие обёртки
+        devs = _input_devices(sd)
+        if devs:
+            names = "; ".join(n for _, n in devs[:4])
+            lines.append("- микрофоны видит Windows: " + names)
+        else:
+            lines.append("- микрофонов НЕТ: воткни или включи микрофон "
+                         "(у веб-камеры свой); Параметры → Система → Звук → Вход")
+    except ImportError:
+        lines.append("- обёртки звука нет: venv\\Scripts\\python.exe -m pip "
+                     "install sounddevice (голый pip ставит мимо дома)")
+    except Exception as e:
+        lines.append("- звук не выяснить: %s" % e)
+
+    # --- итог: лечение по слабейшей ступени ---
+    if service_alive:
+        lines.append("УШИ СЛЫШАТ — позови «Марфа» вслух, сторож имени "
+                     "должен отозваться в консоли службы.")
+    else:
+        lines.append("ЧТО ДЕЛАТЬ: поднять службу — Старт_Марфа.bat (пятый "
+                     "слуга, поднимается сам) или кнопка 89 "
+                     "(scripts\\89_live_voice.bat); если строки выше ругаются "
+                     "на модель или звук — сначала они.")
+    return "\n".join(lines)
+
+
 def demo(seconds: float = 60.0) -> None:
     """Живое демо на Z440: слушает микрофон, печатает всё услышанное.
 

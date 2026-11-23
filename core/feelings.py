@@ -143,6 +143,53 @@ def _slept_hours_safe(now: dt.datetime) -> Optional[float]:
         return None
 
 
+def _praise_file() -> Path:
+    """Журнал похвал: data\\praise.json (Ф6, 23.11).
+
+    Похвала — ФАКТ, а не выдумка: «спасибо» от Создателя — событие дня,
+    у него своя книжка. Барометр читает её как любые другие факты."""
+    return Path(config.DATA_DIR) / "praise.json"
+
+
+def add_praise(what: str = "спасибо") -> str:
+    """Записать похвалу Создателя (Ф6). Возвращает человеческий ответ.
+
+    Журнал — простой список {ts, what}, потолок 100 записей (похвала
+    — не летопись, старше недели не нужна). Файл битый — начинается
+    заново: потерянная похвала грустно, но не ломает орган.
+    """
+    try:
+        items = json.loads(_praise_file().read_text(encoding="utf-8"))
+        if not isinstance(items, list):
+            items = []
+    except (OSError, ValueError):
+        items = []
+    items.append({"ts": dt.datetime.now().isoformat(timespec="seconds"),
+                  "what": str(what)[:40]})
+    _praise_file().parent.mkdir(parents=True, exist_ok=True)
+    _praise_file().write_text(
+        json.dumps(items[-100:], ensure_ascii=False, indent=1),
+        encoding="utf-8")
+    n_today = _praise_today(dt.datetime.now())
+    return ("И мне приятно — записала в книжку радостей (сегодня уже %d). "
+            "Барометр теперь честно скажет «мне радостно» с причиной "
+            "«Илья похвалил»." % n_today)
+
+
+def _praise_today(now: dt.datetime) -> int:
+    """Сколько похвал сегодня (для барометра — без краха)."""
+    try:
+        items = json.loads(_praise_file().read_text(encoding="utf-8"))
+        if not isinstance(items, list):
+            return 0
+        today = now.date().isoformat()
+        return sum(1 for it in items
+                   if isinstance(it, dict)
+                   and str(it.get("ts", ""))[:10] == today)
+    except (OSError, ValueError):
+        return 0
+
+
 # ---------------------------------------------------------------
 # барометр
 # ---------------------------------------------------------------
@@ -169,7 +216,7 @@ def compute(now: Optional[dt.datetime] = None) -> dict:
             "value": v,
             "reason": "не разговаривали %s" % _fmt_h(since)}
 
-    # радость: живой день — разговоры, задачи, воспоминания
+    # радость: живой день — разговоры, задачи, воспоминания, ПОХВАЛА (Ф6)
     joy, joy_why = 0.0, []
     n_dialogs = _dialogs_today(now)
     if n_dialogs:
@@ -181,6 +228,10 @@ def compute(now: Optional[dt.datetime] = None) -> dict:
         joy += 0.15 * (done / total)
         if done:
             joy_why.append("задач закрыто: %d из %d" % (done, total))
+    n_praise = _praise_today(now)
+    if n_praise:
+        joy += min(0.4, 0.2 * n_praise)
+        joy_why.append("Илья похвалил: %d раз сегодня" % n_praise)
     if joy_why:
         out["радость"] = {"value": _clamp(joy), "reason": "; ".join(joy_why)}
 

@@ -62,7 +62,13 @@ SERVICES = [
 TEMPLATE = {
     "brain_cmd": (
         "llama.cpp\\llama-server.exe -m models\\Qwen3-30B-A3B-Q4_K_M.gguf "
-        "--host 127.0.0.1 --port 8082 -ngl 0 --temp 0.3"
+        "--host 127.0.0.1 --port 8082 -ngl 0 "
+        # терапия §15 (23.11): контекст 8192 (дефолт был 4096 — промпт
+        # 4143 ток резал ЯДРО), сэмплинг без мышления 0.7/0.8, мышление
+        # выключено и на сервере (--jinja + chat_template_kwargs):
+        # двойное мышление съедало 80% времени хода
+        "-c 8192 --temp 0.7 --top-p 0.8 --top-k 20 --repeat-penalty 1.0 "
+        "--jinja --chat-template-kwargs \"{\"enable_thinking\": false}\""
     ),
     "eyes_cmd": (
         "llama.cpp\\llama-server.exe -m models\\vlm\\Qwen2.5-VL-3B-"

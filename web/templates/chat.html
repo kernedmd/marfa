@@ -36,11 +36,18 @@
         .typing .dots::after { content: ''; animation: dots 1.2s steps(4, end) infinite; }
         @keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } }
         .typing .stage { display: block; margin-top: 4px; opacity: 0.75; max-width: 320px; }
-        /* СКОРОСТЬ v1: живой черновик — мозг печатает ответ прямо в чат */
+        # СКОРОСТЬ v1: живой черновик — мозг печатает ответ прямо в чат
         .typing .preview { display: block; margin-top: 6px; max-width: 340px;
                            font-style: italic; opacity: 0.9; white-space: pre-wrap;
                            border-left: 2px solid var(--border); padding-left: 8px; }
         .stamp { font-size: 11px; color: #6e7681; align-self: flex-start; margin-top: -6px; padding-left: 8px; }
+        /* №14 «кнопка глаз»: взгляд одним кликом — превью + описание */
+        #eye { padding: 6px 12px; font-size: 13px; font-weight: normal; background: var(--card); color: var(--text);
+               border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+        #eye:disabled { opacity: 0.5; cursor: wait; }
+        .glance { background: var(--card); border: 1px solid var(--border); color: var(--text);
+                  align-self: flex-start; padding: 10px 15px; border-radius: 10px; max-width: 70%; }
+        .glance img { max-width: 100%; border-radius: 6px; margin-top: 6px; display: block; border: 1px solid var(--border); }
     </style>
 </head>
 <body>
@@ -50,6 +57,7 @@
             <span class="dot" id="w-panel" title="панель"></span>панель
             <span class="dot" id="w-brain" title="мозг 8082"></span>мозг
             <span class="dot" id="w-eyes" title="глаза 8083"></span>глаза
+            <button id="eye" onclick="look()" title="посмотреть на экран одним кликом">глаз</button>
             <button id="theme" onclick="toggleTheme()" title="сменить оформление">день</button>
         </span>
     </header>
@@ -144,6 +152,50 @@
                     add('meta', '— разговор продолжается, Марфа помнит —');
                 }
             }).catch(() => {});
+
+        // Ф10 «будильник»: открыл панель — назвонившие напоминания
+        // встречают первой строкой (текст через textContent — XSS-гигиена №12)
+        fetch('/api/reminders').then(r => r.json()).then(d => {
+            if (d && d.note) add('ai', d.note);
+        }).catch(() => {});
+
+        // №14 «кнопка глаз»: один клик — один взгляд. Превью и описание
+        // приходят с сервера; всё текстовое — через esc() (XSS-гигиена №12:
+        // сенсор — тоже недоверенный источник текста). Глазки заняты —
+        // кнопка ждёт честно (disabled), а не плодит взгляды.
+        async function look() {
+            const btn = document.getElementById('eye');
+            if (btn.disabled) return;
+            btn.disabled = true;
+            const c = document.getElementById('chat');
+            const box = document.createElement('div');
+            box.className = 'typing';
+            box.innerHTML = '<span class="dots">смотрю на экран</span>' +
+                            '<span class="stage">глаза читают надписи и кнопки…</span>';
+            c.appendChild(box);
+            c.scrollTop = c.scrollHeight;
+            try {
+                const r = await fetch('/api/eyes');
+                const d = await r.json();
+                box.remove();
+                const g = document.createElement('div');
+                g.className = 'glance';
+                if (d.ok) {
+                    g.innerHTML = '<b>Вижу:</b> ' + esc(d.description) +
+                                  (d.preview ? '<img src="' + d.preview + '" alt="экран">' : '') +
+                                  '<span class="stamp">' + fmtSecs(d.secs) + ' с · глаза</span>';
+                } else {
+                    g.textContent = 'глаза не смогли: ' + (d.error || 'неизвестно почему');
+                }
+                c.appendChild(g);
+                c.scrollTop = c.scrollHeight;
+            } catch (e) {
+                box.remove();
+                add('ai', 'глаза не смогли: ' + e);
+            } finally {
+                btn.disabled = false;
+            }
+        }
 
         // ЭФИР: индикатор думания — тикающие секунды + живая стадия.
         // «Непонятно, пока не запустишь консоль» — больше не про этот чат:

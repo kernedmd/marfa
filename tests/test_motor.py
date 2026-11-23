@@ -360,8 +360,10 @@ def test_run_type_dry_and_guard(home, monkeypatch):
     _armed_eyes(monkeypatch)      # печать глаз не требует, но пусть живут
     out = motor.run("напечатай hello")
     assert "СУХОЙ РЕЖИМ" in out and "hello" in out
+    # Р-4 закрыт буфером (№18): кириллица больше не отказ стража —
+    # честный план «буфер + ctrl+v»
     out2 = motor.run("напечатай привет")
-    assert "СТРАЖ ОТКАЗАЛ" in out2 and "латиниц" in out2
+    assert "СУХОЙ РЕЖИМ" in out2 and "буфер" in out2 and "ctrl+v" in out2
 
 
 def test_run_hotkey_whitelisted_and_not(home, monkeypatch):

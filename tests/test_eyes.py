@@ -252,7 +252,7 @@ def test_describe_text_readable(monkeypatch):
                "Открыт блокнот, в нём заметка «Купить молоко». Внизу панель "
                "задач, слева кнопка «Пуск».")
     text = eyes.describe_text()
-    assert text.startswith("Вижу: Открыт блокнот")
+    assert text.startswith("Вижу на ЭКРАНЕ: Открыт блокнот")
     assert "Купить молоко" in text          # надписи прочитаны дословно
     assert "Пуск" in text
     assert "глаза думали" in text
@@ -263,7 +263,7 @@ def test_describe_text_strips_generation_garbage(monkeypatch):
     """Сенсор — не парсер: fences и «Ответ:» не попадают в чат."""
     _fake_sees(monkeypatch, "```text\nОткрыт проводник с папками.\n```")
     text = eyes.describe_text()
-    assert text.startswith("Вижу: Открыт проводник")
+    assert text.startswith("Вижу на ЭКРАНЕ: Открыт проводник")
     assert "```" not in text
 
 
@@ -272,7 +272,7 @@ def test_describe_text_json_habit_falls_back(monkeypatch):
     (description), не сырой JSON."""
     _fake_sees(monkeypatch, _json.dumps(DESCRIPTOR, ensure_ascii=False))
     text = eyes.describe_text()
-    assert text.startswith("Вижу: Открыт браузер")
+    assert text.startswith("Вижу на ЭКРАНЕ: Открыт браузер")
     assert "{" not in text and "Элементы" not in text
 
 
@@ -332,7 +332,7 @@ def test_camera_describes_human(monkeypatch):
         "objects": [{"name": "человек", "bbox": [1, 2, 3, 4],
                      "confidence": 0.9}]}, ensure_ascii=False))
     text = eyes.describe_camera_text()
-    assert text.startswith("Вижу в камере:")
+    assert text.startswith("Вижу в ВЕБ-КАМЕРЕ:")
     assert "мужчина" in text and "камера думала" in text
 
 
@@ -570,7 +570,7 @@ def test_agent_camera_command(monkeypatch):
     ветка камеры обязана стоять ДО экранной (начинается с «посмотри »)."""
     a = _agent(monkeypatch, "Вижу экран")
     monkeypatch.setattr(eyes, "describe_camera_text",
-                        lambda: "Вижу в камере: мужчина")
+                        lambda: "Вижу в ВЕБ-КАМЕРЕ: мужчина")
     for msg in ("посмотри в камеру", "включи камеру", "кто в камере",
                 "посмотри на меня"):
         r = a.handle(msg)
@@ -652,3 +652,82 @@ def test_house_state_eyes_down(monkeypatch):
     monkeypatch.setattr(eyes, "health_cached", lambda period=30.0: False)
     s = agent._house_state()
     assert "не запущен" in s and "зрения сейчас нет" in s
+
+
+# ---------- ЗРИТЕЛЬНАЯ ПАМЯТЬ СОЗДАТЕЛЯ (23.11, Ф1) ----------
+
+def _home_fs(monkeypatch, tmp_path):
+    """tmp-дом для файлов зрительной памяти."""
+    from core import config
+    monkeypatch.setenv("MARFA_HOME", str(tmp_path))
+    monkeypatch.setattr(config, "HOME_DIR", tmp_path)
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    return config
+
+
+def test_remember_creator_saves_file_and_memory(monkeypatch, tmp_path):
+    """«запомни меня»: описание ложится в creator_face.json И в память
+    дома с тегом — урок лога (полосатая футболка должна пережить кадр)."""
+    cfg = _home_fs(monkeypatch, tmp_path)
+    _fake_camera(monkeypatch, _json.dumps({
+        "description": "Мужчина в полосатой футболке, короткая борода"},
+        ensure_ascii=False))
+    saved = []
+    mem = type("M", (), {"remember": staticmethod(
+        lambda text, tags=None, importance=0.0: saved.append((text, tags)))})()
+    text = eyes.remember_creator(memory=mem)
+    assert "Запомнила" in text and "полосатой футболке" in text
+    rec = _json.loads(eyes.creator_face_file().read_text(encoding="utf-8"))
+    assert "полосатой футболке" in rec["description"]
+    assert saved and "создатель" in saved[0][1]
+
+
+def test_remember_creator_survives_broken_memory(monkeypatch, tmp_path):
+    """RAG споткнулся — зрительная память всё равно целa (файл не
+    зависит от базы), дом не падает."""
+    _home_fs(monkeypatch, tmp_path)
+    _fake_camera(monkeypatch, _json.dumps(
+        {"description": "Мужчина в очках"}, ensure_ascii=False))
+
+    class Boom:
+        def remember(self, *a, **kw):
+            raise RuntimeError("база закрыта")
+
+    text = eyes.remember_creator(memory=Boom())
+    assert "Запомнила" in text
+    assert eyes.creator_face() == "Мужчина в очках"
+
+
+def test_recognize_creator_without_memory_is_honest(monkeypatch, tmp_path):
+    """«узнай меня» без «запомни меня» — честная подсказка, не выдумка
+    «конечно, это ты»."""
+    _home_fs(monkeypatch, tmp_path)
+    text = eyes.recognize_creator()
+    assert "ещё нет" in text and "запомни меня" in text
+
+
+def test_recognize_creator_feeds_both_texts(monkeypatch, tmp_path):
+    """Узнавание честно: сенсор получает и сохранённое описание, и новый
+    кадр; ответ сенсора доезжает до Создателя без подгонки."""
+    _home_fs(monkeypatch, tmp_path)
+    eyes.creator_face_file().parent.mkdir(parents=True, exist_ok=True)
+    eyes.creator_face_file().write_text(_json.dumps(
+        {"description": "Мужчина в полосатой футболке"},
+        ensure_ascii=False), encoding="utf-8")
+    prompts = []
+    _fake_camera(monkeypatch, _json.dumps({
+        "description": "Похож на Создателя: та же полосатая футболка"},
+        ensure_ascii=False))
+    import core.eyes as _e
+    real_ask = _e._ask
+
+    def spy_ask(b64, prompt, schema, **kw):
+        prompts.append(prompt)
+        return real_ask(b64, prompt, schema, **kw)
+
+    monkeypatch.setattr(_e, "_ask", spy_ask)
+    text = eyes.recognize_creator()
+    assert "Сверяю с зрительной памятью" in text
+    assert "Похож на Создателя" in text
+    assert prompts and "полосатой футболке" in prompts[-1]
+    assert "Не подгоняй" in prompts[-1]

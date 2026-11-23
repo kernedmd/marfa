@@ -144,6 +144,42 @@ class DialogStore:
         """Все сессии (для дневника и чистки)."""
         return sorted(p.stem[len("session_"):] for p in self.dir.glob("session_*.json"))
 
+    def last_user_activity(self) -> Optional[dt.datetime]:
+        """Когда Создатель говорил с домом ПОСЛЕДНИЙ РАЗ (любая сессия).
+
+        Ф3/Ф4 (23.11): приветствие и дайджест «что нового» должны знать,
+        сколько мы не виделись — из первых рук (файлы диалога), а не из
+        выдумки мозга. Штамп хода «dd.mm HH:MM» без года: год выводим
+        сами (декабрь→январь честно переносится), битые штампы — мимо.
+        Нет ходов — None: «мы ещё не разговаривали», не «минуту назад».
+        """
+        best: Optional[dt.datetime] = None
+        try:
+            files = list(self.dir.glob("session_*.json"))
+        except OSError:
+            return None
+        now = dt.datetime.now()
+        for p in files:
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                turns = data.get("turns", []) if isinstance(data, dict) else []
+            except (OSError, ValueError):
+                continue
+            for t in turns:
+                if not (isinstance(t, dict) and t.get("role") == "user"):
+                    continue
+                try:
+                    ts = dt.datetime.strptime(str(t.get("ts", "")),
+                                              "%d.%m %H:%M")
+                except ValueError:
+                    continue
+                ts = ts.replace(year=now.year)
+                if ts > now + dt.timedelta(days=1):
+                    ts = ts.replace(year=now.year - 1)   # декабрьский след в январе
+                if best is None or ts > best:
+                    best = ts
+        return best
+
     def prune(self, keep_days: int = _KEEP_DAYS,
               now: Optional[float] = None) -> list[str]:
         """Удалить сессии, молчащие дольше keep_days. Возвращает имена."""

@@ -116,6 +116,14 @@ def default_jobs() -> list[dict]:
         from core import librarian
         return librarian.tick()
 
+    def _weekly_audit() -> str:
+        # №29: еженедельный доклад архитектора (вс 20:00) — тесты,
+        # коммиты, диск, дрейф канона; отчёт в logs/architect/weekly_*.md.
+        # Вечная служба переживает упавший источник (закон №10 р3)
+        import architect_oncall
+        text = architect_oncall.weekly_report()
+        return "доклад архитектора: %d строк" % len(text.splitlines())
+
     return [
         job("plan", "daily", at="08:00", what="план дня (Ф71)", run=_plan),
         job("diary", "daily", at="21:00", what="вечерний дневник (№8)",
@@ -132,6 +140,9 @@ def default_jobs() -> list[dict]:
             what="библиотекарь: чтение дома", run=_librarian_awake),
         job("musing", "interval", every=config.MUSING_INTERVAL_SECS,
             what="фоновая мысль в тишине (мысли)", run=_muse),
+        job("architect-weekly", "weekly", weekday="sun", at="20:00",
+            what="доклад архитектора: тесты, коммиты, диск, канон (№29)",
+            run=_weekly_audit),
         job("memory-compress", "weekly", weekday="sun", at="23:00",
             what="сжатие памяти (№7)", run=_compress),
     ]

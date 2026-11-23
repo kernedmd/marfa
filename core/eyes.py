@@ -59,7 +59,9 @@ from __future__ import annotations
 import base64
 import io
 import json
+import re
 import time
+from pathlib import Path
 from typing import Optional, Tuple
 
 import requests
@@ -251,7 +253,8 @@ def _post_chat(body: dict, timeout: Optional[float] = None) -> dict:
 
 
 def _ask(b64: str, prompt: str, schema: Optional[dict],
-         max_tokens: int = ELEMENTS_MAX_TOKENS) -> Tuple[str, Optional[str]]:
+         max_tokens: int = ELEMENTS_MAX_TOKENS,
+         timeout: Optional[float] = None) -> Tuple[str, Optional[str]]:
     """Спросить глаза. Цепочка грамматик (урок 132 секунд):
     строгая схема → простой json_object → без грамматики.
 
@@ -270,7 +273,7 @@ def _ask(b64: str, prompt: str, schema: Optional[dict],
         attempts.append("schema")
         attempts.append("json_object")
     attempts.append(None)
-    deadline = time.monotonic() + EYES_TIMEOUT
+    deadline = time.monotonic() + (EYES_TIMEOUT if timeout is None else timeout)
     errors: list[str] = []
     for grammar in attempts:
         left = deadline - time.monotonic()
@@ -441,6 +444,7 @@ def describe_with_sizes(width: int = WORK_WIDTH) -> tuple:
         raise RuntimeError("глаза не готовы: " + _VISION_ERROR)
     progress.stage("снимаю экран для рук…")
     b64, real, small = _screenshot_b64(width)
+    remember_frame(b64, small)             # №3: взгляд = новый эталон
     progress.stage("глаза читают экран: элементы и координаты…")
     out, _ = _ask(b64, ELEMENTS_PROMPT, SCHEMA,
                   max_tokens=ELEMENTS_MAX_TOKENS)
@@ -478,6 +482,7 @@ def describe_text(width: int = WORK_WIDTH) -> str:
         t0 = time.time()
         progress.stage("снимаю экран…")
         b64, _real, _small = _screenshot_b64(width)
+        remember_frame(b64, _small)         # №3: взгляд = новый эталон
         progress.stage("глаза читают экран: надписи и кнопки…")
         out, _ = _ask(b64, SCREEN_PROMPT, None,
                       max_tokens=SCREEN_MAX_TOKENS)
@@ -494,7 +499,10 @@ def describe_text(width: int = WORK_WIDTH) -> str:
         if not prose:
             return ("глаза ответили пусто — честно: не поняли кадр, "
                     "скажи «посмотри» ещё раз")
-        lines = ["Вижу: " + prose]
+        # 23.11: ЭКРАН — словами, из лога: Создатель просил веб-камеру,
+        # а читал ответ про экран сервера и не мог понять, кто врёт.
+        # Источник зрения подписан в первой строке — всегда.
+        lines = ["Вижу на ЭКРАНЕ: " + prose]
         tail = "(глаза думали %.1f с" % secs
         if secs > 45:
             tail += ("; медленно — первый взгляд после старта греет CUDA, "
@@ -504,6 +512,542 @@ def describe_text(width: int = WORK_WIDTH) -> str:
         return "\n".join(lines)
     except Exception as e:
         return "глаза ошиблись: " + str(e)
+
+
+# ---------------------------------------------------------------
+# №3 «ЧТО ИЗМЕНИЛОСЬ» — пиксельная сверка с последним взглядом
+# (роадмап 30, №3; урок v1.5: истину говорят ПИКСЕЛИ, а не мнение
+# сенсора). Каждый взгляд на экран запоминает кадр; «что изменилось»
+# снимает свежий и сверяет попиксельно — мозг и даже сервер зрения
+# не нужны, чистая земля.
+# ---------------------------------------------------------------
+
+CHANGE_PCT = 5.0            # порог «заметно изменился» (роадмап №3)
+CHANGE_CELL_PCT = 10.0      # клетка сетки считается «где изменилось»
+CHANGE_CELLS = 3            # сетка 3×3: где изменения — по-человечески
+
+_CELL_NAMES = (
+    ("левый верх", "верх", "правый верх"),
+    ("лево", "центр", "право"),
+    ("левый низ", "низ", "правый низ"),
+)
+
+_last_frame: dict = {}      # зрительная память: последний увиденный кадр
+
+
+def remember_frame(b64: str, size) -> None:
+    """Запомнить кадр — эталон для «что изменилось». Зовёт каждый
+    взгляд на экран (описание, поиск, дескриптор для рук): память
+    глаз бесплатна, а вопрос «что изменилось?» чаще всего значит
+    «с прошлого раза, когда ты смотрела»."""
+    global _last_frame
+    _last_frame = {"b64": b64, "size": tuple(size), "ts": time.time()}
+
+
+def _age_human(ts: float) -> str:
+    """Сколько прошло — по-человечески: «40 с», «12 мин», «3 ч»."""
+    secs = max(0, time.time() - ts)
+    if secs < 90:
+        return "%d с" % secs
+    if secs < 90 * 60:
+        return "%d мин" % (secs // 60)
+    return "%d ч" % (secs // 3600)
+
+
+def _frame_diff(a_b64: str, b_b64: str, cells: int = CHANGE_CELLS):
+    """Пиксельная сверка двух кадров. Возвращает (доля изменившихся
+    пикселей 0..1, доли по клеткам сетки cells×cells) или None —
+    сравнить не смогли (нет PIL, битые данные): честно не выдумываем.
+    Порог яркости 30 — как у пиксельной сверки рук (§10.4)."""
+    try:
+        from PIL import Image, ImageChops
+        ia = Image.open(io.BytesIO(base64.b64decode(a_b64))).convert("RGB")
+        ib = Image.open(io.BytesIO(base64.b64decode(b_b64))).convert("RGB")
+        if ia.size != ib.size:
+            ib = ib.resize(ia.size, Image.LANCZOS)
+        diff = ImageChops.difference(ia, ib).convert("L")
+        hist = diff.histogram()
+        total = float(ia.width * ia.height)
+        frac = sum(hist[30:]) / total
+        cell_fracs = []
+        cw, ch = ia.width / float(cells), ia.height / float(cells)
+        for gy in range(cells):
+            for gx in range(cells):
+                box = (int(gx * cw), int(gy * ch),
+                       int(min((gx + 1) * cw, ia.width)),
+                       int(min((gy + 1) * ch, ia.height)))
+                d = diff.crop(box)
+                h2 = d.histogram()
+                cell_fracs.append(sum(h2[30:])
+                                   / float(max(1, d.width * d.height)))
+        return frac, cell_fracs
+    except Exception:
+        return None
+
+
+def _where_changed(cell_fracs) -> str:
+    """Имена клеток, где изменения заметнее порога — по-человечески."""
+    names = []
+    for i, f in enumerate(cell_fracs):
+        if f * 100.0 >= CHANGE_CELL_PCT:
+            names.append(_CELL_NAMES[i // CHANGE_CELLS][i % CHANGE_CELLS])
+    return ", ".join(names[:4])
+
+
+def whats_changed_text() -> str:
+    """«что изменилось» — пиксельная сверка с последним взглядом.
+
+    Земная истина без сенсора и без мозга (урок v1.5): снимок,
+    попиксельная разница, порог 5% (роадмап №3), ГДЕ изменилось —
+    по сетке 3×3. Свежий кадр становится новым эталоном. Исключений
+    не поднимает, не сравнила — честно говорит.
+    """
+    try:
+        if _VISION_ERROR:
+            return "глаза не готовы: " + _VISION_ERROR
+        last = _last_frame
+        if not last or not last.get("b64"):
+            return ("я ещё не запоминала экран — скажи «посмотри» или "
+                    "«найди на экране <надпись>», запомню кадр; потом "
+                    "«что изменилось» — сверю пиксели с тем взглядом")
+        progress.stage("снимаю экран и сверяю пиксели с прошлым взглядом…")
+        b64, _real, small = _screenshot_b64(int(last["size"][0]))
+        res = _frame_diff(last["b64"], b64)
+        if res is None:
+            return ("не смогла сравнить кадры — честно, не выдумываю. "
+                    "Скажи «посмотри» — опишу экран словами")
+        frac, cell_fracs = res
+        remember_frame(b64, small)          # новый эталон для следующего раза
+        pct = frac * 100.0
+        age = _age_human(float(last.get("ts") or time.time()))
+        head = (("С прошлого взгляда (%s назад) экран изменился заметно: "
+                 "%.1f%% кадра" if pct >= CHANGE_PCT else
+                 "С прошлого взгляда (%s назад) существенных изменений "
+                 "нет: %.1f%% кадра") % (age, pct))
+        where = _where_changed(cell_fracs)
+        tail = ("; сильнее всего: %s" % where) if where else ""
+        return head + tail + ". Порог — %.0f%% (пиксели, не мнение)" % CHANGE_PCT
+    except Exception as e:
+        return "сверка не удалась: " + str(e)
+
+
+# ---------------------------------------------------------------
+# №6 «ГЛАЗА КАК КОНТЕКСТ МОЗГА» (роадмап 30, закрывает Г-3): флаг
+# «Илья за компьютером». Резолюция Создателя «следи за экраном» —
+# и каждый мозговой трек получает свежую строку о том, что на
+# экране: мозг отвечает «в курсе», а не «дай команду посмотри».
+# Взгляд кэшируется (TTL 5 мин): каждый ход не платит по 9 секунд.
+# ---------------------------------------------------------------
+
+WATCH_PROMPT = (
+    "Ты — зрение Марфы. Одним-двумя предложениями по-русски скажи, "
+    "что сейчас на экране: какая программа или окно открыто, чем "
+    "занят человек. Читай заголовки окон и главные надписи, самые "
+    "важные цитируй коротко; нечитаемое не выдумывай. Очень коротко — "
+    "это фон для разговора, а не отчёт."
+)
+WATCH_MAX_TOKENS = 160        # фон короткий: у чата и так бюджет 320
+WATCH_LINE_CAP = 300          # символов: контекст — не роман
+
+_watch_cache = {"line": None, "ts": 0.0}
+
+
+def watch_enabled() -> bool:
+    """Включено ли слежение: data\\screen_watch.json (резолюция
+    Создателя, как моторика и живой язык). Код файл не пишет —
+    только команда «следи за экраном»."""
+    return Path(config.SCREEN_WATCH_FILE).is_file()
+
+
+def set_watch(on: bool) -> str:
+    """Включить/выключить слежение за экраном (воля Создателя)."""
+    p = Path(config.SCREEN_WATCH_FILE)
+    global _watch_cache
+    if on:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(
+            {"enabled": True, "ts": time.strftime("%Y-%m-%d %H:%M:%S")},
+            ensure_ascii=False), encoding="utf-8")
+        _watch_cache = {"line": None, "ts": 0.0}
+        return ("Теперь слежу за экраном: примерно раз в 5 минут "
+                "посматриваю и держу мозг в курсе, что перед тобой "
+                "происходит, — спрашивай «что на экране», отвечу по "
+                "свежему. Выключить — «не следи за экраном»")
+    try:
+        p.unlink()
+    except FileNotFoundError:
+        pass
+    _watch_cache = {"line": None, "ts": 0.0}
+    return "Больше не слежу за экраном — мозг снова без картинки"
+
+
+def _watch_render(line: str, ts: float) -> str:
+    """Свежесть взгляда — в тексте: мозг видит, насколько факт стар."""
+    mins = int((time.time() - ts) // 60)
+    return line + (" (взгляд только что)" if mins < 1
+                   else " (взгляд %d мин назад)" % mins)
+
+
+def screen_context_line(force: bool = False) -> Optional[str]:
+    """Свежая строка о экране для системного промпта мозга (№6).
+
+    Слежение выключено — None (промпт не дорожает). Включено —
+    короткая правда с кэшем TTL: один взгляд живёт 5 минут, ходы
+    между ними бесплатны. Глаза споткнулись — честная строка
+    «не прочитан» тоже кэшируется: каждый ход не ждёт по 9 секунд
+    мёртвого сенсора. Исключений не поднимает.
+    """
+    global _watch_cache
+    if not watch_enabled():
+        return None
+    line = _watch_cache.get("line")
+    ts = float(_watch_cache.get("ts") or 0.0)
+    if not force and line and time.time() - ts < config.SCREEN_WATCH_TTL_SEC:
+        return _watch_render(line, ts)
+    try:
+        if _VISION_ERROR:
+            raise RuntimeError(_VISION_ERROR)
+        if not health_cached():
+            raise RuntimeError("сенсор %d не отвечает" % config.PORT_EYES)
+        progress.stage("посматриваю на экран для контекста разговора…")
+        b64, _real, small = _screenshot_b64(WORK_WIDTH)
+        remember_frame(b64, small)          # взгляд есть взгляд (№3)
+        out, _ = _ask(b64, WATCH_PROMPT, None, max_tokens=WATCH_MAX_TOKENS)
+        prose = _clean_prose(out)[:WATCH_LINE_CAP]
+        if not prose:
+            raise RuntimeError("пустой ответ")
+    except Exception as e:
+        _watch_cache = {"line": ("экран не прочитан (%s) — попробую снова "
+                                 "через ~%d мин"
+                                 % (e, config.SCREEN_WATCH_TTL_SEC // 60)),
+                        "ts": time.time()}
+        return _watch_cache["line"]
+    _watch_cache = {"line": prose, "ts": time.time()}
+    return _watch_render(prose, _watch_cache["ts"])
+
+
+# ---------------------------------------------------------------
+# №14 «КНОПКА ГЛАЗ» — снимок экрана по клику из панели: превью +
+# описание + время ответа. Один клик — один взгляд: превью ужимается
+# до полэкрана ширины (это картинка для взгляда Создателя, не для
+# сенсора), описание — живой прозой (чему 3B-модель и рада).
+# ---------------------------------------------------------------
+
+GLANCE_PREVIEW_WIDTH = 480    # превью для панели: маленькое и быстрое
+GLANCE_PREVIEW_JPEG_Q = 70
+
+
+def glance_with_preview(preview_width: int = GLANCE_PREVIEW_WIDTH) -> dict:
+    """Взгляд для кнопки «глаз» (№14): {ok, description, preview,
+    secs, error?}. Превью — data:image/jpeg;base64 (маленькое),
+    описание — живая проза, секунды — честные. Взгляд — тоже взгляд:
+    кадр становится эталоном «что изменилось» (№3). Исключений не
+    поднимает — панель получает ok=False с причиной, а не 500-ю."""
+    try:
+        if _VISION_ERROR:
+            return {"ok": False, "error": "глаза не готовы: " + _VISION_ERROR}
+        if not health_cached():
+            return {"ok": False,
+                    "error": ("сенсор зрения %d не отвечает — запущен ли "
+                              "сервер?" % config.PORT_EYES)}
+        t0 = time.time()
+        progress.stage("снимаю экран для кнопки «глаз»…")
+        b64, _real, small = _screenshot_b64(WORK_WIDTH)
+        remember_frame(b64, small)          # взгляд есть взгляд (№3)
+        progress.stage("глаза читают экран: надписи и кнопки…")
+        out, _ = _ask(b64, SCREEN_PROMPT, None,
+                      max_tokens=SCREEN_MAX_TOKENS)
+        prose = _clean_prose(out)
+        if prose.startswith("{"):
+            try:
+                d = parse_json(prose)
+                prose = str(d.get("description") or "").strip() or prose
+            except Exception:
+                pass
+        # превью: ужимаем кадр до preview_width, JPEG — по проводу дёшево
+        from PIL import Image
+        img = Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
+        small_img = _shrink(img, preview_width)
+        buf = io.BytesIO()
+        small_img.save(buf, format="JPEG", quality=GLANCE_PREVIEW_JPEG_Q)
+        preview = ("data:image/jpeg;base64," +
+                   base64.b64encode(buf.getvalue()).decode())
+        secs = round(time.time() - t0, 1)
+        if not prose:
+            return {"ok": False,
+                    "error": "глаза ответили пусто — скажи «посмотри» "
+                             "ещё раз", "secs": secs, "preview": preview}
+        return {"ok": True, "description": prose,
+                "preview": preview, "secs": secs}
+    except Exception as e:
+        return {"ok": False, "error": "глаза не смогли: " + str(e)}
+
+
+# ---------------------------------------------------------------
+# №4 «ЗАПОМНИ ЭКРАН» — снимок + дескриптор в зрительную память
+# (роадмап 30, №4): data\screenshots\screen_*.png + .json-сайдкар
+# рядом + строка в память дома. «вспомни экран» находит обычным
+# recall — экран становится воспоминанием, а не мгновением.
+# ---------------------------------------------------------------
+
+def save_snapshot(memory=None) -> str:
+    """«запомни экран»: один взгляд — и экран в памяти надолго.
+
+    Что ложится: PNG-снимок (байты как есть, без пережатий) и
+    .json-сайдкар с тем же именем (описание, окно, элементы,
+    размеры, время) — в data\\screenshots\\; строка «Экран в ЧЧ:ММ:
+    <описание> (читаю: …)» — в память дома с тегом «экран».
+    Память споткнулась — файлы всё равно целы, честно докладываем.
+    Исключений не поднимает.
+    """
+    try:
+        if _VISION_ERROR:
+            return "глаза не готовы: " + _VISION_ERROR
+        progress.stage("запоминаю экран: смотрю и снимаю…")
+        d, real, small = describe_with_sizes()
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        shots = Path(str(config.SCREENSHOTS_DIR))
+        shots.mkdir(parents=True, exist_ok=True)
+        png = shots / ("screen_%s.png" % stamp)
+        json_path = shots / ("screen_%s.json" % stamp)
+        # уникальность в одну секунду: если файл уже есть — суффикс
+        n = 1
+        while png.exists():
+            png = shots / ("screen_%s_%d.png" % (stamp, n))
+            json_path = shots / ("screen_%s_%d.json" % (stamp, n))
+            n += 1
+        # эталон №3 — ЭТОТ ЖЕ кадр, что видит дескриптор: снимок и
+        # описание из одного взгляда, а не два раза «посмотри»
+        png.write_bytes(base64.b64decode(_last_frame.get("b64") or ""))
+        sidecar = {
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "description": d.get("description", ""),
+            "active_window": d.get("active_window", ""),
+            "elements": d.get("elements", []),
+            "screen_size": list(real),
+            "frame_size": list(small),
+            "png": png.name,
+        }
+        json_path.write_text(
+            json.dumps(sidecar, ensure_ascii=False, indent=1),
+            encoding="utf-8")
+        mem_note = ""
+        read = _read_texts(d, limit=4)
+        line = ("Экран в %s: %s%s" % (
+            time.strftime("%H:%M"),
+            str(d.get("description", "")).strip() or "экран",
+            (" (читаю: %s)" % read) if read and read.startswith("«") else ""))
+        if memory is not None:
+            try:
+                memory.remember(line, tags=["экран"], importance=2.0)
+            except Exception as e:
+                mem_note = ("; в память не легло (%s) — но снимок и "
+                            "описание целы" % e)
+        return ("Запомнила экран: снимок %s и описание рядом (%s). "
+                "%sСкажи «вспомни экран» — найду это воспоминание%s"
+                % (png.name, json_path.name,
+                   ("В строку памяти: «%s». " % line) if not mem_note else "",
+                   mem_note))
+    except Exception as e:
+        return "не смогла запомнить экран: " + str(e)
+
+
+# ---------------------------------------------------------------
+# №2 «НАЙДИ НА ЭКРАНЕ» — поиск элемента по описанию: лестница зон
+# (роадмап 30 фишек, №2). Урок v1.4 жив: мелкая надпись в целом
+# кадре теряется — четверть кадра, увеличенная до рабочей ширины,
+# читается лучше. Лестница: целый кадр → 4 четверти с апскейлом.
+# Ответ — надпись, центр ЭКРАНА и рамка: это ищут и Создатель,
+# и руки («руки нажми <надпись>»). Исключений не поднимает.
+# ---------------------------------------------------------------
+
+FIND_MIN_CONF = 0.45        # целый кадр: поиск — не клик, верим шире рук
+FIND_ZONE_MIN_CONF = 0.35   # в зоне элемент крупнее — но и выдумать легче
+FIND_TOTAL_SEC = EYES_TIMEOUT   # H5: ОДИН бюджет на всю лестницу, не 5×240
+
+_QUERY_DROP_WORDS = ("кнопку", "кнопка", "ссылку", "ссылка", "меню",
+                     "пункт", "иконку", "иконка", "поле", "надпись",
+                     "текст", "элемент")
+
+
+def _norm_query(s: str) -> str:
+    """Нормализация для сверки текстов: регистр, ё, пунктуация,
+    «кнопку/ссылку» снимаются — ищем НАДПИСЬ, а не её род."""
+    t = re.sub(r"[^\w\s]", " ", (s or "").lower().replace("ё", "е"))
+    return " ".join(w for w in t.split()
+                    if w and w not in _QUERY_DROP_WORDS)
+
+
+def _el_conf(el: dict) -> float:
+    """Уверенность глаза в элементе (нет поля — 0, мусор — мусор)."""
+    try:
+        return float(el.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _match_element(d: dict, query: str, min_conf: float):
+    """Элемент дескриптора по надписи: точное совпадение → надпись
+    содержит запрос → запрос содержит надпись (короткая цель).
+    Возвращает элемент-словарь или None — выдумок нет."""
+    q = _norm_query(query)
+    if not q:
+        return None
+    best = None
+    best_key = None
+    for el in (d.get("elements") or []):
+        if not isinstance(el, dict):
+            continue
+        text = _norm_query(str(el.get("text", "")))
+        if not text or _el_conf(el) < min_conf:
+            continue
+        if text == q:
+            key = (3, len(text))
+        elif q in text:
+            key = (2, len(text))
+        elif text in q:
+            key = (1, len(text))
+        else:
+            continue
+        if best_key is None or key > best_key:
+            best, best_key = el, key
+    return best
+
+
+def _zone_b64(b64: str, box, width: int = WORK_WIDTH):
+    """Вырезать зону кадра (координаты ОТПРАВЛЕННОГО кадра) и увеличить
+    до рабочей ширины — урок v1.4: мелкое в крупном читается. Апскейл
+    не жаднее ×2: выдумывать пиксели дороже, чем читать честные.
+    Шов для тестов: подменяется вместе с _screenshot_b64/_ask.
+    Возвращает (b64 зоны, размер зоны)."""
+    img = Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
+    crop = img.crop((int(box[0]), int(box[1]), int(box[2]), int(box[3])))
+    if crop.width <= 0 or crop.height <= 0:
+        raise ValueError("зона пустая: %r" % (box,))
+    scale = min(2.0, width / float(crop.width))
+    new = crop.resize((max(1, round(crop.width * scale)),
+                       max(1, round(crop.height * scale))), Image.LANCZOS)
+    buf = io.BytesIO()
+    new.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode(), new.size
+
+
+def _zone_name(box, size) -> str:
+    """Человекоческое имя четверти («левая верхняя»)."""
+    mid_x, mid_y = size[0] / 2.0, size[1] / 2.0
+    return "%s %s четверть" % ("верхняя" if box[1] < mid_y else "нижняя",
+                               "левая" if box[0] < mid_x else "правая")
+
+
+def _to_screen(bbox, sent_size, real_size):
+    """bbox кадра глаз → пиксели ЭКРАНА (масштаб снимка к монитору)."""
+    kx = real_size[0] / float(sent_size[0])
+    ky = real_size[1] / float(sent_size[1])
+    return [round(bbox[0] * kx), round(bbox[1] * ky),
+            round(bbox[2] * kx), round(bbox[3] * ky)]
+
+
+def _find_render(el: dict, zone_box, zone_size, sent_size, real_size,
+                 attempt: int) -> str:
+    """Человеческий ответ о находке: надпись, центр экрана, рамка,
+    уверенность. Координаты зоны честно переводятся в координаты
+    кадра (обратно апскейлу и сдвигу) — центр не может уехать за
+    пределы четверти, где нашли."""
+    bbox = [float(v) for v in el["bbox"]]
+    if zone_box is not None:
+        kx = (zone_box[2] - zone_box[0]) / float(zone_size[0])
+        ky = (zone_box[3] - zone_box[1]) / float(zone_size[1])
+        bbox = [zone_box[0] + bbox[0] * kx, zone_box[1] + bbox[1] * ky,
+                zone_box[0] + bbox[2] * kx, zone_box[1] + bbox[3] * ky]
+        bbox = [max(bbox[0], zone_box[0]), max(bbox[1], zone_box[1]),
+                min(bbox[2], zone_box[2]), min(bbox[3], zone_box[3])]
+        bbox = [int(round(v)) for v in bbox]
+    scr = _to_screen(bbox, sent_size, real_size)
+    cx, cy = (scr[0] + scr[2]) // 2, (scr[1] + scr[3]) // 2
+    label = str(el.get("text") or el.get("type") or "?").strip()
+    where = ("искала по всему кадру" if attempt == 0
+             else "нашла в %s, увеличила её" % _zone_name(zone_box, sent_size))
+    return ("Нашла «%s»: центр экрана (%d, %d), рамка %s, "
+            "уверенность глаз %.2f (%s). Хочешь нажать — скажи "
+            "«руки нажми %s», кликну туда под стражем"
+            % (label, cx, cy, scr, _el_conf(el), where, label))
+
+
+def _read_texts(d: dict, limit: int = 6) -> str:
+    """Что глаза ЧИТАЛИ в дескрипторе — для честного «не нашла»:
+    надписи, а если пусто — ПРИЧИНА из _stats (молчаливый симптом —
+    не диагноз, урок v2.1 рук)."""
+    texts = [str(e.get("text", "")).strip() for e in (d.get("elements") or [])
+             if isinstance(e, dict) and str(e.get("text", "")).strip()]
+    if texts:
+        return ", ".join("«%s»" % t for t in texts[:limit])
+    st = d.get("_stats") if isinstance(d, dict) else None
+    if isinstance(st, dict):
+        raw, dropped = int(st.get("raw") or 0), int(st.get("dropped") or 0)
+        if raw and dropped >= raw:
+            return ("глаза видели %d элемент(ов), но ни один не прошёл "
+                    "проверку координат" % raw)
+        if int(st.get("kept") or 0):
+            return "глаза видят объекты, но надписей не прочитали"
+    return "глаза не прочитали ни одной надписи"
+
+
+def find_on_screen(query: str) -> str:
+    """«найди на экране <что>» — лестница зон с апскейлом (№2).
+
+    Целый кадр (рабочая ширина) → не нашли — 4 четверти, каждая
+    увеличена до рабочей ширины. Один бюджет времени на всю
+    лестницу (H5), честная геометрия в каждой зоне, шаблоны
+    бракуются. Не нашла — говорит, что глаза ЧИТАЮТ, без выдумок.
+    """
+    try:
+        q = (query or "").strip()
+        if not q:
+            return "что найти? скажи «найди на экране <надпись>»"
+        if _VISION_ERROR:
+            return "глаза не готовы: " + _VISION_ERROR
+        if not health():
+            return ("глаза %d не отвечают — сервер зрения не запущен?"
+                    % config.PORT_EYES)
+        progress.stage("ищу на экране: %s…" % q)
+        deadline = time.monotonic() + FIND_TOTAL_SEC
+        b64, real, small = _screenshot_b64(WORK_WIDTH)
+        remember_frame(b64, small)          # №3: взгляд = новый эталон
+        left = max(1.0, deadline - time.monotonic())
+        out, _ = _ask(b64, ELEMENTS_PROMPT, SCHEMA,
+                      max_tokens=ELEMENTS_MAX_TOKENS, timeout=left)
+        d = parse_json(out)
+        _assert_no_parrot(d)
+        d = _validate_elements(d, small)
+        hit = _match_element(d, q, FIND_MIN_CONF)
+        if hit is not None:
+            return _find_render(hit, None, None, small, real, 0)
+        read_whole = _read_texts(d)
+        w, h = small
+        zones = [(0, 0, w // 2, h // 2), (w // 2, 0, w, h // 2),
+                 (0, h // 2, w // 2, h), (w // 2, h // 2, w, h)]
+        for zb in zones:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return ("Не нашла «%s» — время поиска вышло. Глаза читают: "
+                        "%s. Скажи «посмотри» — опишу экран целиком"
+                        % (q, read_whole))
+            progress.stage("в целом кадре не нашла — смотрю %s…"
+                           % _zone_name(zb, small))
+            zb64, zsize = _zone_b64(b64, zb)
+            out, _ = _ask(zb64, ELEMENTS_PROMPT, SCHEMA,
+                          max_tokens=ELEMENTS_MAX_TOKENS, timeout=left)
+            zd = parse_json(out)
+            _assert_no_parrot(zd)
+            zd = _validate_elements(zd, zsize)
+            zhit = _match_element(zd, q, FIND_ZONE_MIN_CONF)
+            if zhit is not None:
+                return _find_render(zhit, zb, zsize, small, real, 1)
+        return ("Не нашла на экране «%s». Глаза читают: %s. Может, надпись "
+                "звучит иначе — скажи «посмотри», опишу экран целиком"
+                % (q, read_whole))
+    except Exception as e:
+        return "поиск не удался: " + str(e)
 
 
 # ---------------------------------------------------------------
@@ -674,7 +1218,10 @@ def describe_camera_text() -> str:
         lines = []
         descr = str(d.get("description") or "").strip()
         if descr:
-            lines.append("Вижу в камере: " + descr)
+            # 23.11: КАМЕРА — словами: у дома ДВА источника зрения, и ответ
+            # каждого подписан (экран/веб-камера) — путаница из живого
+            # лога («хотел веб-камеру, описала экран») больше невозможна
+            lines.append("Вижу в ВЕБ-КАМЕРЕ: " + descr)
         objs = d.get("objects")
         if isinstance(objs, list) and objs:
             for i, ob in enumerate(objs[:5], 1):
@@ -689,3 +1236,103 @@ def describe_camera_text() -> str:
         return "\n".join(lines)
     except Exception as e:
         return "камера не смогла: " + str(e)
+
+
+# ---------------------------------------------------------------
+# ЗРИТЕЛЬНАЯ ПАМЯТЬ СОЗДАТЕЛЯ (23.11): «запомни меня» / «узнай меня».
+# Урок живого лога: камера увидела мужчину в полосатой футболке, Илья
+# сказал «запомни» — а дому некуда было положить. Один кадр камеры =
+# одно описание; узнавание — тот же сенсор сверяет свежий кадр с
+# описанием в памяти (никакой отдельной модели лиц: честно и дёшево).
+# ---------------------------------------------------------------
+
+def creator_face_file() -> Path:
+    """Где живёт зрительный образ Создателя: data\\creator_face.json."""
+    return Path(config.DATA_DIR) / "creator_face.json"
+
+
+def creator_face() -> Optional[str]:
+    """Сохранённое описание Создателя; нет/битый файл — None, не исключение."""
+    try:
+        raw = creator_face_file().read_text(encoding="utf-8")
+        rec = json.loads(raw)
+        descr = str(rec.get("description") or "").strip()
+        return descr or None
+    except Exception:
+        return None
+
+
+def remember_creator(memory=None) -> str:
+    """«запомни меня»: взглянуть в камеру и ЗАПОМНИТЬ Создателя.
+
+    Описание ложится в data\\creator_face.json (для узнавания) И в память
+    дома с тегом «создатель» (для «вспомни»). Память споткнулась — файл
+    всё равно цел: зрительная память не зависит от RAG. Второй «запомни»
+    перезаписывает образ — люди меняют футболки, живая память не музей.
+    """
+    if _VISION_ERROR:
+        return "глаза не готовы: " + _VISION_ERROR
+    if not health():
+        return ("глаза %d не отвечают — камере нужен живой сенсор зрения"
+                % config.PORT_EYES)
+    try:
+        progress.stage("смотрю в камеру, чтобы запомнить тебя…")
+        b64 = _camera_b64()
+        out, _ = _ask(b64, CAMERA_PROMPT, CAMERA_SCHEMA)
+        d = parse_json(out)
+        descr = str(d.get("description") or "").strip()
+        if not descr:
+            return ("камера не описала кадр — запоминать нечего; света "
+                    "побольше и скажи «запомни меня» ещё раз")
+        rec = {"description": descr,
+               "ts": time.strftime("%Y-%m-%d %H:%M")}
+        creator_face_file().parent.mkdir(parents=True, exist_ok=True)
+        creator_face_file().write_text(
+            json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
+        note = ("Запомнила, как ты выгляжу: %s Теперь «узнай меня» — "
+                "сверю свежий кадр с этим описанием." % descr)
+        if memory is not None:
+            try:
+                memory.remember("Создатель выглядит: " + descr,
+                                tags=["создатель", "внешность"],
+                                importance=4.0)
+            except Exception:
+                pass          # RAG не должен рвать зрительную память
+        return note
+    except Exception as e:
+        return "не получилось запомнить: " + str(e)
+
+
+def recognize_creator() -> str:
+    """«узнай меня»: свежий кадр против описания в зрительной памяти.
+
+    Сенсор получает ОБА текста (что видит + что помнит) и говорит,
+    похож ли человек на Создателя. Не похож — так и говорит: узнавание
+    без подгонки, честность важнее лести.
+    """
+    saved = creator_face()
+    if saved is None:
+        return ("зрительной памяти о тебе ещё нет — скажи «запомни меня», "
+                "и со следующего взгляда я буду узнавать")
+    if _VISION_ERROR:
+        return "глаза не готовы: " + _VISION_ERROR
+    if not health():
+        return ("глаза %d не отвечают — камере нужен живой сенсор зрения"
+                % config.PORT_EYES)
+    try:
+        progress.stage("смотрю в камеру и сверяю с памятью…")
+        b64 = _camera_b64()
+        prompt = (CAMERA_PROMPT + "\nВ зрительной памяти Марфы Создатель "
+                  "выглядит так: «" + saved + "». Если человек в кадре "
+                  "похож на это описание — в description скажи об этом "
+                  "прямо («похож на Создателя: …»); НЕ похож — честно "
+                  "скажи, что не узнаёшь. Не подгоняй ответ под память.")
+        out, _ = _ask(b64, prompt, CAMERA_SCHEMA)
+        d = parse_json(out)
+        descr = str(d.get("description") or "").strip()
+        if not descr:
+            return "камера не описала кадр — попробуй «узнай меня» ещё раз"
+        return ("Сверяю с зрительной памятью (%s): %s"
+                % ("помню: «%s»" % saved[:160], descr))
+    except Exception as e:
+        return "узнавание не вышло: " + str(e)

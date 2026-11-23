@@ -28,6 +28,12 @@ app = Flask(__name__)
 PORT_WEB = config.PORT_WEB
 DIALOGS = DialogStore()          # №10/№11: память разговора живёт в доме
 
+# №27 «тихий час»: резолюция тишины переживает рестарт панели —
+# применяется на старте. Битый файл — дом говорит (тишина без воли
+# Создателя — не тишина, а сбой)
+from core import quiet as _quiet  # noqa: E402
+_quiet.apply_saved()
+
 PANEL_HTML = """<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -240,6 +246,22 @@ def api_health():
     })
 
 
+@app.get("/api/eyes")
+def api_eyes():
+    """№14 «кнопка глаз»: снимок экрана по клику — превью + описание
+    + время ответа. Один клик — один взгляд: глаза читают экран
+    живой прозой, кадр ужимается в маленькое JPEG-превью. Глаза
+    мертвы — 200 с ok=False и честной причиной: кнопка показывает
+    правду, а не красную страницу. Мозг не участвует. Броня: даже
+    крах органа не роняет панель (глубина защиты, как у быстрых
+    команд агента)."""
+    from core.eyes import glance_with_preview
+    try:
+        return jsonify(glance_with_preview())
+    except Exception as e:
+        return jsonify({"ok": False, "error": "глаза не смогли: %s" % e})
+
+
 @app.get("/api/status")
 def api_status():
     ram = RAMMonitor().sample()
@@ -330,6 +352,25 @@ def api_progress():
     except ValueError:
         sid = ""
     return jsonify(progress.snapshot(sid))
+
+
+@app.get("/api/reminders")
+def api_reminders():
+    """Ф10 «будильник»: назвонившие напоминания — для страницы чата.
+
+    Чат спрашивает при загрузке: открыл панель — увидел, что время
+    вышло (напоминание звонит и первой строкой любого ответа — этот
+    эндпоинт для тихого возврата в панель). Будильник упал — честный
+    пустой список, чат жив (закон №10 р3).
+    """
+    try:
+        from core import reminders
+        note = reminders.due_note()
+        active = reminders.render_active()
+        return jsonify({"note": note, "active": active})
+    except Exception as e:
+        return jsonify({"note": "", "active": "",
+                        "error": "%s: %s" % (type(e).__name__, e)})
 
 
 @app.get("/api/dialog/<session>")

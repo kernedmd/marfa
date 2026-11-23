@@ -183,7 +183,7 @@ def test_n6_creator_gate_crash_does_not_kill_chat(agent, srv, monkeypatch):
     def boom(text):
         raise RuntimeError("нет .env")
     monkeypatch.setattr("core.creator_gate.check", boom)
-    r = agent.handle("привет")
+    r = agent.handle("расскажи о законах дома")
     assert r.source == "brain" and r.text == "жива"
 
 
@@ -220,13 +220,18 @@ def test_n8_calc_trailing_question(agent):
 
 
 def test_n9_answer_null(agent, srv):
-    """№9: {"answer": null} — честное «Нет ответа», не строка «None»."""
+    """№9: {"answer": null} — не строка «None». Контракт усилен мозгом v3
+    (анти-эхо, 23.11): пустой ответ переспрашивается, дважды пустой —
+    честный сбой с путём лечения. Урок живого лога: голое «Нет ответа»
+    без диагноза трижды ставило разговор в тупик."""
     srv.reply_content = '{"answer": null}'
-    r = agent.handle("привет")
-    assert r.text == "Нет ответа"
+    r = agent.handle("расскажи о законах дома")
+    assert r.text != "None" and "None" not in r.text
+    assert "пустым ответом" in r.text        # честный сбой, путь лечения назван
+    assert len(srv.calls) == 2                # был один переспрос с уколом
     srv.reply_content = '{"answer": ""}'
     r = agent.handle("ещё раз")
-    assert r.text == "Нет ответа"
+    assert "пустым ответом" in r.text and len(srv.calls) == 4
 
 
 def test_n10_house_state_sensor_crash_honest(monkeypatch):
@@ -247,7 +252,7 @@ def test_n10_context_crash_brain_still_answers(agent, srv, monkeypatch):
     def boom(text):
         raise RuntimeError("RAG умер")
     monkeypatch.setattr(agent, "_system_extra", boom)
-    r = agent.handle("привет")
+    r = agent.handle("расскажи о законах дома")
     assert r.source == "brain" and r.text == "жива"
     sys_msg = next(m for m in srv.calls[-1]["messages"]
                    if m["role"] == "system")

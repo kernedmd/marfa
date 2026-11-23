@@ -31,7 +31,8 @@ Write-Host "----------------------------------------------"
     -m $model `
     --port 8082 --host 127.0.0.1 `
      `
-    -c 4096 `
+    -c 8192 --temp 0.7 --top-p 0.8 --top-k 20 --repeat-penalty 1.0 `
+    --jinja --chat-template-kwargs "{\"enable_thinking\": false}" `
     -ngl 0
 exit $LASTEXITCODE
 

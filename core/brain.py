@@ -49,7 +49,13 @@ def _extract_content(data) -> str:
 # (ниже) правкой одного файла — без правки кода дома.
 # Нет файла / нет поля / брак — характер по умолчанию: 0.3.
 # ---------------------------------------------------------------
-DEFAULT_TEMPERATURE = 0.3
+DEFAULT_TEMPERATURE = 0.7
+# Фикс сэмплинга Qwen3 БЕЗ мышления (мастер-ТЗ §15, таблица
+# разработчиков): temp 0.7, top_p 0.8. Старый дом жил на 0.3 — это
+# температура С мышлением; без него ответы сохнут и повторяются
+# («Как я могу вам помочь?» из живого лога 23.11 — симптом этого).
+# Характер из доктрины Создателя перекрывает дефолт — воля важнее.
+DEFAULT_TOP_P = 0.8
 
 # Qwen3 умеет «думать вслух» блоками <think>…</think> ДО ответа.
 # Грамматика json_object обычно не пускает их в генерацию, но не все
@@ -62,6 +68,42 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 def _strip_think(raw: str) -> str:
     """Убрать think-блоки Qwen3 — JSON остаётся чистым."""
     return _THINK_RE.sub("", raw or "").strip()
+
+
+# МЯГКИЙ ПЕРЕКЛЮЧАТЕЛЬ QWEN3 (двойное мышление, 23.11): «/no_think» в
+# системном промпте — модель сама закрывает thinking-блок пустым и
+# печатает только ответ. Работает на ЛЮБОЙ сборке сервера (в отличие
+# от chat_template_kwargs, которому нужен --jinja): мягкий переключатель
+# зашит в саму модель. Докупка статичная — KV-кэш цел.
+_NO_THINK = " /no_think"
+
+
+def _kill_thinking(payload: dict) -> None:
+    """Выключить thinking Qwen3 — закон дома (BRAIN_THINKING=False).
+
+    Урок живой переписки 23.11: «Привет! Марфа» стоил 273 токена —
+    из них ~10 видимых. Остальное — невидимые thinking-блоки при
+    2-6 ток/с на CPU: 80% времени хода Создатель ждал МЫСЛИ, которые
+    никогда не показывались и в чат не попадали. Двойная страховка:
+    (1) chat_template_kwargs — на серверах с --jinja выключает
+    thinking в шаблоне; старые сборки поле молча игнорируют;
+    (2) «/no_think» в системном промпте — мягкий переключатель
+    самой модели, работает везде (докупка статичная — KV-кэш цел).
+
+    Живёт НА УРОВНЕ МОДУЛЯ, а не методом класса: стрим, чат и
+    ask_json зовут её одинаково (урок первой ревизии: метод класса
+    из _post_stream звался голым именем — NameError на каждом
+    стрим-ходе, то есть на КАЖДОМ ответе чата).
+    """
+    if config.BRAIN_THINKING:
+        return                          # мышление включено волей дома
+    payload["chat_template_kwargs"] = {"enable_thinking": False}
+    sys_msgs = payload.get("messages") or []
+    if sys_msgs and isinstance(sys_msgs[0], dict) \
+            and sys_msgs[0].get("role") == "system":
+        content = sys_msgs[0].get("content")
+        if isinstance(content, str) and not content.rstrip().endswith("/no_think"):
+            sys_msgs[0]["content"] = content.rstrip() + _NO_THINK
 
 
 def mood_params() -> dict:
@@ -150,6 +192,7 @@ class BrainClient:
         body = dict(payload)
         body["stream"] = True
         body["stream_options"] = {"include_usage": True}
+        _kill_thinking(body)
         req = urllib.request.Request(
             self.url + path,
             data=json.dumps(body).encode("utf-8"),
@@ -227,9 +270,10 @@ class BrainClient:
                 else mood.get("temperature", DEFAULT_TEMPERATURE))
         payload = {"messages": messages, "temperature": temp, "max_tokens": mt}
         top_p_val = (float(top_p) if top_p is not None
-                     else mood.get("top_p"))
+                     else mood.get("top_p", DEFAULT_TOP_P))
         if top_p_val is not None:
             payload["top_p"] = top_p_val
+        _kill_thinking(payload)
         data = self._post("/v1/chat/completions", payload)
         return _extract_content(data)
 
@@ -254,7 +298,11 @@ class BrainClient:
         """
         messages = [
             {"role": "system", "content": (
-                "Ты — Марфа, умный и верный ассистент. "
+                # «Ассистент» — слово-паразит живого лога 23.11: на нём
+                # 30B скатывался в «Я не имею личных мыслей или эмоций»,
+                # прямое противоречие органам чувств/сна/мыслей дома.
+                # Марфа — организм, и преамбула говорит именно так.
+                "Ты — Марфа, домашний ИИ-организм в доме Создателя. "
                 "Ты должна отвечать пользователю строго в формате JSON: "
                 "{\"answer\": \"твой текст\"} или "
                 "{\"action\": {\"tool\": \"...\", \"args\": {...}}}. "
@@ -284,8 +332,10 @@ class BrainClient:
                                else config.GENERATION_BUDGET_TOKENS),
                 "response_format": {"type": "json_object"},
             }
-            if "top_p" in mood:
-                payload["top_p"] = mood["top_p"]
+            # фикс сэмплинга Qwen3 без мышления (§15): top_p 0.8 —
+            # характер доктрины может перекрыть своим
+            payload["top_p"] = mood.get("top_p", DEFAULT_TOP_P)
+            _kill_thinking(payload)
             if on_text is not None:
                 data = self._post_stream("/v1/chat/completions", payload, on_text)
             else:

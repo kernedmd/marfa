@@ -153,16 +153,31 @@ def _cmd_tests() -> str:
 
 
 def _cmd_tail(name: str) -> str:
-    """Хвост файла из logs/ (по части имени, свежайший). Путь наружу невозможен:
-    ищем только СРЕДИ файлов logs/, а не склеиваем путь из строки."""
-    if not name.strip():
-        return "укажи имя: <слово> хвост sync (часть имени файла из logs/)"
+    """Хвост файла из logs/ (по части имени, свежайший) + НЕобязательный
+    фильтр по подстроке (№26 роадмапа): «хвост brain ошибка» — только
+    строки с «ошибка» из свежайшего brain-лога. Путь наружу невозможен:
+    ищем только СРЕДИ файлов logs/, а не склеиваем путь из строки.
+
+    Первое слово после «хвост» — имя файла, остальное — подстрока
+    фильтра (регистр не важен). Фильтр ничего не нашёл — честно
+    говорим сколько строк смотрели: «в последних N строках нет».
+    """
+    name = (name or "").strip()
+    if not name:
+        return ("укажи имя: <слово> хвост <часть имени из logs/> "
+                "[<подстрока>]")
+    parts = name.split(None, 1)
+    file_part = parts[0]
+    needle = parts[1].strip() if len(parts) > 1 else ""
     root = Path(config.LOGS_DIR)
     if not root.exists():
         return "logs/ ещё нет — дому нечего показывать"
-    matches = [p for p in root.rglob("*") if p.is_file() and name.lower() in p.name.lower()]
+    matches = [p for p in root.rglob("*")
+               if p.is_file() and file_part.lower() in p.name.lower()]
     if not matches:
-        return "в logs/ нет файла с таким именем"
+        return ("в logs/ нет файла с таким именем"
+                + (" (фильтр «%s» даже не понадобился)" % needle
+                   if needle else ""))
     newest = max(matches, key=lambda p: p.stat().st_mtime)
     try:  # читаем только конец файла: большие логи не тащим целиком
         with newest.open("rb") as f:
@@ -170,14 +185,26 @@ def _cmd_tail(name: str) -> str:
             size = f.tell()
             f.seek(max(0, size - 64 * 1024))
             chunk = f.read().decode("utf-8", errors="replace")
-        tail = "\n".join(chunk.splitlines()[-TAIL_LINES:])
-        return "%s (последние строки):\n%s" % (newest.relative_to(root), tail)
+        tail = chunk.splitlines()[-TAIL_LINES:]
+        if needle:
+            low = needle.lower()
+            picked = [l for l in tail if low in l.lower()]
+            if not picked:
+                return ("%s: в последних %d строках нет «%s» — фильтр "
+                        "честен, совпадений ноль"
+                        % (newest.relative_to(root), len(tail), needle))
+            return ("%s (последние %d строк, найдено %d с «%s»):\n%s"
+                    % (newest.relative_to(root), len(tail), len(picked),
+                       needle, "\n".join(picked)))
+        return "%s (последние строки):\n%s" % (newest.relative_to(root),
+                                               "\n".join(tail))
     except Exception as e:
         return "не смог прочитать: " + str(e)
 
 
 HELP = ("калитка Создателя открыта. Команды: статус | тесты | "
-        "хвост <часть имени из logs/>. Слово действует только в этом сообщении.")
+        "хвост <часть имени из logs/> [<подстрока> — фильтр строк, №26>."
+        " Слово действует только в этом сообщении.")
 
 
 # ---------------------------------------------------------------

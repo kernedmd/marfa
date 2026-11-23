@@ -280,6 +280,21 @@ class Memory:
         и статуса: цифра настоящая, из любого бэкенда — chroma или JSON."""
         return sum(1 for rec in self._records() if self._alive(rec))
 
+    def recent(self, since_ts: float, limit: int = 5) -> list[dict]:
+        """Живые записи, созданные ПОСЛЕ since_ts (Ф4 «что нового»).
+
+        Свежие — сверху (created_at по убыванию). Битые created_at —
+        мимо: дайджест строится из честных дат, а не из мусора."""
+        out = []
+        for rec in self._records():
+            if not self._alive(rec):
+                continue
+            created = _ts(rec.get("created_at"))
+            if created is not None and created > since_ts:
+                out.append(rec)
+        out.sort(key=lambda r: _ts(r.get("created_at")) or 0.0, reverse=True)
+        return out[:limit]
+
     # ---------- API ----------
     def remember(self, text: str, tags: Optional[list[str]] = None,
                  importance: float = 1.0, ttl_hours: Optional[float] = None,
