@@ -309,6 +309,37 @@ RULES_FILE = DATA_DIR / "rules.json"
 BRAIN_LOG_FILE = LOGS_DIR / "brain_log.jsonl"
 
 # ---------------------------------------------------------------
+# МОСТ УШЕЙ (23.11, фронт 4 «голос»): вторая ступень слуха из доктрины
+# ушей (sensors/ears.py, шапка): дешёвый сторож имени (vosk, вечно)
+# слышит «Марфа» — тяжёлый whisper-turbo просыпается НА СЕКУНДЫ и
+# расшифровывает фразу целиком. Модель в чулане с рождения дома
+# (АРСЕНАЛ: ggml-large-v3-turbo.bin, ~1.6 ГБ, CPU — VRAM принадлежит
+# глазам, принцип хозяина ресурса). Слуга ПО ВЫЗОВУ, порт 8086:
+# whisper-server из сборки llama.cpp/whisper.cpp с OpenAI-совместимым
+# путём /v1/audio/transcriptions (флаг --inference-path).
+# ---------------------------------------------------------------
+PORT_WHISPER = 8086            # whisper-server (large-v3-turbo) — СЛУГА ПО ВЫЗОВУ
+WHISPER_URL = f"http://127.0.0.1:{PORT_WHISPER}"
+WHISPER_TRANSCRIBE_PATH = "/v1/audio/transcriptions"  # OpenAI-совместимый путь
+WHISPER_TIMEOUT_SEC = 60       # расшифровка одной фразы (turbo на CPU — секунды)
+WHISPER_START_WAIT_SECS = 90   # подъём слуги с NVMe (1.6 ГБ — десятки секунд)
+WHISPER_THREADS = 4            # мозг на 8 ядрах не должен голодать
+WHISPER_KEEPALIVE_SEC = 300    # после фразы слуга живёт 5 минут (разговор — это очередь фраз)
+VOICE_DIR = DATA_DIR / "voice"                  # орган голосового хода
+VOICE_LOG_FILE = VOICE_DIR / "voice_log.jsonl"  # один обмен = одна строка (правило 6.6)
+VOICE_STATUS_FILE = VOICE_DIR / "status.json"   # сердцебиение моста (как ears_status)
+VOICE_SESSION = "voice"         # разговор голосом — своя сессия диалога
+                                # (имя — ASCII по контракту калитки
+                                # _safe_session: кириллица в ИМЕНИ ФАЙЛА
+                                # сессии запрещена; человекочитаемое —
+                                # в журнале и статусе моста)
+PHRASE_PREROLL_SEC = 1.5       # кольцо: фраза начинается ДО срабатывания сторожа
+PHRASE_MAX_SEC = 10.0          # потолок фразы (длиннее — обрезаем, whisper не любит марафоны)
+PHRASE_SILENCE_SEC = 1.2       # тишина после слов — фраза кончилась
+PHRASE_MIN_PCM_SEC = 0.5       # короче — одинокий зов без команды («Марфа!»)
+PHRASE_SILENCE_RMS = 300       # порог тишины int16 (калибруется «проверь мост»)
+
+# ---------------------------------------------------------------
 # Fallback GigaChat (ТЗ 3.2): включается только когда 30B упала
 # ---------------------------------------------------------------
 FALLBACK_ENABLED = os.environ.get("MARFA_FALLBACK", "0") == "1"

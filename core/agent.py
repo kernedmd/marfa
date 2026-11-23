@@ -423,6 +423,17 @@ def _house_state() -> str:
             rules_note = "; " + rl
     except Exception as e:
         _lesson("сенсор-упал", "правила: %s: %s" % (type(e).__name__, e))
+    # МОСТ УШЕЙ (23.11, фронт 4): жива ли вторая ступень слуха — мозг
+    # знает, что с ним можно ГОВОРИТЬ ВСЛУХ; службы нет — строки нет
+    # (состояние не толстеет, образец — правила №40). Сенсор в броне
+    bridge_line = ""
+    try:
+        from sensors import ear_bridge as _bridge_mod
+        bl = _bridge_mod.state_line()
+        if bl:
+            bridge_line = "; " + bl
+    except Exception as e:
+        _lesson("сенсор-упал", "мост: %s: %s" % (type(e).__name__, e))
     # №6 «глаза как контекст мозга» (Г-3): слежение включено — мозг
     # получает свежую строку о экране (кэш TTL: ходы между взглядами
     # бесплатны). Сенсор в своей броне: упавшее слежение не выдаёт
@@ -443,7 +454,7 @@ def _house_state() -> str:
         ", квант " + config.DEFAULT_QUANT +
         ", RAM-бюджет " + str(config.RAM_BUDGET_GB) + " ГБ; " + eyes_note +
         "; " + cam_note +
-        "; " + ears_note +
+        "; " + ears_note + bridge_line +
         "; " + inner_note +
         "; " + sleep_note + thought_note + rules_note +
         "; я не сплю с " + started + watch_note
@@ -879,6 +890,24 @@ class Agent:
                 _lesson("сенсор-упал", "уши-осмотр: %s: %s" % (type(e).__name__, e))
                 return Reply("осмотр ушей не собрался: %s — расскажи "
                              "архитектору" % e, "python", "ears_selftest")
+
+        # МОСТ УШЕЙ (23.11, фронт 4 «голос»): «проверь мост» — осмотр
+        # ВТОРОЙ ступени слуха (whisper-слуга, ловец фраз) по ступеням.
+        # Ветка ПОСЛЕ ушей: «проверь уши» не должно попадать сюда (границы
+        # не пересекаются — «мост» отдельное слово, но порядок страховает)
+        if (lowq in ("проверь мост", "мост", "проверь мост ушей",
+                     "проверь голос", "как голос")
+                or low.startswith("проверь мост")
+                or low.startswith("проверь голос")):
+            from sensors import ear_bridge as _bridge_mod
+            try:
+                return Reply(_bridge_mod.selftest(), "python",
+                             "ear_bridge_selftest")
+            except Exception as e:
+                _lesson("сенсор-упал", "мост-осмотр: %s: %s"
+                        % (type(e).__name__, e))
+                return Reply("осмотр моста не собрался: %s — расскажи "
+                             "архитектору" % e, "python", "ear_bridge_selftest")
 
         # Г-2.4, камера (22.11): веб-камера — второй источник зрения.
         # ВАЖНО: ветка ДО экранной — «посмотри в камеру» начинается
