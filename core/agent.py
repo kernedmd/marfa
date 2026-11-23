@@ -95,6 +95,9 @@ from core.chance import rand_between, coin_times     # круг 3: жребий 
 from core import holidays, worldtime, stretch, pomodoro  # круг 4: время и здоровье (Ф26-Ф30)
 from core import talkstats, echo_search, dayroll, weekroll, moodlog  # круг 5: разговор (Ф31-Ф35)
 from core import agenda, filefind, legacy, shelf, weight  # круг 6: дом и его тело (Ф36-Ф40)
+from core import answercache, promptweight, brainhealth, energy  # круг 7: скорость (Ф41, Ф43-Ф45, день-9)
+from core import seal, shores, borders  # круг 8: печати и калитка (Ф46, Ф48-Ф49, день-9)
+from core import semantic, diaryday, personcard, dialogexport  # круг 9: смыслы и архив (Ф52-Ф55, день-9)
 from core import uptime as _uptime   # H7 аудита: момент рождения процесса — импорт модуля
                                     # (панель поднимает агента на старте), а не первый запрос
 from core.brain import BrainClient, is_refusal
@@ -544,6 +547,17 @@ class Agent:
             self.memory.remember(payload)
             return Reply("запомнила: " + payload, "python", "remember")
 
+        # Ф52 «СМЫСЛОВАЯ ПАМЯТЬ» (день-9): «вспомни по смыслу X» / «по
+        # смыслу X» — стоит ДО дословного «вспомни»: смысловой орган
+        # главный в этой фразе (сухой режим — орган сам скажет про кнопку 93)
+        m = re.match(r"^(?:вспомни\s+)?по\s+смыслу\s+(.+?)\??$", lowq)
+        if m:
+            return Reply(semantic.render(m.group(1).strip()),
+                         "python", "semantic")
+        if lowq in ("переиндексируй смыслы", "проиндексируй смыслы",
+                    "индексируй смыслы", "переиндексация смыслов"):
+            return Reply(semantic.reindex(), "python", "semantic")
+
         if re.match(r"^вспомни(?![а-яё])(?=[\s:,;—-]|$)", low):
             query = t[len("вспомни"):].strip().lstrip(":,;—- ").strip()
             if not query:
@@ -920,6 +934,62 @@ class Agent:
             return Reply(weight.render(target), "python", "weight")
         if lowq in ("что построили", "летопись"):
             return Reply(legacy.render(), "python", "legacy")
+
+        # Ф41, Ф43-Ф45 «Скорость» — круг 7 (день-9, 24.11): память
+        # ответов, вес промпта, здоровье мозга, энергия дома. Фронт 1:
+        # скорость — единственная жалоба Создателя; диагноз и лечение —
+        # в чате, без консоли. Мозг молчит.
+        if lowq in ("вес промпта", "сколько весит промпт",
+                    "вес системного промпта"):
+            return Reply(promptweight.render(), "python", "promptweight")
+        if lowq in ("здоровье мозга", "как здоровье мозга",
+                    "как себя чувствует мозг"):
+            return Reply(brainhealth.render(), "python", "brainhealth")
+        if lowq in ("энергия дома", "энергия", "сколько сил"):
+            return Reply(energy.render(), "python", "energy")
+        m = answercache.parse(t)
+        if m and m[0] == "forget":
+            return Reply(answercache.forget_all(), "python", "answercache")
+        if lowq in ("ответь иначе", "ответь по-другому", "ответь по другому"):
+            return Reply(answercache.bypass(), "python", "answercache")
+
+        # Ф46, Ф48-Ф49 «Печати и границы» — круг 8 (день-9): печать души,
+        # берега git, карта запретов. №28 (ротация слова) живёт ЗА калиткой —
+        # она говорит словом. Мозг молчит: дом знает свои границы сам
+        if lowq in ("печать", "поставь печать"):
+            return Reply(seal.place(), "python", "seal")
+        if lowq in ("печати целы", "печати целы?", "целы ли печати"):
+            return Reply(seal.verify(), "python", "seal")
+        if lowq in ("печати", "список печатей"):
+            return Reply(seal.history(), "python", "seal")
+        if lowq in ("берега", "вторые берега", "проверь берега"):
+            return Reply(shores.render(), "python", "shores")
+        if lowq in ("границы", "какие границы", "куда ты не ходишь"):
+            return Reply(borders.render(), "python", "borders")
+
+        # Ф53-Ф55 «Смыслы и архив» — круг 9 (день-9): дневник за дату,
+        # визитка Создателя, экспорт разговора. Ф51 (слуга-эмбеддер) —
+        # кнопка 93; Ф52 (смыслы) стоит выше — у дословного «вспомни»
+        if re.match(r"^(?:что\s+было|дневник\s+за|что\s+случилось)\s+\S",
+                    lowq):
+            payload = re.sub(r"^(?:что\s+было|дневник\s+за|что\s+случилось)"
+                             r"\s+", "", lowq).rstrip("?.!")
+            day = diaryday.parse_date(payload)
+            if day is not None:
+                return Reply(diaryday.render(day), "python", "diaryday")
+            return Reply("не разобрала дату «%s» — скажи «что было вчера» "
+                         "или «что было 20 ноября»" % payload,
+                         "python", "diaryday")
+        if lowq in ("что ты помнишь обо мне", "что ты знаешь обо мне",
+                    "что ты помнишь про меня", "расскажи обо мне"):
+            return Reply(personcard.render(), "python", "personcard")
+        if lowq in ("сохрани наш разговор", "сохрани разговор",
+                    "сохрани беседу"):
+            return Reply(dialogexport.export(), "python", "dialogexport")
+        if lowq in ("разговоры", "сохранённые разговоры",
+                    "сохраненные разговоры"):
+            return Reply(dialogexport.list_exports(), "python",
+                         "dialogexport")
 
         # СОН: «спи» — Создатель укладывает до утра или «проснись»
         if lowq in ("спи", "спать", "ложись спать", "на боковую"):
@@ -1630,8 +1700,21 @@ class Agent:
         назвонившие напоминания ПЕРВОЙ строкой ответа (у панели нет
         канала «постучать первой», и мы не притворяемся; напоминание
         честно ждёт в чате). Упавший будильник не роняет чат.
+
+        Ф45 (день-9): каждый ход — строка в счётчик энергии дома
+        (рефлекс/мозг/память, секунды, токены); «энергия дома» собирает
+        день в цифрах. Счётчик — топливо статистики, не орган дыхания:
+        упал — дом живёт дальше.
         """
+        _t0 = time.time()
         reply = self._dispatch(user_text, reply_to, history)
+        try:
+            _tok = None
+            if isinstance(getattr(reply, "meta", None), dict):
+                _tok = reply.meta.get("tok")
+            energy.note(reply.source, time.time() - _t0, _tok)
+        except Exception:
+            pass
         try:
             from core import reminders
             note = reminders.due_note()
@@ -1673,6 +1756,18 @@ class Agent:
             fast = None
         if fast is not None:
             return fast
+        # Ф41 ПАМЯТЬ ОТВЕТОВ (день-9): повторный вопрос — Марфа помнит,
+        # что отвечала, и отвечает мгновенно; честность — в первой строке
+        # («Помню — уже отвечала…»), свежесть — TTL. Мозг не платит второй
+        # раз за тот же вопрос. Броня: упавшая память не роняет ход —
+        # вопрос честно уходит мозгу.
+        try:
+            remembered = answercache.lookup(user_text)
+        except Exception as e:
+            _lesson("память-ответов-упала", "%s: %s" % (type(e).__name__, e))
+            remembered = None
+        if remembered is not None:
+            return Reply(remembered, "answercache", "answercache")
         # эфир: быстрые команды мгновенны, а вот мозговой трек — долгий;
         # чат обязан видеть, ЧТО происходит, пока он идёт (не молчать)
         progress.stage("собираю контекст: доктрина, воспоминания, состояние дома…")
@@ -1800,5 +1895,15 @@ class Agent:
                 return Reply("Я зациклилась и повторила прошлый ответ. "
                              "Скажи «ответь иначе» — и я попробую заново.",
                              "brain", None, meta=meta or None)
+            # Ф41: чистый ответ мозга ложится в память ответов — в
+            # следующий раз Марфа вспомнит его мгновенно. Не помнятся:
+            # действия (повторить слова без дела — врать о мире) и сбои
+            # (они вернулись раньше по своим путям). Броня: память
+            # упала — ход уже отвечен, просто без воспоминаний.
+            try:
+                answercache.store(user_text, ans)
+            except Exception as e:
+                _lesson("память-ответов-не-записалась",
+                        "%s: %s" % (type(e).__name__, e))
             return Reply(ans, "brain", None, meta=meta or None)
         return Reply(str(decision), "brain", None)

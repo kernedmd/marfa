@@ -124,6 +124,12 @@ def default_jobs() -> list[dict]:
         text = architect_oncall.weekly_report()
         return "доклад архитектора: %d строк" % len(text.splitlines())
 
+    def _seal() -> str:
+        # Ф46 (день-9): печать души перед сном — за 5 минут до бэкапа,
+        # чтобы архив увозил ЗАПЕЧАТАННОЕ состояние (сверка — «печати целы?»)
+        from core import seal
+        return seal.tick()
+
     return [
         job("plan", "daily", at="08:00", what="план дня (Ф71)", run=_plan),
         job("diary", "daily", at="21:00", what="вечерний дневник (№8)",
@@ -132,6 +138,8 @@ def default_jobs() -> list[dict]:
             what="сон-сновидение после ночи (мысли)", run=_dream),
         job("backup", "daily", at="23:30", what="бэкап души дома (№23)",
             run=_backup),
+        job("seal", "daily", at="23:25", what="печать души перед сном (Ф46)",
+            run=_seal),
         job("queue", "interval", every=60,
             what="очередь и вопросы (Ф74)", run=_questions_awake),
         job("doctor", "interval", every=300,
