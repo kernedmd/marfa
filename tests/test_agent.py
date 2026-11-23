@@ -502,3 +502,39 @@ def test_agent_reminders_list_command(agent, srv):
     r = agent.handle("напоминания")
     assert r.tool_used == "reminders" and "списочек" in r.text
     assert srv.calls == []
+
+
+def test_brain_refusal_hint_names_button(agent, monkeypatch):
+    """ДЕНЬ-8 (23.11): отказ соединения (WinError 10061 — бомба кавычек
+    терапии §15) — человеческий диагноз «сервер не отвечает на порту»
+    и путь лечения (кнопка 92), а не только голая ошибка."""
+    class DeadBrain:
+        url = "http://127.0.0.1:1"
+        last_usage = {}
+
+        def ask_json(self, *a, **k):
+            raise Exception(
+                "[WinError 10061] попытка соединения не удалась")
+
+    monkeypatch.setattr(agent, "brain", DeadBrain())
+    r = agent.handle("поговори со мной")
+    assert "мозг недоступен" in r.text and r.source == "fallback"
+    assert "не отвечает на порту" in r.text
+    assert "92_brain_fix" in r.text
+
+
+def test_brain_timeout_hint_stays_slow_not_broken(agent, monkeypatch):
+    """Таймаут остаётся честным «думал дольше N сек» — день-8 не смешал
+    болезни: медленный мозг не обзывается выключенным."""
+
+    class SlowBrain:
+        url = "http://127.0.0.1:1"
+        last_usage = {}
+
+        def ask_json(self, *a, **k):
+            raise Exception("<urlopen error timed out>")
+
+    monkeypatch.setattr(agent, "brain", SlowBrain())
+    r = agent.handle("поговори со мной")
+    assert "не спешит" in r.text or "не успел" in r.text
+    assert "не отвечает на порту" not in r.text

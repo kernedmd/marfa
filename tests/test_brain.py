@@ -307,3 +307,78 @@ def test_preamble_says_organism_not_assistant(client, srv):
     sys_text = srv.calls[-1]["messages"][0]["content"]
     assert "ассистент" not in sys_text.lower()
     assert "организм" in sys_text.lower()
+
+
+# ---------- ДЕНЬ-8 (23.11): отказ соединения ≠ таймаут ----------
+
+def test_is_refusal_detector():
+    """WinError 10061 (машина Создателя, живой лог дня-8) и Connection
+    refused (песочница) — одна болезнь: сервер не слушает порт.
+    Таймаут и HTTP-ошибки — другие, им дозвон противопоказан."""
+    assert brain.is_refusal("[WinError 10061] попытка соединения") is True
+    assert brain.is_refusal("[Errno 111] Connection refused") is True
+    assert brain.is_refusal("ConnectionRefusedError: actively refused") is True
+    assert brain.is_refusal("timed out") is False
+    assert brain.is_refusal("HTTP Error 500") is False
+    assert brain.is_refusal("") is False
+
+
+def test_ask_json_waits_for_loading_brain(client, srv, monkeypatch):
+    """Отказ соединения — мозг грузится: клиент дозванивается снова,
+    а не роняет ход первым «нет ответа» (панель спросила раньше,
+    чем порт 8082 ожил). Две попытки отказа — третья дозванивается."""
+    import urllib.error
+    import urllib.request
+    real = urllib.request.urlopen
+    state = {"refusals": 0}
+
+    def flaky(req, timeout=None):
+        if state["refusals"] < 2:
+            state["refusals"] += 1
+            raise urllib.error.URLError(
+                ConnectionRefusedError(10061, "попытка соединения"))
+        return real(req, timeout=timeout)
+
+    monkeypatch.setattr(urllib.request, "urlopen", flaky)
+    monkeypatch.setattr(config, "BRAIN_CONNECT_RETRIES", 3)
+    srv.reply_content = '{"answer": "дождалась"}'
+    out = client.ask_json("привет")
+    assert out == {"answer": "дождалась"}
+    assert state["refusals"] == 2
+
+
+def test_chat_timeout_not_retried(client, monkeypatch):
+    """Таймаут — медленное честное думание: дозвон противопоказан,
+    ход падает сразу — каждой болезни своё лечение (урок H6)."""
+    import socket
+    import urllib.error
+    import urllib.request
+    calls = {"n": 0}
+
+    def slow(req, timeout=None):
+        calls["n"] += 1
+        raise urllib.error.URLError(socket.timeout("timed out"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", slow)
+    with pytest.raises(brain.BrainError):
+        client.chat([{"role": "user", "content": "долго думаешь?"}])
+    assert calls["n"] == 1
+
+
+def test_chat_http_error_not_retried(client, monkeypatch):
+    """HTTP-ошибка сервера — не «грузится»: дозвона нет, одна попытка."""
+    import io
+    import urllib.error
+    import urllib.request
+    calls = {"n": 0}
+
+    def err500(req, timeout=None):
+        calls["n"] += 1
+        raise urllib.error.HTTPError(
+            "http://127.0.0.1:8082/v1/chat/completions", 500, "boom",
+            None, io.BytesIO(b"{}"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", err500)
+    with pytest.raises(brain.BrainError):
+        client.chat([{"role": "user", "content": "привет"}])
+    assert calls["n"] == 1
