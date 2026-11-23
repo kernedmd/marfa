@@ -373,6 +373,45 @@ def api_reminders():
                         "error": "%s: %s" % (type(e).__name__, e)})
 
 
+@app.get("/api/voice")
+def api_voice():
+    """МОСТ УШЕЙ (фронт 4): голосовые ходы — для страницы чата.
+
+    Служба моста (sensors/ear_bridge.py --service) ловит фразы Создателя
+    голосом, расшифровывает whisper-слугой и отвечает в сессию voice;
+    журнал data/voice/voice_log.jsonl — один обмен, одна строка. Чат
+    опрашивает раз в 4 с с последним показанным seq: новые обмены
+    приходят живьём, с пометкой «услышала голосом». busy-флаг статуса —
+    «расшифровываю и думаю», пока ход в работе (мозг на CPU — десятки
+    секунд, чат не молчит). Мост упал — честный пустой прирост,
+    чат жив (закон №10 р3).
+    """
+    after = request.args.get("after", -1, type=int)
+    if after is None:
+        after = -1
+    try:
+        from sensors import ear_bridge
+        data = ear_bridge.voice_recent(after=after)
+        turns = []
+        for t in data.get("turns") or []:
+            if not isinstance(t, dict):
+                continue
+            rec = dict(t)
+            if rec.get("event") == "exchange":
+                # №12: ответы Марфы — безопасный HTML с сервера; фраза
+                # Создателя остаётся текстом (панель покажет textContent)
+                rec["html"] = to_safe_html(str(rec.get("answer") or ""))
+                rec["src_label"] = (
+                    progress.source_label(str(rec.get("src") or ""))
+                    if rec.get("secs") is not None else "")
+            turns.append(rec)
+        return jsonify({"seq": int(data.get("seq") or 0), "turns": turns,
+                        "busy": bool(ear_bridge.voice_busy())})
+    except Exception as e:
+        return jsonify({"seq": after, "turns": [], "busy": False,
+                        "error": "%s: %s" % (type(e).__name__, e)})
+
+
 @app.get("/api/dialog/<session>")
 def api_dialog(session):
     """История сессии для страницы чата (переживает F5).
