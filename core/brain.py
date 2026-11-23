@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
@@ -28,6 +29,69 @@ from core import config
 
 class BrainError(Exception):
     """Мозг не ответил или ответил не-JSON. Наверх уходит как честная ошибка."""
+
+
+def _log_brain_call(kind: str, raw_full: str, stripped: str,
+                    usage, secs: float, ok: bool,
+                    decision=None) -> None:
+    """ЖУРНАЛ МОЗГОВОГО ТРАФИКА (23.11, ночь): logs/brain_log.jsonl,
+    одна строка на КАЖДУЮ генерацию — токены, секунды, ДУМАНИЕ (сколько
+    символов срезано think-блоками), ответ ЦЕЛИКОМ, действие.
+
+    Урок живого лога: Создатель спросил «что она сгенерировала на
+    179 токенов — там может быть нормальный ответ, который не дошёл?» —
+    а дому нечем было ответить: brain-лога не существовало, обещание
+    «хвост brain» из анти-эхо указывало в пустоту. Теперь вопрос
+    проверяем: «хвост brain ui_action» покажет, что было в answer,
+    а think_chars отличит невидимое думание от пропавшего ответа.
+
+    Файл не записался — разговор живёт дальше: журнал — правда для
+    архива, не орган дыхания. note — человеческая метка повода
+    («пустой ответ», «не-json»), чтобы фильтр хвоста находил строку
+    словами, а не по пунктуации."""
+    try:
+        ptok = ctok = 0
+        if isinstance(usage, dict):
+            try:
+                ctok = int(usage.get("completion_tokens") or 0)
+            except (TypeError, ValueError):
+                ctok = 0
+            try:
+                ptok = int(usage.get("prompt_tokens") or 0)
+            except (TypeError, ValueError):
+                ptok = 0
+        answer = None
+        action = None
+        if isinstance(decision, dict):
+            a = decision.get("answer")
+            answer = (a if isinstance(a, str) else str(a))[:4000] if a is not None else None
+            act = decision.get("action")
+            if isinstance(act, dict):
+                action = json.dumps(act, ensure_ascii=False)[:1000]
+        note = ""
+        if ok and isinstance(decision, dict) and not (decision.get("answer") or "").strip() \
+                and not isinstance(decision.get("action"), dict):
+            note = "пустой ответ"
+        if not ok:
+            note = "не-json"
+        rec = {
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "kind": kind,
+            "secs": round(float(secs), 1),
+            "prompt_tokens": ptok,
+            "completion_tokens": ctok,
+            "think_chars": max(0, len(raw_full or "") - len(stripped or "")),
+            "ok": bool(ok),
+            "note": note,
+            "answer": answer,
+            "action": action,
+        }
+        p = Path(config.BRAIN_LOG_FILE)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass   # журнал — не орган дыхания; разговор живёт дальше
 
 
 def _extract_content(data) -> str:
@@ -274,8 +338,19 @@ class BrainClient:
         if top_p_val is not None:
             payload["top_p"] = top_p_val
         _kill_thinking(payload)
+        t0 = time.time()
         data = self._post("/v1/chat/completions", payload)
-        return _extract_content(data)
+        raw_full = _extract_content(data)
+        stripped = _strip_think(raw_full)
+        usage = data.get("usage")
+        if isinstance(usage, dict):
+            self.last_usage = {
+                "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                "completion_tokens": int(usage.get("completion_tokens") or 0),
+            }
+        _log_brain_call("chat", raw_full, stripped, usage,
+                        time.time() - t0, True, None)
+        return stripped
 
     # ---------- строгий JSON (ADR-002) ----------
 
@@ -336,12 +411,13 @@ class BrainClient:
             # характер доктрины может перекрыть своим
             payload["top_p"] = mood.get("top_p", DEFAULT_TOP_P)
             _kill_thinking(payload)
+            t0 = time.time()
             if on_text is not None:
                 data = self._post_stream("/v1/chat/completions", payload, on_text)
             else:
                 data = self._post("/v1/chat/completions", payload)
-            raw = _extract_content(data)
-            raw = _strip_think(raw)
+            raw_full = _extract_content(data)
+            raw = _strip_think(raw_full)
             usage = data.get("usage")
             if isinstance(usage, dict):
                 self.last_usage = {
@@ -351,10 +427,15 @@ class BrainClient:
             try:
                 out = json.loads(raw)
                 if isinstance(out, dict):
+                    _log_brain_call("ask_json", raw_full, raw, usage,
+                                    time.time() - t0, True, out)
                     return out
             except (json.JSONDecodeError, TypeError):
                 pass
-            # брак: укор и повтор тем же разговором
+            # брак: укор и повтор тем же разговором; журнал уже записал
+            # попытку с меткой «не-json» — «хвост brain не-json» покажет
+            _log_brain_call("ask_json", raw_full, raw, usage,
+                            time.time() - t0, False, None)
             messages = messages + [
                 {"role": "assistant", "content": raw},
                 {"role": "user", "content": (
