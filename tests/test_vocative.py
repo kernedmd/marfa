@@ -113,3 +113,21 @@ def test_wake_with_fast_tail(agent, srv):
 def test_morning_punctuated(agent, srv):
     r = agent.handle("доброе утро!")
     assert r.tool_used == "sleep"
+
+
+# ---------- ведущий союз «И» (диктовка правил, вечер-3 доучка) ----------
+
+def test_leading_and_memory_dictation(agent):
+    r = agent.handle('И запиши в память: если команда известна, но '
+                     'контекст изменился — я не выполняю автоматически')
+    assert r.tool_used == "remember"
+    got = agent.memory.recall("контекст изменился")
+    assert got and "автоматически" in got[0]["text"]
+
+
+def test_leading_and_non_command_brain_sees_original(agent, srv):
+    srv.reply_content = '{"answer": "думаю"}'
+    r = agent.handle("И что дальше со всем этим делать?")
+    assert r.source == "brain"
+    sent = srv.calls[0]["messages"][-1]["content"]
+    assert sent == "И что дальше со всем этим делать?"   # целиком, без обрезки
