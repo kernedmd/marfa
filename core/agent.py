@@ -1310,7 +1310,23 @@ class Agent:
         # («запомни меня», «запомни, как я выгляжу», «запомни экран»)
         # разобраны выше и сюда не доходят — до них очередь доходит только
         # с чем-то новым: «запомни, что завтра созвон» — память, не мозг.
-        # Граница слова обязательна: «запомнится» — не команда
+        # Граница слова обязательна: «запомнится» — не команда.
+        # День-10 (Ф63): сюда же — «запомни буфер»: специфическая ветка
+        # над генералом, иначе «буфер» уезжал в память голым словом
+        if re.match(r"^(?:запомни|сохрани)\s+буфер(?:\s+обмена)?$", lowq):
+            from core import hands as _hands
+            try:
+                raw = _hands.clipboard_read_raw()
+            except Exception as e:
+                return Reply("буфер не отдался: " + str(e),
+                             "python", "clipboard_remember")
+            if not raw.strip():
+                return Reply("буфер пуст — запоминать нечего",
+                             "python", "clipboard_remember")
+            self.memory.remember(raw)
+            preview = raw if len(raw) <= 120 else raw[:117] + "…"
+            return Reply("запомнила из буфера: " + preview,
+                         "python", "clipboard_remember")
         m = re.match(r"^запомни(?![а-яё])[\s:,;—-]*(.*)$", t, re.IGNORECASE)
         if m:
             payload = m.group(1).strip().strip('«»"\'').strip()
@@ -1381,6 +1397,56 @@ class Agent:
         if lowq in ("проверь голос", "проверка голоса", "как голос"):
             from core import voice as _voice
             return Reply(_voice.selftest(), "python", "voice")
+
+        # ЧТЕНИЕ И БУФЕР (день-10, Ф61–Ф65): глаза читают надписи
+        # списком, буфер отдаёт и принимает, голос читает органы.
+        # «прочитай вслух» — ПЕРВЫМ: «прочитай экран» и «прочитай
+        # буфер» — его младшие братья по префиксу (жадность разводится
+        # порядком сравнения, урок раунда 3)
+        m = re.match(r"^прочитай\s+вслух[\s:,;—-]+(.+?)\s*[?.!…]*$",
+                     t, re.IGNORECASE)
+        if m:
+            from core import voice as _voice
+            return Reply(_voice.read_aloud(m.group(1).strip()),
+                         "python", "read_aloud")
+        if lowq == "прочитай вслух":
+            return Reply("что прочитать вслух? экран, дневник, последний "
+                         "ответ или визитку", "python", "read_aloud")
+        if lowq in ("прочитай экран", "прочитай что на экране",
+                    "прочитай надписи", "прочитай надписи на экране",
+                    "что написано на экране"):
+            from core import eyes as _eyes
+            return Reply(_eyes.read_texts_text(), "python", "read_screen")
+        if lowq in ("экран в буфер", "перепиши экран в буфер",
+                    "скопируй экран", "скопируй экран в буфер",
+                    "надписи в буфер", "экран в буфер обмена"):
+            from core import eyes as _eyes
+            from core import hands as _hands
+            lines, note = _eyes.read_texts_list()
+            if not lines:
+                return Reply(note or "глаза не прочитали ни одной надписи",
+                             "python", "screen_to_clipboard")
+            try:
+                return Reply(_hands.clipboard_write_lines(lines),
+                             "python", "screen_to_clipboard")
+            except PermissionError as e:
+                return Reply("СТРАЖ отказал: " + str(e),
+                             "python", "screen_to_clipboard")
+            except Exception as e:
+                return Reply("в буфер не получилось: " + str(e),
+                             "python", "screen_to_clipboard")
+        if lowq in ("что в буфере", "прочитай буфер", "буфер",
+                    "что в буфере обмена"):
+            from core import hands as _hands
+            try:
+                return Reply(_hands.clipboard_read(), "python", "clipboard")
+            except Exception as e:
+                return Reply("буфер не отдался: " + str(e),
+                             "python", "clipboard")
+        if lowq in ("проверь буфер", "проверка буфера"):
+            from core import hands as _hands
+            return Reply(_hands.clipboard_selftest(),
+                         "python", "clipboard_selftest")
 
         # №29 «доклад архитектора» (роадмап 30, architect_oncall v2):
         # еженедельный аудит дома — тесты, коммиты, диск, дрейф канона;

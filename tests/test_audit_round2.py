@@ -407,7 +407,7 @@ def test_n1_voice_keeps_paragraphs():
 
 def test_h4_parse_json_brace_inside_string():
     """Скобка } внутри строкового литерала — валидный ответ сенсора,
-    а не «глаза ошиблись»."""
+    а не «глаза ошибились»."""
     from core.eyes import parse_json
     d = parse_json('{"text": "закрываю } окно", "n": 1}')
     assert d == {"text": "закрываю } окно", "n": 1}

@@ -450,3 +450,115 @@ def selftest() -> str:
     lines.append("  · включить ответы голосом: «говори вслух» (выключить — "
                  "«молчи»)")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------
+# Ф64 «прочитай вслух <что>» — голос читает живые органы дома
+# ---------------------------------------------------------------
+
+def _fit(text: str, limit: int) -> tuple:
+    """Уложить текст в лимит честно: рез по границе предложения,
+    а не по середине слова; сообщаем, что показали не всё."""
+    text = str(text or "").strip()
+    if len(text) <= limit:
+        return text, False
+    head = text[:limit]
+    # последнее честное место конца фразы (урок M6: точка в конце
+    # строки — тоже конец фразы); граница поиска — четверть лимита:
+    # слишком ранний конец лучше, чем слово пополам
+    for i in range(len(head) - 1, max(limit // 4, 10), -1):
+        if head[i] in ".!?…\n":
+            return head[:i + 1].rstrip(), True
+    return head.rstrip(), True
+
+
+def _last_reply_text() -> str:
+    """Последний ответ Марфы — свежайшая сессия по времени файла
+    (урок Ф55: свежесть решает штамп, не алфавит)."""
+    from core.dialog import DialogStore
+    store = DialogStore()
+    try:
+        files = sorted(store.dir.glob("session_*.json"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        return ""
+    for p in files[:5]:
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            turns = data.get("turns") if isinstance(data, dict) else None
+            for t in reversed(turns or []):
+                if (isinstance(t, dict) and t.get("role") == "assistant"
+                        and str(t.get("text") or "").strip()):
+                    return str(t["text"])
+        except (OSError, ValueError, TypeError):
+            continue
+    return ""
+
+
+def read_aloud(target: str) -> str:
+    """«прочитай вслух экран / дневник / последний ответ / визитку» —
+    мост кругов 10 и 11: органы кормят голос. Порядок честности:
+    сначала цель (дёшево), потом голос (незачем глазам читать экран
+    девять секунд, чтобы узнать, что рта нет — урок скорости дня-9),
+    потом органы — каждый в своей броне (закон №10 р3). Вслух —
+    первые REPLY_LIMIT символов, рез по предложениям."""
+    target = str(target or "").strip().lower().rstrip("?!. ")
+    if not target:
+        return ("что прочитать вслух? экран, дневник, последний ответ "
+                "или визитку — «прочитай вслух <что>»")
+    known = (target in ("экран", "экрана", "надписи", "надписи на экране",
+                        "что на экране", "текст на экране")
+             or target in ("дневник", "дневника", "мой дневник",
+                           "дневник за сегодня", "последний дневник")
+             or target in ("ответ", "последний ответ", "прошлый ответ",
+                           "что ты сказала", "свой ответ")
+             or target in ("визитку", "визитка", "обо мне",
+                           "что ты помнишь обо мне"))
+    if not known:
+        return ("не знаю, что это: прочитаю вслух экран, дневник, "
+                "последний ответ или визитку")
+    if not available():
+        return ("прочитать вслух не могу: PowerShell не найден — орган "
+                "голоса живёт на станции (Windows)")
+    voices, error = list_voices()
+    if error or not voices:
+        return ("голос не готов: %s — скажи «проверь голос», разберёмся"
+                % (error or "в Windows нет ни одного голоса"))
+    if target in ("экран", "экрана", "надписи", "надписи на экране",
+                  "что на экране", "текст на экране"):
+        from core import eyes as _eyes
+        lines, note = _eyes.read_texts_list()
+        if not lines:
+            return note or "глаза не прочитали ни одной надписи"
+        text, cut = _fit("\n".join(lines), REPLY_LIMIT)
+        label = "надписи экрана (%d)" % len(lines)
+    elif target in ("дневник", "дневника", "мой дневник",
+                    "дневник за сегодня", "последний дневник"):
+        from core.diary import Diary
+        d = Diary()
+        last = d.last_diary()
+        if not last:
+            return ("дневников ещё нет — скажи «подведи день», будет "
+                    "что читать вслух")
+        try:
+            raw = (d.diary_dir / (last + ".md")).read_text(encoding="utf-8")
+        except OSError as e:
+            return "дневник не открылся: %s" % e
+        text, cut = _fit(raw, REPLY_LIMIT)
+        label = "дневник за %s" % last
+    elif target in ("ответ", "последний ответ", "прошлый ответ",
+                    "что ты сказала", "свой ответ"):
+        raw = _last_reply_text()
+        if not raw:
+            return ("моих ответов в архиве диалога нет — скажи что-нибудь, "
+                    "потом попроси прочитать вслух")
+        text, cut = _fit(raw, REPLY_LIMIT)
+        label = "последний ответ"
+    else:
+        from core import personcard
+        text, cut = _fit(personcard.render(), REPLY_LIMIT)
+        label = "визитку Создателя"
+    speak_async(text, limit=REPLY_LIMIT)
+    tail = " (первые %d символов — длинное читай глазами)" % len(text) if cut \
+        else ""
+    return "читаю вслух %s%s" % (label, tail)

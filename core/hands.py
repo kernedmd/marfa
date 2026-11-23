@@ -142,6 +142,122 @@ def clipboard_write(text: str) -> str:
             "сам или скажи «руки клавиши ctrl+v»" % len(text))
 
 
+def clipboard_read() -> str:
+    """«что в буфере» (Ф63, день-10): прочитать буфер обмена в чат.
+
+    Границы: лимит CLIPBOARD_READ_LIMIT (показать — не значит
+    притащить всё, что туда скопировали), пустой буфер — честное
+    «пусто», а не выдумка. Секреты НЕ проверяем на чтении: буфер
+    читает Создатель про СВОЙ текст (проверка нужна была на записи —
+    туда секреты не кладут); показ живёт секунду в чате.
+    Возвращает текст или поднимает RuntimeError (нет модуля) —
+    вызывающий покажет честный отказ с аптечкой.
+    """
+    try:
+        pc = _pyperclip()
+    except ImportError as e:
+        raise RuntimeError(
+            "нет модуля буфера: %s — venv\\Scripts\\pip install pyperclip "
+            "(или скажи «проверь буфер», аптечка поставит сама)" % e)
+    text = str(pc.paste() or "")
+    if not text.strip():
+        return "буфер обмена пуст"
+    if len(text) > config.CLIPBOARD_READ_LIMIT:
+        shown = text[:config.CLIPBOARD_READ_LIMIT]
+        cut = "…\n(показала первые %d из %d символов — буфер длинный)"
+        return shown.rstrip() + cut % (config.CLIPBOARD_READ_LIMIT, len(text))
+    return text
+
+
+def clipboard_read_raw() -> str:
+    """Сырой буфер до лимита — без чатовой приписки про обрезку
+    (Ф63): «запомни буфер» кладёт в память ТЕКСТ, а не отчёт о нём."""
+    pc = _pyperclip()
+    return str(pc.paste() or "")[:config.CLIPBOARD_READ_LIMIT]
+
+
+def clipboard_write_lines(lines: list) -> str:
+    """«экран в буфер» (Ф62, день-10): надписи, прочитанные глазами, —
+    в буфер обмена. Сколько ЦЕЛЫХ строк влезло в лимит — столько и
+    едет: обрезка по границе строк, не по середине слова; не влезло
+    ни одной или глаз не прочёл — честный отказ с числами.
+    Возвращает человекочитаемую сводку (швы pyperclip — как у записи).
+    """
+    lines = [str(l).strip() for l in lines if str(l).strip()]
+    if not lines:
+        raise ValueError("глаза не прочитали ни одной надписи")
+    fit: list = []
+    size = 0
+    for line in lines:
+        step = len(line) + (1 if fit else 0)   # разделитель строк
+        if size + step > config.CLIPBOARD_LIMIT:
+            break
+        fit.append(line)
+        size += step
+    if not fit:
+        return ("первая надпись длиннее лимита буфера (%d символов) — "
+                "скопируй её по кускам: «прочитай экран» покажет список"
+                % config.CLIPBOARD_LIMIT)
+    guard.enforce(guard.check_secrets("\n".join(fit)), {"tool": "clipboard"})
+    try:
+        pc = _pyperclip()
+    except ImportError as e:
+        raise RuntimeError(
+            "нет модуля буфера: %s — скажи «проверь буфер», аптечка "
+            "поставит сама" % e)
+    pc.copy("\n".join(fit))
+    if len(fit) == len(lines):
+        return ("В буфере: все %d надписей (%d символов) — вставится "
+                "по ctrl+v" % (len(fit), size))
+    return ("В буфере: первые %d из %d надписей (%d символов) — лимит "
+            "буфера %d; остальные покажу по «прочитай экран»"
+            % (len(fit), len(lines), size, config.CLIPBOARD_LIMIT))
+
+
+def clipboard_selftest() -> str:
+    """«проверь буфер» (Ф65, день-10): живой тест по образцу «проверь
+    камеру» — записала пробу, прочитала, сверила. Прежний буфер
+    СОХРАНЯЕТСЯ и возвращается на место: проверка не имеет права
+    съесть то, что Создатель держал в буфере (закон «не терять
+    данные», фаза 1 аудита).
+    """
+    lines = ["ПРОВЕРКА БУФЕРА:"]
+    try:
+        pc = _pyperclip()
+    except ImportError as e:
+        lines.append("  · нет модуля pyperclip: %s" % e)
+        lines.append("  · скажи «проверь модуль pyperclip» — аптечка "
+                     "поставит сама, потом проверь буфер снова")
+        return "\n".join(lines)
+    try:
+        saved = pc.paste()
+    except Exception as e:
+        return "\n".join(lines + ["  · прочитать буфер не смогла: %s" % e])
+    probe = "марфа-проба-буфера-2411"
+    try:
+        pc.copy(probe)
+        back = str(pc.paste() or "")
+    except Exception as e:
+        lines.append("  · записать/прочитать не смогла: %s" % e)
+        lines.append("  · сообщи архитектору — консоль покажет глубже")
+        return "\n".join(lines)
+    finally:
+        # вернуть чужое: буфер Создателя не наша собственность
+        try:
+            if saved is not None:
+                pc.copy(saved)
+        except Exception:
+            pass
+    if back == probe:
+        lines.append("  · записала пробу и прочитала её обратно — буфер жив")
+    else:
+        lines.append("  · проба не совпала: записала «%s», прочитала «%s» — "
+                     "расскажи архитектору" % (probe, back[:80]))
+    lines.append("  · команды: «в буфер <текст>» — положить, "
+                 "«что в буфере» — прочитать, «запомни буфер» — в память")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------
 # Браузер (Библиотекарь 3.5 подхватит этот же провайдер)
 # ---------------------------------------------------------------
