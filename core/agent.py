@@ -96,6 +96,7 @@ from core import holidays, worldtime, stretch, pomodoro  # круг 4: врем�
 from core import talkstats, echo_search, dayroll, weekroll, moodlog  # круг 5: разговор (Ф31-Ф35)
 from core import agenda, filefind, legacy, shelf, weight  # круг 6: дом и его тело (Ф36-Ф40)
 from core import answercache, promptweight, brainhealth, energy  # круг 7: скорость (Ф41, Ф43-Ф45, день-9)
+from core import seal, shores, borders  # круг 8: печати и калитка (Ф46, Ф48-Ф49, день-9)
 from core import uptime as _uptime   # H7 аудита: момент рождения процесса — импорт модуля
                                     # (панель поднимает агента на старте), а не первый запрос
 from core.brain import BrainClient, is_refusal
@@ -939,6 +940,20 @@ class Agent:
             return Reply(answercache.forget_all(), "python", "answercache")
         if lowq in ("ответь иначе", "ответь по-другому", "ответь по другому"):
             return Reply(answercache.bypass(), "python", "answercache")
+
+        # Ф46, Ф48-Ф49 «Печати и границы» — круг 8 (день-9): печать души,
+        # берега git, карта запретов. №28 (ротация слова) живёт ЗА калиткой —
+        # она говорит словом. Мозг молчит: дом знает свои границы сам
+        if lowq in ("печать", "поставь печать"):
+            return Reply(seal.place(), "python", "seal")
+        if lowq in ("печати целы", "печати целы?", "целы ли печати"):
+            return Reply(seal.verify(), "python", "seal")
+        if lowq in ("печати", "список печатей"):
+            return Reply(seal.history(), "python", "seal")
+        if lowq in ("берега", "вторые берега", "проверь берега"):
+            return Reply(shores.render(), "python", "shores")
+        if lowq in ("границы", "какие границы", "куда ты не ходишь"):
+            return Reply(borders.render(), "python", "borders")
 
         # СОН: «спи» — Создатель укладывает до утра или «проснись»
         if lowq in ("спи", "спать", "ложись спать", "на боковую"):
