@@ -89,6 +89,7 @@ from core import config, context, creator_gate, diary, eyes, feelings, hands, id
 from core import musing, sleep                    # внутренняя жизнь организма (23.11)
 from core import rules                             # законы дома: автор и исполнитель (№40)
 from core import notes, shopping, worklog, expenses, habits  # круг 1: быт (Ф11-Ф15)
+from core import birthdays, when                     # круг 2: календарь (Ф16-Ф19)
 from core import uptime as _uptime   # H7 аудита: момент рождения процесса — импорт модуля
                                     # (панель поднимает агента на старте), а не первый запрос
 from core.brain import BrainClient, is_refusal
@@ -794,6 +795,25 @@ class Agent:
         m = re.match(r"^(?:сотри|удали)\s+привычку\s*[№#]?\s*(\d+)$", lowq)
         if m:
             return Reply(habits.erase(int(m.group(1))), "python", "habits")
+
+        # Ф16 «дни рождения» / Ф17-Ф19 «когда и сколько» — круг 2
+        # «Календарь» (23.11): у мозга нет честного календаря (закон
+        # фактов №38), у дома есть; мозг молчит
+        if lowq in ("дни рождения", "дни рождения?", "др список"):
+            return Reply(birthdays.render(), "python", "birthdays")
+        if lowq in ("у кого др", "у кого день рождения"):
+            return Reply(birthdays.upcoming(), "python", "birthdays")
+        if re.match(r"^др\s*[:;]", low):
+            return Reply(birthdays.add(t), "python", "birthdays")
+        m = re.match(r"^сколько\s+(?:дней\s+)?до\s+(.+)$", lowq)
+        if m:
+            return Reply(when.until(m.group(1).strip()), "python", "when")
+        m = re.match(r"^сколько\s+(?:дней\s+)?прошло\s+(?:с|со)\s+(.+)$", lowq)
+        if m:
+            return Reply(when.since(m.group(1).strip()), "python", "when")
+        m = re.match(r"^какой\s+день\s+недели\s+(.+)$", lowq)
+        if m:
+            return Reply(when.weekday(m.group(1).strip()), "python", "when")
 
         # СОН: «спи» — Создатель укладывает до утра или «проснись»
         if lowq in ("спи", "спать", "ложись спать", "на боковую"):
