@@ -220,13 +220,18 @@ def test_n8_calc_trailing_question(agent):
 
 
 def test_n9_answer_null(agent, srv):
-    """№9: {"answer": null} — честное «Нет ответа», не строка «None»."""
+    """№9: {"answer": null} — не строка «None». Контракт усилен мозгом v3
+    (анти-эхо, 23.11): пустой ответ переспрашивается, дважды пустой —
+    честный сбой с путём лечения. Урок живого лога: голое «Нет ответа»
+    без диагноза трижды ставило разговор в тупик."""
     srv.reply_content = '{"answer": null}'
     r = agent.handle("расскажи о законах дома")
-    assert r.text == "Нет ответа"
+    assert r.text != "None" and "None" not in r.text
+    assert "пустым ответом" in r.text        # честный сбой, путь лечения назван
+    assert len(srv.calls) == 2                # был один переспрос с уколом
     srv.reply_content = '{"answer": ""}'
     r = agent.handle("ещё раз")
-    assert r.text == "Нет ответа"
+    assert "пустым ответом" in r.text and len(srv.calls) == 4
 
 
 def test_n10_house_state_sensor_crash_honest(monkeypatch):
