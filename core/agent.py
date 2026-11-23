@@ -1280,6 +1280,30 @@ class Agent:
 
     # ---------- действия мозга через РУКИ (надзор СТРАЖА) ----------
 
+    def _usage_meta(self) -> Optional[dict]:
+        """Штамп хода из usage мозга: «N ток · промпт M». УРОК 23.11
+        (ночь): штамп ставился ТОЛЬКО на пути ответа — ходы, ушедшие в
+        инструмент, приходили без счётчика, и по живому логу было не
+        понять, был ли у мозга ответ (Создатель искал пропавший текст
+        «179 ток»). Теперь счёт честен на обоих путях."""
+        usage = getattr(self.brain, "last_usage", None)
+        if not isinstance(usage, dict):
+            return None
+        meta: dict = {}
+        try:
+            tok = int(usage.get("completion_tokens") or 0) or None
+            if tok:
+                meta["tok"] = tok
+        except (TypeError, ValueError):
+            pass
+        try:
+            ptok = int(usage.get("prompt_tokens") or 0) or None
+            if ptok:
+                meta["ptok"] = ptok
+        except (TypeError, ValueError):
+            pass
+        return meta or None
+
     def _act(self, action: dict) -> Reply:
         tool = str(action.get("tool") or "")
         # Раунд 3, №5: мозг иногда присылает args строкой/списком/числом
@@ -1498,7 +1522,24 @@ class Agent:
                             % config.BRAIN_TIMEOUT_SEC)
                 return Reply("мозг недоступен: " + str(e) + note, "fallback", None)
             if isinstance(decision, dict) and isinstance(decision.get("action"), dict):
-                return self._act(decision["action"])
+                # МАРШРУТ ДЕЙСТВИЯ v2 «ответ не выбрасываем» (23.11, ночь —
+                # техническая мысль Создателя: «она пишет ответ, но в чат
+                # приходит эхо вызова — возможно, нормальный ответ не
+                # дошёл»). Прежний маршрут молча выбрасывал answer, если
+                # мозг дал ответ И действие вместе: Создатель видел
+                # только результат инструмента. Теперь — ОБА: сначала
+                # слова Марфы, потом сделанное. Штамп токенов — тоже на
+                # этом пути: счёт честен, генерация была
+                raw_ans = decision.get("answer")
+                pre = ("" if raw_ans is None else
+                       (raw_ans if isinstance(raw_ans, str) else str(raw_ans))).strip()
+                acted = self._act(decision["action"])
+                if pre:
+                    acted.text = pre + "\n\n" + acted.text
+                meta = self._usage_meta()
+                if meta:
+                    acted.meta = meta
+                return acted
             if isinstance(decision, dict):
                 raw_ans = decision.get("answer")
                 ans = "" if raw_ans is None else (
