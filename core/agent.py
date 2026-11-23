@@ -93,6 +93,7 @@ from core import birthdays, when                     # круг 2: календ�
 from core import password, numeral, units            # круг 3: слова (Ф22-Ф25)
 from core.chance import rand_between, coin_times     # круг 3: жребий шире (Ф20-Ф21)
 from core import holidays, worldtime, stretch, pomodoro  # круг 4: время и здоровье (Ф26-Ф30)
+from core import talkstats, echo_search, dayroll, weekroll, moodlog  # круг 5: разговор (Ф31-Ф35)
 from core import uptime as _uptime   # H7 аудита: момент рождения процесса — импорт модуля
                                     # (панель поднимает агента на старте), а не первый запрос
 from core.brain import BrainClient, is_refusal
@@ -880,6 +881,25 @@ class Agent:
                          "python", "pomodoro")
         if lowq in ("помидоры", "сколько помидоров"):
             return Reply(pomodoro.render(), "python", "pomodoro")
+
+        # Ф31-Ф35 «Разговор и память» — круг 5 (23.11): статистика
+        # разговора, поиск по репликам, сводка дня и недели, настроение
+        if lowq in ("сколько мы говорили", "статистика разговора"):
+            return Reply(talkstats.render(), "python", "talkstats")
+        m = re.match(r"^что я говорил\s+(?:про|о)\s+(.+?)\??$", lowq)
+        if m:
+            return Reply(echo_search.search(m.group(1).strip()),
+                         "python", "echo_search")
+        if lowq in ("как прошел день", "как прошёл день"):
+            return Reply(dayroll.render(), "python", "dayroll")
+        if lowq in ("итог недели", "итоги недели", "как прошла неделя",
+                    "как прошла неделя?"):
+            return Reply(weekroll.render(), "python", "weekroll")
+        if lowq in ("мое настроение", "моё настроение"):
+            return Reply(moodlog.render(), "python", "moodlog")
+        m = moodlog.parse(t)
+        if m and m[0] == "add":
+            return Reply(moodlog.add(m[1]), "python", "moodlog")
 
         # СОН: «спи» — Создатель укладывает до утра или «проснись»
         if lowq in ("спи", "спать", "ложись спать", "на боковую"):
