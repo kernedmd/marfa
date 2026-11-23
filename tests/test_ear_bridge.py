@@ -503,7 +503,10 @@ def test_identity_bridge_note_honest(home):
 def test_identity_report_and_manifest_voice(agent, srv):
     report = identity.capabilities_report(memory=agent.memory)
     assert "Мост ушей (вторая ступень)" in report
-    assert "Говорить голосом: рта нет" in report          # рот не обещаем
+    # день-10 (Ф56–Ф60): организм заговорил — прежняя честность «рта
+    # нет» СТАЛА ложью; якорь следует за правдой, как и зеркало
+    assert "Голос:" in report and "рта нет" not in report
     manifest = identity.manifest()
     assert "СЛЫШУ голосом" in manifest             # мозг знает о канале
     assert "проверь мост" in manifest              # и о команде осмотра
+    assert "скажи вслух" in manifest               # и о своём голосе (Ф56)
