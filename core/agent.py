@@ -94,6 +94,7 @@ from core import password, numeral, units            # круг 3: слова (�
 from core.chance import rand_between, coin_times     # круг 3: жребий шире (Ф20-Ф21)
 from core import holidays, worldtime, stretch, pomodoro  # круг 4: время и здоровье (Ф26-Ф30)
 from core import talkstats, echo_search, dayroll, weekroll, moodlog  # круг 5: разговор (Ф31-Ф35)
+from core import agenda, filefind, legacy, shelf, weight  # круг 6: дом и его тело (Ф36-Ф40)
 from core import uptime as _uptime   # H7 аудита: момент рождения процесса — импорт модуля
                                     # (панель поднимает агента на старте), а не первый запрос
 from core.brain import BrainClient, is_refusal
@@ -900,6 +901,25 @@ class Agent:
         m = moodlog.parse(t)
         if m and m[0] == "add":
             return Reply(moodlog.add(m[1]), "python", "moodlog")
+
+        # Ф36-Ф40 «Дом и его тело» — круг 6 (23.11): расписание, поиск
+        # файлов, вес, полка, летопись; мозг молчит — дом знает себя сам
+        if lowq in ("расписание", "расписание дома"):
+            return Reply(agenda.render(), "python", "agenda")
+        m = re.match(r"^найди файлы?\s+(.+?)\??$", lowq)
+        if m:
+            return Reply(filefind.find(m.group(1).strip()),
+                         "python", "filefind")
+        if lowq in ("полка", "что на полке"):
+            return Reply(shelf.render(), "python", "shelf")
+        m = re.match(r"^вес(?:\s+(.+))?$", lowq)
+        if m:
+            target = (m.group(1) or "").strip()
+            if target in ("", "дом", "дома"):
+                return Reply(weight.render(), "python", "weight")
+            return Reply(weight.render(target), "python", "weight")
+        if lowq in ("что построили", "летопись"):
+            return Reply(legacy.render(), "python", "legacy")
 
         # СОН: «спи» — Создатель укладывает до утра или «проснись»
         if lowq in ("спи", "спать", "ложись спать", "на боковую"):
