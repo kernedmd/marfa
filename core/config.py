@@ -310,6 +310,19 @@ QUIET_FILE = DATA_DIR / "quiet.json"
 # не книжка радостей.
 RULES_FILE = DATA_DIR / "rules.json"
 
+# Ф-СЕРИЯ «ТРИДЦАТЬ ФИШЕК ОТ СЕБЯ» (23.11, день-8): Создатель сказал
+# «не забудь добавить 30 фишек от себя» — продолжение революции Ф1-Ф10.
+# Каждый орган — малый рефлекс дома: мозг молчит, данные — в data/,
+# потолки — в самих модулях. Ф11-Ф40 по номерам в модулях.
+NOTES_FILE = DATA_DIR / "notes.json"          # Ф11 заметки
+SHOPPING_FILE = DATA_DIR / "shopping.json"    # Ф12 список покупок
+WORKLOG_FILE = DATA_DIR / "worklog.json"      # Ф13 трекер времени
+EXPENSES_FILE = DATA_DIR / "expenses.json"    # Ф14 расходы
+HABITS_FILE = DATA_DIR / "habits.json"        # Ф15 привычки
+BIRTHDAYS_FILE = DATA_DIR / "birthdays.json"  # Ф16 дни рождения
+POMODORO_FILE = DATA_DIR / "pomodoro.json"    # Ф30 помидоры
+MOODLOG_FILE = DATA_DIR / "mood.json"         # Ф35 настроение Создателя
+
 # ЖУРНАЛ МОЗГА (23.11, ночь): logs/brain_log.jsonl — одна строка на
 # каждую генерацию: токены, секунды, думание (срезанные think-блоки),
 # ответ ЦЕЛИКОМ и действие. Урок живого лога: Создатель спросил «что

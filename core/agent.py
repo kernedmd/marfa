@@ -88,6 +88,7 @@ from typing import Optional
 from core import config, context, creator_gate, diary, eyes, feelings, hands, identity, progress
 from core import musing, sleep                    # внутренняя жизнь организма (23.11)
 from core import rules                             # законы дома: автор и исполнитель (№40)
+from core import notes, shopping, worklog, expenses, habits  # круг 1: быт (Ф11-Ф15)
 from core import uptime as _uptime   # H7 аудита: момент рождения процесса — импорт модуля
                                     # (панель поднимает агента на старте), а не первый запрос
 from core.brain import BrainClient, is_refusal
@@ -748,6 +749,51 @@ class Agent:
             # без времени — не таймер: «напомни, где мы остановились» —
             # работа памяти и мозга, не будильника (урок жадной ветки:
             # тест доктрины поймал перехват на «напомни, где живёт дом»)
+
+        # Ф11 «заметки» / Ф12 «покупки» / Ф13 «трекер времени» /
+        # Ф14 «расходы» / Ф15 «привычки» — круг 1 «Быт и списки»
+        # (23.11, «тридцать фишек от себя»): мозг молчит, быт — рефлекс
+        if lowq == "заметки":
+            return Reply(notes.render(), "python", "notes")
+        m = notes.parse(t)
+        if m:
+            kind, payload = m
+            return Reply(notes.add(payload) if kind == "add"
+                         else notes.erase(payload), "python", "notes")
+        if lowq in ("покупки", "список покупок"):
+            return Reply(shopping.render(), "python", "shopping")
+        m = shopping.parse(t)
+        if m:
+            kind = m[0]
+            payload = m[1] if len(m) > 1 else None
+            return Reply(shopping.add(payload) if kind == "add" else
+                         (shopping.bought(payload) if kind == "bought"
+                          else shopping.clear()), "python", "shopping")
+        m = re.match(r"^начал\s*[:;]\s*(.+)$", t, re.IGNORECASE | re.DOTALL)
+        if m:
+            return Reply(worklog.start(m.group(1).strip()),
+                         "python", "worklog")
+        if lowq in ("закончил", "завершил", "кончил дело"):
+            return Reply(worklog.stop(), "python", "worklog")
+        if lowq in ("чем занимался", "чем занимался сегодня"):
+            return Reply(worklog.render(), "python", "worklog")
+        if lowq in ("расходы", "траты"):
+            return Reply(expenses.render(), "python", "expenses")
+        m = re.match(r"^расход\s*[:;]\s*(.+)$", t, re.IGNORECASE | re.DOTALL)
+        if m:
+            return Reply(expenses.add(m.group(1).strip()),
+                         "python", "expenses")
+        if lowq == "привычки":
+            return Reply(habits.render(), "python", "habits")
+        m = re.match(r"^привычка\s*[:;]\s*(.+)$", t, re.IGNORECASE | re.DOTALL)
+        if m:
+            return Reply(habits.add(m.group(1).strip()), "python", "habits")
+        m = re.match(r"^отметь\s*[:;]\s*(.+)$", t, re.IGNORECASE | re.DOTALL)
+        if m:
+            return Reply(habits.mark(m.group(1).strip()), "python", "habits")
+        m = re.match(r"^(?:сотри|удали)\s+привычку\s*[№#]?\s*(\d+)$", lowq)
+        if m:
+            return Reply(habits.erase(int(m.group(1))), "python", "habits")
 
         # СОН: «спи» — Создатель укладывает до утра или «проснись»
         if lowq in ("спи", "спать", "ложись спать", "на боковую"):
