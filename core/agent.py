@@ -87,6 +87,7 @@ from typing import Optional
 
 from core import config, context, creator_gate, diary, eyes, feelings, hands, identity, progress
 from core import musing, sleep                    # внутренняя жизнь организма (23.11)
+from core import rules                             # законы дома: автор и исполнитель (№40)
 from core import uptime as _uptime   # H7 аудита: момент рождения процесса — импорт модуля
                                     # (панель поднимает агента на старте), а не первый запрос
 from core.brain import BrainClient
@@ -412,6 +413,16 @@ def _house_state() -> str:
             thought_note = "; " + t
     except Exception as e:
         _lesson("сенсор-упал", "мысли: %s: %s" % (type(e).__name__, e))
+    # №40 «правила дома»: мозг ЗНАЕТ, что законы есть и КТО исполнитель
+    # (урок живого лога: на «кто применяет правило?» мозг сказал
+    # «uiaction»); законов нет — строки нет, состояние не толстеет
+    rules_note = ""
+    try:
+        rl = rules.state_line()
+        if rl:
+            rules_note = "; " + rl
+    except Exception as e:
+        _lesson("сенсор-упал", "правила: %s: %s" % (type(e).__name__, e))
     # №6 «глаза как контекст мозга» (Г-3): слежение включено — мозг
     # получает свежую строку о экране (кэш TTL: ходы между взглядами
     # бесплатны). Сенсор в своей броне: упавшее слежение не выдаёт
@@ -434,7 +445,7 @@ def _house_state() -> str:
         "; " + cam_note +
         "; " + ears_note +
         "; " + inner_note +
-        "; " + sleep_note + thought_note +
+        "; " + sleep_note + thought_note + rules_note +
         "; я не сплю с " + started + watch_note
     )
 
@@ -543,6 +554,47 @@ class Agent:
                              "python", "remember")
             self.memory.remember(payload)
             return Reply("записала в память: " + payload, "python", "remember")
+
+        # ДОМ №40 «ПРАВИЛА ДОМА» (23.11, ночь — хвост коучинга Создателя):
+        # Илья диктовал законы торможения в живом разговоре, а на вопрос
+        # «кто применяет правило — ты или я?» Марфа ответила «ui_action».
+        # Правило — ЗАКОН с АВТОРОМ и ИСПОЛНИТЕЛЕМ: автор диктует (Создатель),
+        # исполнитель — Марфа, она же читает их перед действием и отвечает
+        # за применение. Границы против жадной ветки (урок р3): записывают
+        # ГЛАГОЛЬНЫЕ формы («запиши правило: X», «запомни правило: X»,
+        # «новое правило: X») и голое «правило: X» — со двоеточием;
+        # «Правило N = 3 — помнишь?» (вопрос без двоеточия) — мозгу;
+        # «правило 3» — показ №3, не запись; «правила» (множественное) —
+        # список: граница слова (?![а-яё]) разводит честно. «запомни
+        # правило» ловится ДО общего «запомни» (жадные префиксы — урок р3)
+        m = re.match(r"^(?:запиши\s+|запомни\s+|новое\s+)?правило"
+                     r"(?![а-яё])[\s:,;—-]*(.*)$", t, re.IGNORECASE)
+        if m and (m.group(0).lower().startswith(("запиши", "запомни",
+                                                 "новое"))
+                  or re.match(r"^правило\s*[:：]", t.strip(),
+                              re.IGNORECASE)):
+            payload = m.group(1).strip()
+            if not payload:
+                return Reply("что за правило? скажи «запиши правило: <текст>» "
+                             "— ляжет с автором и исполнителем",
+                             "python", "rules")
+            n_rule = rules.parse_number(payload)
+            if n_rule is not None:
+                return Reply(rules.show(n_rule), "python", "rules")
+            return Reply(rules.save(payload, memory=self.memory),
+                         "python", "rules")
+        if lowq in ("правила", "правила дома", "какие правила",
+                    "что за правила", "список правил", "мои правила",
+                    "какие у тебя правила"):
+            return Reply(rules.render(), "python", "rules")
+        # «правило 3» / «правило №3» — показ ОДНОГО закона целиком:
+        # голое число после слова — читатель, не писатель
+        m = re.match(r"^правило\s*[№#]?\s*(\d{1,3})$", lowq)
+        if m:
+            return Reply(rules.show(int(m.group(1))), "python", "rules")
+        m = re.match(r"^(?:отмени|забудь)\s+правило\s*[№#]?\s*(\d+)$", lowq)
+        if m:
+            return Reply(rules.cancel(int(m.group(1))), "python", "rules")
 
         # №8: вечерний дневник. Гейт §5 (вердикт батареи 21.11.2026):
         # есть резолюция Создателя — Марфа пишет «Живой рассказ» сама,
