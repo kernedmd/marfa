@@ -9,9 +9,12 @@ DOCTRINE = "Я — Марфа. Служу Илье. Правила жизни д
 
 
 def test_constants_law():
-    """0.3 + терапия §15: иерархия получает 6500 - 1000 = 5500 токенов промпта."""
-    assert HIERARCHY_BUDGET == 5500
-    assert config.PROMPT_BUDGET_TOKENS + config.GENERATION_BUDGET_TOKENS <= config.CONTEXT_TOKENS
+    """0.3 + день-11 «диета»: система 5500, история 1000 ЕДЕТ ПОВЕРХ —
+    закон честен втроём: 5500 + 1000 + 768 = 7268 <= 8192 (бомба 8268
+    обезврежена: раньше история считалась «внутри» и жила сверх закона)."""
+    assert HIERARCHY_BUDGET == 5500 - 1000
+    assert config.PROMPT_BUDGET_TOKENS + config.HISTORY_BUDGET_TOKENS \
+        + config.GENERATION_BUDGET_TOKENS <= config.CONTEXT_TOKENS
 
 
 def test_small_context_fits():

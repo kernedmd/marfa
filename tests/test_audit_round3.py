@@ -249,9 +249,9 @@ def test_n10_context_crash_brain_still_answers(agent, srv, monkeypatch):
     """№10: крах сборки промпта — ход живёт на статичном ядре."""
     srv.reply_content = '{"answer": "жива"}'
 
-    def boom(text):
+    def boom():
         raise RuntimeError("RAG умер")
-    monkeypatch.setattr(agent, "_system_extra", boom)
+    monkeypatch.setattr(agent, "_static_system", boom)
     r = agent.handle("расскажи о законах дома")
     assert r.source == "brain" and r.text == "жива"
     sys_msg = next(m for m in srv.calls[-1]["messages"]

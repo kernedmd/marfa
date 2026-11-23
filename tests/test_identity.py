@@ -45,19 +45,20 @@ def test_identity_keeps_no_secrets():
 
 
 def test_identity_first_in_system_prompt():
-    """Порядок дисциплины промпта: ЯДРО -> доктрина -> состояние дома."""
-    extra = _agent()._system_extra("привет")
+    """День-11 (Ф77): ЯДРО -> доктрина — статика системы; состояние
+    дома — в хвосте хода, не в системе (KV-кэш префикса цел)."""
+    extra = _agent()._static_system()
     i_core = extra.index("ЯДРО — кто я")
     i_doctrine = extra.index("ДОКТРИНА-ТЕСТ")
-    i_state = extra.index("Состояние дома")
-    assert i_core < i_doctrine < i_state
+    assert i_core < i_doctrine
+    assert "Состояние дома" not in extra
 
 
 def test_identity_survives_missing_doctrine():
     """Без data/creator_doctrine.json ЯДРО всё равно первым — каркас не пуст."""
     a = Agent(brain=_Brain(), memory=_Mem(), doctrine=None)
     assert a.doctrine  # каркасный минимум на месте
-    extra = a._system_extra("привет")
+    extra = a._static_system()
     assert extra.startswith("ЯДРО — кто я")
 
 

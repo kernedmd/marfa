@@ -264,12 +264,12 @@ def test_promptweight_truth_from_brain_log(home):
 def test_promptweight_empty_log_honest(home):
     out = promptweight.render()
     assert "журнал мозга ещё пуст" in out
-    assert "ядро" in out                        # слои всё равно показаны
+    assert "префикс" in out                     # слои всё равно показаны
 
 
 def test_promptweight_layers_present(home):
     out = promptweight.render()
-    for layer in ("ядро", "доктрина", "состояние дома", "история"):
+    for layer in ("статичный префикс", "доктрина", "хвост хода", "история"):
         assert layer in out
 
 

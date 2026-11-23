@@ -183,16 +183,17 @@ def test_agent_passes_history_to_brain(monkeypatch, home):
             self.got = None
 
         def ask_json(self, text, system_extra="", retries=2, history=None,
-                     max_tokens=None, on_text=None):
-            self.got = (text, history)
+                     max_tokens=None, on_text=None, turn_context=""):
+            self.got = (text, history, turn_context)
             return {"answer": "ответ"}
 
     spy = SpyBrain()
     agent = Agent(brain=spy, memory=None, doctrine="")
     agent.handle("второй вопрос", history=[{"role": "user", "content": "первый"}])
-    text, hist = spy.got
+    text, hist, tail = spy.got
     assert text == "второй вопрос"
     assert hist == [{"role": "user", "content": "первый"}]
+    assert "Состояние дома" in tail                # Ф77: хвост хода доехал
 
 
 # ---------- панель: сессии ----------

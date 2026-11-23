@@ -73,9 +73,12 @@ def test_status_command_carries_clock(agent, srv):
 def test_brain_prompt_carries_clock(agent, srv):
     srv.reply_content = '{"answer": "вижу время в состоянии"}'
     agent.handle("какое сегодня число?")
-    sys_msg = srv.calls[0]["messages"][0]["content"]
+    # день-11 (Ф77): часы живут в ХВОСТЕ ХОДА — сообщении Создателя,
+    # не в системе (система статична ради KV-кэша). Закон №38 жив:
+    # выдумывать год неоткуда — время читается каждым ходом
+    user_msg = srv.calls[0]["messages"][-1]["content"]
     assert re.search(r"Состояние дома на \w+ \d{2}\.\d{2}\.\d{4} \d{2}:\d{2}",
-                     sys_msg)
+                     user_msg)
 
 
 def test_manifest_law_of_facts():
