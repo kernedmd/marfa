@@ -98,6 +98,87 @@ def parse(text: str, now: Optional[dt.datetime] = None) -> Optional[dict]:
     return None
 
 
+# Ф28 «НАПОМИНАНИЯ ПО КРУГУ» (23.11): «напоминай каждый день в 20:00: X».
+# Одноразовое напоминание умирает после звонка — а привычки живут
+# кругом: напоминание с полем rec не помечается fired, а сдвигает
+# due на следующий круг (день/час), звоня по разу за каждый круг.
+_RX_EVERY_DAY = re.compile(
+    r"^напоминай\s+каждый\s+день\s+в\s+(\d{1,2}):(\d{2})\s*[:;,—-]?\s*(.*)$",
+    re.IGNORECASE | re.DOTALL)
+_RX_EVERY_HOUR = re.compile(
+    r"^напоминай\s+каждый\s+час\s*[:;,—-]?\s*(.*)$",
+    re.IGNORECASE | re.DOTALL)
+
+
+def parse_recurring(text: str, now=None) -> Optional[dict]:
+    """«напоминай каждый день в ЧЧ:ММ: X» / «напоминай каждый час: X» → план
+    {"rec": "day"/"hour", "hh", "mm", "text"} или None (не эта команда)."""
+    now = now or dt.datetime.now()
+    t = str(text or "").strip()
+    m = _RX_EVERY_DAY.match(t)
+    if m:
+        hh, mm = int(m.group(1)), int(m.group(2))
+        if not (0 <= hh <= 23 and 0 <= mm <= 59):
+            return {"error": "время бывает от 00:00 до 23:59"}
+        due = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if due <= now:
+            due += dt.timedelta(days=1)
+        return {"rec": "day", "due": due, "hh": hh, "mm": mm,
+                "text": m.group(3).strip(" :;,")}
+    m = _RX_EVERY_HOUR.match(t)
+    if m:
+        return {"rec": "hour", "due": now + dt.timedelta(hours=1),
+                "hh": None, "mm": None, "text": m.group(1).strip(" :;,")}
+    return None
+
+
+def add_recurring(plan: dict, marker: Optional[dict] = None) -> str:
+    """Записать круговое напоминание; marker — метка органа (разминка)."""
+    items = _load()
+    rec = {"id": _next_id(items),
+           "text": str(plan.get("text") or "").strip()[:300],
+           "due": plan["due"].isoformat(timespec="seconds"),
+           "when": _rec_when(plan),
+           "fired": False,
+           "rec": plan.get("rec", "day")}
+    if plan.get("rec") == "day":
+        rec["at"] = "%02d:%02d" % (int(plan.get("hh") or 0),
+                                   int(plan.get("mm") or 0))
+    if marker:
+        rec.update(marker)
+    items.append(rec)
+    _save(items)
+    return ("Напомню по кругу (%s): «%s». Снять: «хватит напоминать №%d»"
+            % (rec["when"], rec["text"] or "пора", rec["id"]))
+
+
+def _rec_when(plan: dict) -> str:
+    if plan.get("rec") == "hour":
+        return "каждый час"
+    return "каждый день в %02d:%02d" % (int(plan.get("hh") or 0),
+                                        int(plan.get("mm") or 0))
+
+
+def cancel_by_marker(marker_key: str, marker_val) -> bool:
+    """Снять круговое напоминание органа (например, разминки)."""
+    items = _load()
+    hit = False
+    for it in items:
+        if it.get(marker_key) == marker_val and not it.get("fired"):
+            it["fired"] = True
+            hit = True
+    if hit:
+        _save(items)
+    return hit
+
+
+def has_marker(marker_key: str, marker_val) -> bool:
+    for it in _load():
+        if it.get(marker_key) == marker_val and not it.get("fired"):
+            return True
+    return False
+
+
 # ---------- операции ----------
 
 def add(plan: dict) -> str:
@@ -133,7 +214,21 @@ def due(now: Optional[dt.datetime] = None, mark: bool = True) -> list[dict]:
         if due_at <= now:
             hit.append(it)
             if mark:
-                it["fired"] = True
+                # Ф28: круговое не умирает — звонит и сдвигается на
+                # следующий круг (пропущенные круги проскакивают молча:
+                # ночной догон «вставай, разомнись» ×8 — хуже молчания)
+                if it.get("rec") == "day":
+                    nxt = due_at
+                    while nxt <= now:
+                        nxt += dt.timedelta(days=1)
+                    it["due"] = nxt.isoformat(timespec="seconds")
+                elif it.get("rec") == "hour":
+                    nxt = due_at
+                    while nxt <= now:
+                        nxt += dt.timedelta(hours=1)
+                    it["due"] = nxt.isoformat(timespec="seconds")
+                else:
+                    it["fired"] = True
     if mark and hit:
         _save(items)
     return hit
@@ -180,6 +275,10 @@ def render_active(now: Optional[dt.datetime] = None) -> str:
     lines = []
     for it in items:
         what = str(it.get("text") or "").strip() or "просто таймер"
+        if it.get("rec"):
+            lines.append("№%d %s — ПО КРУГУ: %s"
+                         % (it.get("id", 0), what, it.get("when", "по кругу")))
+            continue
         left = it["_left"]
         if left <= 0:
             lines.append("№%d %s — уже пора (прозвонит при следующей реплике)"

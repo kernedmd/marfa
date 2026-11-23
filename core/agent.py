@@ -88,6 +88,13 @@ from typing import Optional
 from core import config, context, creator_gate, diary, eyes, feelings, hands, identity, progress
 from core import musing, sleep                    # внутренняя жизнь организма (23.11)
 from core import rules                             # законы дома: автор и исполнитель (№40)
+from core import notes, shopping, worklog, expenses, habits  # круг 1: быт (Ф11-Ф15)
+from core import birthdays, when                     # круг 2: календарь (Ф16-Ф19)
+from core import password, numeral, units            # круг 3: слова (Ф22-Ф25)
+from core.chance import rand_between, coin_times     # круг 3: жребий шире (Ф20-Ф21)
+from core import holidays, worldtime, stretch, pomodoro  # круг 4: время и здоровье (Ф26-Ф30)
+from core import talkstats, echo_search, dayroll, weekroll, moodlog  # круг 5: разговор (Ф31-Ф35)
+from core import agenda, filefind, legacy, shelf, weight  # круг 6: дом и его тело (Ф36-Ф40)
 from core import uptime as _uptime   # H7 аудита: момент рождения процесса — импорт модуля
                                     # (панель поднимает агента на старте), а не первый запрос
 from core.brain import BrainClient, is_refusal
@@ -748,6 +755,171 @@ class Agent:
             # без времени — не таймер: «напомни, где мы остановились» —
             # работа памяти и мозга, не будильника (урок жадной ветки:
             # тест доктрины поймал перехват на «напомни, где живёт дом»)
+
+        # Ф11 «заметки» / Ф12 «покупки» / Ф13 «трекер времени» /
+        # Ф14 «расходы» / Ф15 «привычки» — круг 1 «Быт и списки»
+        # (23.11, «тридцать фишек от себя»): мозг молчит, быт — рефлекс
+        if lowq == "заметки":
+            return Reply(notes.render(), "python", "notes")
+        m = notes.parse(t)
+        if m:
+            kind, payload = m
+            return Reply(notes.add(payload) if kind == "add"
+                         else notes.erase(payload), "python", "notes")
+        if lowq in ("покупки", "список покупок"):
+            return Reply(shopping.render(), "python", "shopping")
+        m = shopping.parse(t)
+        if m:
+            kind = m[0]
+            payload = m[1] if len(m) > 1 else None
+            return Reply(shopping.add(payload) if kind == "add" else
+                         (shopping.bought(payload) if kind == "bought"
+                          else shopping.clear()), "python", "shopping")
+        m = re.match(r"^начал\s*[:;]\s*(.+)$", t, re.IGNORECASE | re.DOTALL)
+        if m:
+            return Reply(worklog.start(m.group(1).strip()),
+                         "python", "worklog")
+        if lowq in ("закончил", "завершил", "кончил дело"):
+            return Reply(worklog.stop(), "python", "worklog")
+        if lowq in ("чем занимался", "чем занимался сегодня"):
+            return Reply(worklog.render(), "python", "worklog")
+        if lowq in ("расходы", "траты"):
+            return Reply(expenses.render(), "python", "expenses")
+        m = re.match(r"^расход\s*[:;]\s*(.+)$", t, re.IGNORECASE | re.DOTALL)
+        if m:
+            return Reply(expenses.add(m.group(1).strip()),
+                         "python", "expenses")
+        if lowq == "привычки":
+            return Reply(habits.render(), "python", "habits")
+        m = re.match(r"^привычка\s*[:;]\s*(.+)$", t, re.IGNORECASE | re.DOTALL)
+        if m:
+            return Reply(habits.add(m.group(1).strip()), "python", "habits")
+        m = re.match(r"^отметь\s*[:;]\s*(.+)$", t, re.IGNORECASE | re.DOTALL)
+        if m:
+            return Reply(habits.mark(m.group(1).strip()), "python", "habits")
+        m = re.match(r"^(?:сотри|удали)\s+привычку\s*[№#]?\s*(\d+)$", lowq)
+        if m:
+            return Reply(habits.erase(int(m.group(1))), "python", "habits")
+
+        # Ф16 «дни рождения» / Ф17-Ф19 «когда и сколько» — круг 2
+        # «Календарь» (23.11): у мозга нет честного календаря (закон
+        # фактов №38), у дома есть; мозг молчит
+        if lowq in ("дни рождения", "дни рождения?", "др список"):
+            return Reply(birthdays.render(), "python", "birthdays")
+        if lowq in ("у кого др", "у кого день рождения"):
+            return Reply(birthdays.upcoming(), "python", "birthdays")
+        if re.match(r"^др\s*[:;]", low):
+            return Reply(birthdays.add(t), "python", "birthdays")
+        m = re.match(r"^сколько\s+(?:дней\s+)?до\s+(.+)$", lowq)
+        if m:
+            return Reply(when.until(m.group(1).strip()), "python", "when")
+        m = re.match(r"^сколько\s+(?:дней\s+)?прошло\s+(?:с|со)\s+(.+)$", lowq)
+        if m:
+            return Reply(when.since(m.group(1).strip()), "python", "when")
+        m = re.match(r"^какой\s+день\s+недели\s+(.+)$", lowq)
+        if m:
+            return Reply(when.weekday(m.group(1).strip()), "python", "when")
+
+        # Ф20-Ф25 «Случай и слова» — круг 3 (23.11): жребий шире,
+        # пароль, пропись, транслит, конвертер величин; мозг молчит
+        m = re.match(r"^число\s+от\s+(-?\d+)\s+до\s+(-?\d+)$", lowq)
+        if m:
+            return Reply(chance.rand_between(int(m.group(1)), int(m.group(2))),
+                         "python", "chance")
+        if lowq in ("случайное число", "рандомное число"):
+            return Reply(chance.rand_between(1, 100), "python", "chance")
+        m = re.match(r"^(?:брось\s+)?монетк[уа]\s+(\d+)\s+раз$", lowq)
+        if m:
+            return Reply(chance.coin_times(int(m.group(1))),
+                         "python", "chance")
+        m = re.match(r"^пароль(?:\s+(\d{1,3}))?$", lowq)
+        if m:
+            return Reply(password.generate(
+                int(m.group(1)) if m.group(1) else None),
+                "python", "password")
+        if re.match(r"^пропис[ья]\s+-?\d", lowq):
+            return Reply(numeral.parse(t), "python", "numeral")
+        if re.match(r"^транслит\s*[:;]", low):
+            from core import translit as _tr
+            return Reply(_tr.parse(t), "python", "translit")
+        if low.startswith("переведи"):
+            return Reply(units.parse(t), "python", "units")
+
+        # Ф26-Ф30 «Время и здоровье» — круг 4 (23.11): праздники,
+        # время в городе, круговые напоминания, разминка, помидор
+        if lowq in ("праздники", "какие праздники"):
+            return Reply(holidays.render_year(), "python", "holidays")
+        if lowq in ("сегодня праздник", "сегодня праздник?",
+                    "какой сегодня праздник"):
+            return Reply(holidays.today_check(), "python", "holidays")
+        if lowq in ("ближайший праздник", "какой ближайший праздник"):
+            return Reply(holidays.nearest(), "python", "holidays")
+        m = re.match(r"^(?:время|который час)\s+в\s+([а-яё\- ]+?)\??$", lowq)
+        if m:
+            return Reply(worldtime.time_in(m.group(1).strip()),
+                         "python", "worldtime")
+        if re.match(r"^напоминай\s+кажд", low):
+            plan = reminders.parse_recurring(t)
+            if isinstance(plan, dict) and "error" in plan:
+                return Reply(plan["error"], "python", "reminders")
+            if plan is not None:
+                return Reply(reminders.add_recurring(plan),
+                             "python", "reminders")
+        m = re.match(r"^хватит\s+напоминать\s*[№#]?\s*(\d+)$", lowq)
+        if m:
+            return Reply(reminders.cancel(int(m.group(1))),
+                         "python", "reminders")
+        if lowq in ("разминка вкл", "включи разминку"):
+            return Reply(stretch.enable(), "python", "stretch")
+        if lowq in ("разминка выкл", "выключи разминку"):
+            return Reply(stretch.disable(), "python", "stretch")
+        if lowq == "разминка":
+            return Reply(stretch.status(), "python", "stretch")
+        m = re.match(r"^помидор(?:\s+(\d{1,3}))?$", lowq)
+        if m:
+            return Reply(pomodoro.start(int(m.group(1)) if m.group(1)
+                                        else None),
+                         "python", "pomodoro")
+        if lowq in ("помидоры", "сколько помидоров"):
+            return Reply(pomodoro.render(), "python", "pomodoro")
+
+        # Ф31-Ф35 «Разговор и память» — круг 5 (23.11): статистика
+        # разговора, поиск по репликам, сводка дня и недели, настроение
+        if lowq in ("сколько мы говорили", "статистика разговора"):
+            return Reply(talkstats.render(), "python", "talkstats")
+        m = re.match(r"^что я говорил\s+(?:про|о)\s+(.+?)\??$", lowq)
+        if m:
+            return Reply(echo_search.search(m.group(1).strip()),
+                         "python", "echo_search")
+        if lowq in ("как прошел день", "как прошёл день"):
+            return Reply(dayroll.render(), "python", "dayroll")
+        if lowq in ("итог недели", "итоги недели", "как прошла неделя",
+                    "как прошла неделя?"):
+            return Reply(weekroll.render(), "python", "weekroll")
+        if lowq in ("мое настроение", "моё настроение"):
+            return Reply(moodlog.render(), "python", "moodlog")
+        m = moodlog.parse(t)
+        if m and m[0] == "add":
+            return Reply(moodlog.add(m[1]), "python", "moodlog")
+
+        # Ф36-Ф40 «Дом и его тело» — круг 6 (23.11): расписание, поиск
+        # файлов, вес, полка, летопись; мозг молчит — дом знает себя сам
+        if lowq in ("расписание", "расписание дома"):
+            return Reply(agenda.render(), "python", "agenda")
+        m = re.match(r"^найди файлы?\s+(.+?)\??$", lowq)
+        if m:
+            return Reply(filefind.find(m.group(1).strip()),
+                         "python", "filefind")
+        if lowq in ("полка", "что на полке"):
+            return Reply(shelf.render(), "python", "shelf")
+        m = re.match(r"^вес(?:\s+(.+))?$", lowq)
+        if m:
+            target = (m.group(1) or "").strip()
+            if target in ("", "дом", "дома"):
+                return Reply(weight.render(), "python", "weight")
+            return Reply(weight.render(target), "python", "weight")
+        if lowq in ("что построили", "летопись"):
+            return Reply(legacy.render(), "python", "legacy")
 
         # СОН: «спи» — Создатель укладывает до утра или «проснись»
         if lowq in ("спи", "спать", "ложись спать", "на боковую"):
