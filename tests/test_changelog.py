@@ -21,7 +21,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core import agent  # noqa: E402
+from core import agent, config  # noqa: E402
 from evolution import changelog  # noqa: E402
 
 FIXED_LOG = [
@@ -135,18 +135,49 @@ def test_write_changelog_git_down_refuses(tmp_path, monkeypatch):
         changelog.write_changelog(root=tmp_path)
 
 
+# ---------- корень книги: чей код — того и книга ----------
+
+def test_repo_root_is_codes_own_repo(tmp_path, monkeypatch):
+    # УРОК ДЕГРАДАЦИИ: HOME_DIR в песочнице/симуляции — посторонний
+    # контекст; корень книги резолвится от ПАПКИ КОДА и на чужой дом
+    # не переезжает, каким бы ни был HOME_DIR
+    monkeypatch.setattr(config, "HOME_DIR", tmp_path)   # не репозиторий
+    root = changelog._repo_root()
+    code_repo = Path(changelog.__file__).resolve().parent.parent
+    assert root.resolve() == code_repo.resolve()         # книга — у кода
+    assert root.is_absolute()
+
+
+def test_write_changelog_reports_absolute_file(tmp_path, monkeypatch):
+    # отчёт показывает ТОЧНЫЙ абсолютный путь книги — относительный
+    # корень больше не может молча дотянуться до cwd
+    monkeypatch.setattr(changelog, "_git_log", lambda root: FIXED_LOG)
+    monkeypatch.setattr(changelog, "_repo_root", lambda: tmp_path)
+    rep = changelog.write_changelog()
+    assert rep["file"] == str(tmp_path.resolve() / "CHANGELOG.md")
+
+
 # ---------- команда агента ----------
 
-def test_agent_command_logbook(monkeypatch):
+def test_agent_command_logbook(tmp_path, monkeypatch):
+    # УРОК ДЕГРАДАЦИИ КНИГИ (23.11, утро): корень резолвился в Path("."),
+    # и батарея, запущенная от корня репозитория, ПЕРЕЗАПИСЫВАЛА
+    # настоящий CHANGELOG.md фикстурой из пяти коммитов — тест протекал
+    # в дом и портил его книгу. Якорь теперь один и жёсткий: логбук
+    # пишет ТОЛЬКО в tmp_path (абсолютный), до настоящего файла не
+    # дотягивается в принципе
     a = _agent()
     monkeypatch.setattr(
         changelog, "_git_log", lambda root: FIXED_LOG)
-    monkeypatch.setattr(changelog, "_repo_root", lambda: Path("."))
+    monkeypatch.setattr(changelog, "_repo_root", lambda: tmp_path)
     for msg in ("логбук", "обнови логбук", "логбук?"):
         r = a.handle(msg)
         assert r.tool_used == "changelog", msg
         assert "Логбук собран" in r.text and "5 коммитов" in r.text
         assert a.brain.calls == 0, msg
+    # книга собрана В ПЕСОЧНИЦЕ теста, а не в репозитории дома
+    assert (tmp_path / "CHANGELOG.md").is_file()
+    assert str(tmp_path) in str((tmp_path / "CHANGELOG.md").resolve())
 
 
 def test_agent_command_logbook_crash_honest(monkeypatch):
