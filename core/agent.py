@@ -92,6 +92,7 @@ from core import notes, shopping, worklog, expenses, habits  # круг 1: бы�
 from core import birthdays, when                     # круг 2: календарь (Ф16-Ф19)
 from core import password, numeral, units            # круг 3: слова (Ф22-Ф25)
 from core.chance import rand_between, coin_times     # круг 3: жребий шире (Ф20-Ф21)
+from core import holidays, worldtime, stretch, pomodoro  # круг 4: время и здоровье (Ф26-Ф30)
 from core import uptime as _uptime   # H7 аудита: момент рождения процесса — импорт модуля
                                     # (панель поднимает агента на старте), а не первый запрос
 from core.brain import BrainClient, is_refusal
@@ -841,6 +842,44 @@ class Agent:
             return Reply(_tr.parse(t), "python", "translit")
         if low.startswith("переведи"):
             return Reply(units.parse(t), "python", "units")
+
+        # Ф26-Ф30 «Время и здоровье» — круг 4 (23.11): праздники,
+        # время в городе, круговые напоминания, разминка, помидор
+        if lowq in ("праздники", "какие праздники"):
+            return Reply(holidays.render_year(), "python", "holidays")
+        if lowq in ("сегодня праздник", "сегодня праздник?",
+                    "какой сегодня праздник"):
+            return Reply(holidays.today_check(), "python", "holidays")
+        if lowq in ("ближайший праздник", "какой ближайший праздник"):
+            return Reply(holidays.nearest(), "python", "holidays")
+        m = re.match(r"^(?:время|который час)\s+в\s+([а-яё\- ]+?)\??$", lowq)
+        if m:
+            return Reply(worldtime.time_in(m.group(1).strip()),
+                         "python", "worldtime")
+        if re.match(r"^напоминай\s+кажд", low):
+            plan = reminders.parse_recurring(t)
+            if isinstance(plan, dict) and "error" in plan:
+                return Reply(plan["error"], "python", "reminders")
+            if plan is not None:
+                return Reply(reminders.add_recurring(plan),
+                             "python", "reminders")
+        m = re.match(r"^хватит\s+напоминать\s*[№#]?\s*(\d+)$", lowq)
+        if m:
+            return Reply(reminders.cancel(int(m.group(1))),
+                         "python", "reminders")
+        if lowq in ("разминка вкл", "включи разминку"):
+            return Reply(stretch.enable(), "python", "stretch")
+        if lowq in ("разминка выкл", "выключи разминку"):
+            return Reply(stretch.disable(), "python", "stretch")
+        if lowq == "разминка":
+            return Reply(stretch.status(), "python", "stretch")
+        m = re.match(r"^помидор(?:\s+(\d{1,3}))?$", lowq)
+        if m:
+            return Reply(pomodoro.start(int(m.group(1)) if m.group(1)
+                                        else None),
+                         "python", "pomodoro")
+        if lowq in ("помидоры", "сколько помидоров"):
+            return Reply(pomodoro.render(), "python", "pomodoro")
 
         # СОН: «спи» — Создатель укладывает до утра или «проснись»
         if lowq in ("спи", "спать", "ложись спать", "на боковую"):
