@@ -18,6 +18,7 @@ JSON — не приговор: повтор уходит с полным бюд
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import urllib.request
@@ -134,6 +135,58 @@ def _strip_think(raw: str) -> str:
     return _THINK_RE.sub("", raw or "").strip()
 
 
+def is_refusal(err_text: str) -> bool:
+    """Соединение ОТКЛОНЕНО — сервер мозга не слушает порт.
+
+    WinError 10061 на машине Создателя (живой лог 23.11, день-8:
+    «мозг недоступен» после §15-рестарта), errno 111 «Connection
+    refused» в песочнице — одна болезнь: сервер выключен, грузится
+    или его команду старта отвергла сборка. Таймаут («timed out») —
+    ДРУГАЯ болезнь: медленное честное думание, ему дозвон противопоказан.
+    """
+    t = (err_text or "").lower()
+    return ("10061" in t or "connection refused" in t
+            or "connectionrefusederror" in t
+            or "actively refused" in t)
+
+
+def _urlopen(req, timeout: float):
+    """urlopen с честным дозвоном: отказ соединения — не приговор.
+
+    Мозг на CPU поднимается десятками секунд — панель, спросившая
+    раньше, чем порт ожил, не имеет права ронять ход первым же
+    «нет ответа»: дозваниваемся снова с паузой (закон дома
+    BRAIN_CONNECT_RETRIES × BRAIN_CONNECT_BACKOFF_SEC). Эфиру
+    говорится честно, ЧТО происходит (stage вне хода — тихий no-op:
+    голосовой трек и тесты не шумят). Всё, что НЕ отказ соединения
+    (таймаут, HTTP-ошибка, кривой ответ), — без дозвона: у каждой
+    болезни своё лечение (урок H6: «недоступен» и «кривой» — разные).
+    """
+    attempts = max(1, int(config.BRAIN_CONNECT_RETRIES))
+    backoff = max(0.0, float(config.BRAIN_CONNECT_BACKOFF_SEC))
+    # Батарея не спит 45 с ради симуляции погрузки (дом-паттерн «тест в
+    # тесте» PYTEST_CURRENT_TEST — прецедент weekly_audit): ретраи в
+    # тестах честные, паузы — нулевые
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        backoff = 0.0
+    for i in range(attempts):
+        try:
+            return urllib.request.urlopen(req, timeout=timeout)
+        except Exception as e:
+            if i >= attempts - 1 or not is_refusal(str(e)):
+                raise
+            try:
+                from core import progress
+                progress.stage(
+                    "мозг не отвечает на порту (грузится?) — дозваниваюсь,"
+                    " попытка %d из %d…" % (i + 2, attempts))
+            except Exception:
+                pass          # эфир молчит — дозвон живёт
+            if backoff:
+                time.sleep(backoff)
+    raise BrainError("мозг не дозвонился за %d попыток" % attempts)
+
+
 # МЯГКИЙ ПЕРЕКЛЮЧАТЕЛЬ QWEN3 (двойное мышление, 23.11): «/no_think» в
 # системном промпте — модель сама закрывает thinking-блок пустым и
 # печатает только ответ. Работает на ЛЮБОЙ сборке сервера (в отличие
@@ -222,8 +275,7 @@ class BrainClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(
-                    req, timeout=config.BRAIN_TIMEOUT_SEC) as resp:
+            with _urlopen(req, timeout=config.BRAIN_TIMEOUT_SEC) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except BrainError:
             raise
@@ -264,8 +316,7 @@ class BrainClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(
-                    req, timeout=config.BRAIN_TIMEOUT_SEC) as resp:
+            with _urlopen(req, timeout=config.BRAIN_TIMEOUT_SEC) as resp:
                 chunks: list = []
                 usage: dict = {}
                 sse = False

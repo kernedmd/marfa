@@ -124,12 +124,38 @@ def test_main_brain_without_cmd(monkeypatch, tmp_path):
 
 
 def test_main_brain_cmd_used(monkeypatch, tmp_path):
-    """Мозг не жив, команда вписана — поднимается и не ждётся (CPU)."""
+    """Мозг не жив, команда вписана — поднимается и ЖДЁТСЯ (день-8:
+    старт без ожидания прятал смерть команды за «проверь позже»)."""
     rc, out, spawned, _ = _run_main(monkeypatch, tmp_path, {8083, 5001},
                                     cfg_brain="run brain", ears_alive=True, drive_alive=True)
     assert rc == 0
     assert spawned == ["run brain"]
-    assert "разогревается" in out
+    assert "ожил" in out
+
+
+def test_main_brain_dead_says_console_and_button(monkeypatch, tmp_path):
+    """День-8: мозг не ожил за ожидание — честный намёк на консоль и
+    кнопку 92, а не молчаливое «проверь позже» (кавычки терапии §15
+    убили сервер, а старт делал вид, что всё нормально)."""
+    spawned, logged = [], []
+    monkeypatch.setattr(sm, "_alive",
+                        lambda port, path: port in {8083, 5001})
+    monkeypatch.setattr(sm, "_spawn", lambda cmd: spawned.append(cmd))
+    monkeypatch.setattr(sm, "_wait", lambda p, path, t, poll=2.0: False)
+    monkeypatch.setattr(sm, "_log", lambda line: logged.append(line))
+    monkeypatch.setattr(sm, "_ears_alive", lambda: True)
+    monkeypatch.setattr(sm, "_drive_alive", lambda: True)
+    cfg = _cfg(tmp_path, brain="run brain")
+    import io
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = sm.main(["--config", str(cfg)])
+    out = buf.getvalue()
+    assert rc == 0                       # дом поднимается и без мозга
+    assert "НЕ ожил" in out
+    assert "консоль мозга" in out
+    assert "92_brain_fix" in out
 
 
 # ---------- уши: четвёртый слуга ----------

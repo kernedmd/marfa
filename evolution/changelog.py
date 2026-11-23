@@ -38,16 +38,29 @@ def _git_log(root: Path) -> list:
 
 
 def _repo_root() -> Path:
-    """Корень репозитория (на станции — сам C:\\Marfa). Не вышло —
-    HOME_DIR: логбук живёт у дома, а не уcwd."""
-    try:
-        r = subprocess.run(["git", "rev-parse", "--show-toplevel"],
-                           cwd=str(config.HOME_DIR), capture_output=True,
-                           text=True, timeout=10)
-        if r.returncode == 0 and r.stdout.strip():
-            return Path(r.stdout.strip())
-    except Exception:
-        pass
+    """Корень репозитория КОДА — логбук пишет в книгу того дома, чей
+    это код (на станции — сам C:\\Marfa).
+
+    УРОК ДЕГРАДАЦИИ КНИГИ (23.11, утро): корень резолвился от HOME_DIR,
+    а в песочнице и симуляциях станции HOME_DIR — посторонний git-контекст
+    (или его нет вовсе); туда же добавилась утечка теста, писавшего в
+    Path(".") — батарея от корня перезаписывала настоящий CHANGELOG.md
+    фикстурой из пяти коммитов. Порядок теперь строгий:
+    СНАЧАЛА rev-parse от папки этого модуля (папка кода живёт в его
+    репозитории — станция, песочница и клоны симуляции получают каждый
+    свою книгу), ПОТОМ от HOME_DIR (код установлен россыпью — книгу
+    ведём у дома). Не вышло — HOME_DIR как есть: логбук живёт у дома,
+    а не у cwd (урок N4: запуск из другой папки дом не переезжает).
+    """
+    for base in (Path(__file__).resolve().parent.parent, config.HOME_DIR):
+        try:
+            r = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                               cwd=str(base), capture_output=True,
+                               text=True, timeout=10)
+            if r.returncode == 0 and r.stdout.strip():
+                return Path(r.stdout.strip())
+        except Exception:
+            continue
     return Path(config.HOME_DIR)
 
 
@@ -120,8 +133,13 @@ def render_changelog(entries) -> str:
 
 def write_changelog(root=None) -> dict:
     """Собрать и записать CHANGELOG.md в корень репозитория.
-    Возвращает {commits, days, file}. Пустой лог — честный отказ."""
-    root = Path(root) if root is not None else _repo_root()
+    Возвращает {commits, days, file}. Пустой лог — честный отказ.
+
+    Корень резолвится в АБСОЛЮТНЫЙ путь (урок деградации: относительный
+    корень из теста дотянулся до настоящего файла книги) — путь в отчёте
+    всегда показывает, КУДА легла книга, без двусмысленности cwd.
+    """
+    root = (Path(root) if root is not None else _repo_root()).resolve()
     entries = parse_log(_git_log(root))
     if not entries:
         raise RuntimeError("git log пуст — логбук не из чего собирать")

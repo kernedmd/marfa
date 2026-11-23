@@ -90,7 +90,7 @@ from core import musing, sleep                    # внутренняя жиз�
 from core import rules                             # законы дома: автор и исполнитель (№40)
 from core import uptime as _uptime   # H7 аудита: момент рождения процесса — импорт модуля
                                     # (панель поднимает агента на старте), а не первый запрос
-from core.brain import BrainClient
+from core.brain import BrainClient, is_refusal
 from core.memory import Memory
 
 
@@ -423,6 +423,17 @@ def _house_state() -> str:
             rules_note = "; " + rl
     except Exception as e:
         _lesson("сенсор-упал", "правила: %s: %s" % (type(e).__name__, e))
+    # МОСТ УШЕЙ (23.11, фронт 4): жива ли вторая ступень слуха — мозг
+    # знает, что с ним можно ГОВОРИТЬ ВСЛУХ; службы нет — строки нет
+    # (состояние не толстеет, образец — правила №40). Сенсор в броне
+    bridge_line = ""
+    try:
+        from sensors import ear_bridge as _bridge_mod
+        bl = _bridge_mod.state_line()
+        if bl:
+            bridge_line = "; " + bl
+    except Exception as e:
+        _lesson("сенсор-упал", "мост: %s: %s" % (type(e).__name__, e))
     # №6 «глаза как контекст мозга» (Г-3): слежение включено — мозг
     # получает свежую строку о экране (кэш TTL: ходы между взглядами
     # бесплатны). Сенсор в своей броне: упавшее слежение не выдаёт
@@ -443,7 +454,7 @@ def _house_state() -> str:
         ", квант " + config.DEFAULT_QUANT +
         ", RAM-бюджет " + str(config.RAM_BUDGET_GB) + " ГБ; " + eyes_note +
         "; " + cam_note +
-        "; " + ears_note +
+        "; " + ears_note + bridge_line +
         "; " + inner_note +
         "; " + sleep_note + thought_note + rules_note +
         "; я не сплю с " + started + watch_note
@@ -879,6 +890,24 @@ class Agent:
                 _lesson("сенсор-упал", "уши-осмотр: %s: %s" % (type(e).__name__, e))
                 return Reply("осмотр ушей не собрался: %s — расскажи "
                              "архитектору" % e, "python", "ears_selftest")
+
+        # МОСТ УШЕЙ (23.11, фронт 4 «голос»): «проверь мост» — осмотр
+        # ВТОРОЙ ступени слуха (whisper-слуга, ловец фраз) по ступеням.
+        # Ветка ПОСЛЕ ушей: «проверь уши» не должно попадать сюда (границы
+        # не пересекаются — «мост» отдельное слово, но порядок страховает)
+        if (lowq in ("проверь мост", "мост", "проверь мост ушей",
+                     "проверь голос", "как голос")
+                or low.startswith("проверь мост")
+                or low.startswith("проверь голос")):
+            from sensors import ear_bridge as _bridge_mod
+            try:
+                return Reply(_bridge_mod.selftest(), "python",
+                             "ear_bridge_selftest")
+            except Exception as e:
+                _lesson("сенсор-упал", "мост-осмотр: %s: %s"
+                        % (type(e).__name__, e))
+                return Reply("осмотр моста не собрался: %s — расскажи "
+                             "архитектору" % e, "python", "ear_bridge_selftest")
 
         # Г-2.4, камера (22.11): веб-камера — второй источник зрения.
         # ВАЖНО: ветка ДО экранной — «посмотри в камеру» начинается
@@ -1514,12 +1543,21 @@ class Agent:
                 # Урок переписки 22.11: голое «timed out» Создатель читает как
                 # поломку. Чаще это медленный Pascal-мозг, честно думающий
                 # над длинным ответом, — говорим это человеческим языком.
+                # Урок дня-8 (23.11): «WinError 10061» — вторая болезнь:
+                # сервер мозга НЕ СЛУШАЕТ порт (выключен/грузится/команда
+                # старта отвергнута) — лечение другое, и оно в подсказке.
                 note = ""
                 if "timed out" in str(e).lower():
                     note = (" — думал дольше %d сек и не успел. Это не поломка: "
                             "мозг честно работает, просто медленно. Спроси "
                             "покороче или повтори через минуту"
                             % config.BRAIN_TIMEOUT_SEC)
+                elif is_refusal(str(e)):
+                    note = (" — сервер мозга не отвечает на порту (соединение "
+                            "отклонено): мозг выключен, грузится или его команду "
+                            "старта отвергла сборка. Лечение: кнопка "
+                            "scripts\\92_brain_fix.bat — чинит команду и поднимает "
+                            "мозг; живость покажет карточка «Мозг» на панели")
                 return Reply("мозг недоступен: " + str(e) + note, "fallback", None)
             if isinstance(decision, dict) and isinstance(decision.get("action"), dict):
                 # МАРШРУТ ДЕЙСТВИЯ v2 «ответ не выбрасываем» (23.11, ночь —

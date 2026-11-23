@@ -21,13 +21,18 @@
 from __future__ import annotations
 
 
-def stop_llama(port: int) -> bool:
+def stop_llama(port: int, server_name: str = "llama-server") -> bool:
     """Уложить llama-server на порту (psutil — уже в доме, Ф97).
 
-    Ищем процесс, в чьей командной строке есть llama-server и этот порт
+    Ищем процесс, в чьей командной строке есть имя сервера и этот порт
     (токен равен номеру порта точно, «8192» за «8083» не примется).
     Возвращает True, если кого-то уложили. Использует кодер-слуга,
     присаживая глаза на время патча.
+
+    server_name (мост ушей, 23.11): whisper-server из той же семьи
+    llama.cpp/whisper.cpp — укладывается той же церемонией, только имя
+    в командной строке другое. Мозг и глаза не трогаются: у моста свой
+    порт и свой слуга, VRAM он не занимает (CPU).
     """
     try:
         import psutil
@@ -37,7 +42,7 @@ def stop_llama(port: int) -> bool:
     for proc in psutil.process_iter(["pid", "cmdline"]):
         try:
             cl = [str(c) for c in (proc.info.get("cmdline") or [])]
-            if (any("llama-server" in c for c in cl)
+            if (any(server_name in c for c in cl)
                     and str(port) in cl):
                 proc.terminate()
                 killed = True

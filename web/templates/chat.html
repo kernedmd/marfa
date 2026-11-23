@@ -41,6 +41,8 @@
                            font-style: italic; opacity: 0.9; white-space: pre-wrap;
                            border-left: 2px solid var(--border); padding-left: 8px; }
         .stamp { font-size: 11px; color: #6e7681; align-self: flex-start; margin-top: -6px; padding-left: 8px; }
+        /* МОСТ УШЕЙ: пометка под фразой Создателя, сказанной голосом */
+        .vt { font-size: 11px; color: #6e7681; align-self: flex-end; margin-top: -6px; padding-right: 8px; }
         /* №14 «кнопка глаз»: взгляд одним кликом — превью + описание */
         #eye { padding: 6px 12px; font-size: 13px; font-weight: normal; background: var(--card); color: var(--text);
                border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
@@ -158,6 +160,60 @@
         fetch('/api/reminders').then(r => r.json()).then(d => {
             if (d && d.note) add('ai', d.note);
         }).catch(() => {});
+
+        // МОСТ УШЕЙ (фронт 4 «голос»): ходы, сказанные голосом, приходят
+        // из дома, пока окно открыто — опрос раз в 4 с, дёшево и локально.
+        // Первый опрос без after — узнаём текущий seq: старые ходы чат не
+        // заваливают, живём с настоящего момента (полная история — в сессии
+        // voice и журнале data\voice). Пока ход в работе (busy) — честный
+        // индикатор «расшифровываю и думаю», не минута молчания.
+        let voiceSeq = null, voiceBox = null;
+        function voiceTurn(t) {
+            if (t.event === 'exchange') {
+                const c = document.getElementById('chat');
+                const u = document.createElement('div');
+                u.className = 'msg user';
+                u.textContent = t.phrase;          // гигиена №12: textContent
+                const tag = document.createElement('div');
+                tag.className = 'vt';
+                tag.textContent = 'услышала голосом';
+                c.appendChild(u); c.appendChild(tag);
+                if (t.answer) {
+                    add('ai', t.answer, t.html);
+                    addStamp(t.secs, t.src_label || t.src, t.tok, t.ptok);
+                }
+                c.scrollTop = c.scrollHeight;
+            } else if (t.event === 'skip') {
+                add('ai', 'голосом: «' + (t.phrase || 'тишина') + '» — ' +
+                             (t.why || 'не зов'));
+            } else {
+                add('ai', 'голосом не вышло: ' + (t.error || 'неизвестно почему'));
+            }
+        }
+        function pollVoice() {
+            fetch('/api/voice' + (voiceSeq === null ? '' : '?after=' + voiceSeq))
+                .then(r => r.json())
+                .then(d => {
+                    if (!d || d.seq === undefined) return;
+                    const fresh = voiceSeq === null ? [] : (d.turns || []);
+                    voiceSeq = d.seq;
+                    fresh.forEach(voiceTurn);
+                    if (d.busy && !voiceBox) {
+                        const c = document.getElementById('chat');
+                        voiceBox = document.createElement('div');
+                        voiceBox.className = 'typing';
+                        voiceBox.innerHTML = '<span class="dots">услышала голосом</span>' +
+                                             '<span class="stage">расшифровываю фразу и думаю…</span>';
+                        c.appendChild(voiceBox);
+                        c.scrollTop = c.scrollHeight;
+                    }
+                    if ((!d.busy || fresh.length) && voiceBox) {
+                        voiceBox.remove(); voiceBox = null;
+                    }
+                }).catch(() => {});
+        }
+        setInterval(pollVoice, 4000);
+        pollVoice();
 
         // №14 «кнопка глаз»: один клик — один взгляд. Превью и описание
         // приходят с сервера; всё текстовое — через esc() (XSS-гигиена №12:
