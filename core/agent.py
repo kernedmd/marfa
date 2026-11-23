@@ -97,6 +97,7 @@ from core import talkstats, echo_search, dayroll, weekroll, moodlog  # круг 
 from core import agenda, filefind, legacy, shelf, weight  # круг 6: дом и его тело (Ф36-Ф40)
 from core import answercache, promptweight, brainhealth, energy  # круг 7: скорость (Ф41, Ф43-Ф45, день-9)
 from core import seal, shores, borders  # круг 8: печати и калитка (Ф46, Ф48-Ф49, день-9)
+from core import semantic, diaryday, personcard, dialogexport  # круг 9: смыслы и архив (Ф52-Ф55, день-9)
 from core import uptime as _uptime   # H7 аудита: момент рождения процесса — импорт модуля
                                     # (панель поднимает агента на старте), а не первый запрос
 from core.brain import BrainClient, is_refusal
@@ -546,6 +547,17 @@ class Agent:
             self.memory.remember(payload)
             return Reply("запомнила: " + payload, "python", "remember")
 
+        # Ф52 «СМЫСЛОВАЯ ПАМЯТЬ» (день-9): «вспомни по смыслу X» / «по
+        # смыслу X» — стоит ДО дословного «вспомни»: смысловой орган
+        # главный в этой фразе (сухой режим — орган сам скажет про кнопку 93)
+        m = re.match(r"^(?:вспомни\s+)?по\s+смыслу\s+(.+?)\??$", lowq)
+        if m:
+            return Reply(semantic.render(m.group(1).strip()),
+                         "python", "semantic")
+        if lowq in ("переиндексируй смыслы", "проиндексируй смыслы",
+                    "индексируй смыслы", "переиндексация смыслов"):
+            return Reply(semantic.reindex(), "python", "semantic")
+
         if re.match(r"^вспомни(?![а-яё])(?=[\s:,;—-]|$)", low):
             query = t[len("вспомни"):].strip().lstrip(":,;—- ").strip()
             if not query:
@@ -954,6 +966,30 @@ class Agent:
             return Reply(shores.render(), "python", "shores")
         if lowq in ("границы", "какие границы", "куда ты не ходишь"):
             return Reply(borders.render(), "python", "borders")
+
+        # Ф53-Ф55 «Смыслы и архив» — круг 9 (день-9): дневник за дату,
+        # визитка Создателя, экспорт разговора. Ф51 (слуга-эмбеддер) —
+        # кнопка 93; Ф52 (смыслы) стоит выше — у дословного «вспомни»
+        if re.match(r"^(?:что\s+было|дневник\s+за|что\s+случилось)\s+\S",
+                    lowq):
+            payload = re.sub(r"^(?:что\s+было|дневник\s+за|что\s+случилось)"
+                             r"\s+", "", lowq).rstrip("?.!")
+            day = diaryday.parse_date(payload)
+            if day is not None:
+                return Reply(diaryday.render(day), "python", "diaryday")
+            return Reply("не разобрала дату «%s» — скажи «что было вчера» "
+                         "или «что было 20 ноября»" % payload,
+                         "python", "diaryday")
+        if lowq in ("что ты помнишь обо мне", "что ты знаешь обо мне",
+                    "что ты помнишь про меня", "расскажи обо мне"):
+            return Reply(personcard.render(), "python", "personcard")
+        if lowq in ("сохрани наш разговор", "сохрани разговор",
+                    "сохрани беседу"):
+            return Reply(dialogexport.export(), "python", "dialogexport")
+        if lowq in ("разговоры", "сохранённые разговоры",
+                    "сохраненные разговоры"):
+            return Reply(dialogexport.list_exports(), "python",
+                         "dialogexport")
 
         # СОН: «спи» — Создатель укладывает до утра или «проснись»
         if lowq in ("спи", "спать", "ложись спать", "на боковую"):
