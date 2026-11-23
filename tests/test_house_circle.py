@@ -272,6 +272,20 @@ def test_legacy_reads_real_repo_book():
     assert "коммитов за период" in out
 
 
+def test_legacy_survives_russian_plurals(tmp_path):
+    """День-9, регрессия: «161 коммит» (единственное число) сломало
+    летопись — регулярка ждала только «коммитов». Все падежи читаются."""
+    for form in ("161 коммит,", "163 коммита,", "156 коммитов,"):
+        book = tmp_path / ("book_%s.md" % form.split()[1])
+        book.write_text(
+            "Собрано командой «логбук»:\n%s 2026-11-16 — 2026-11-24.\n\n"
+            "## 2026-11-24 — 1 коммит\n\n- фишка дня\n" % form,
+            encoding="utf-8")
+        out = legacy.render(book)
+        assert "ЛЕТОПИСЬ ДОМА" in out, form
+        assert "за период 2026-11-16 — 2026-11-24" in out, form
+
+
 # ---------- проводка агента ----------
 
 def test_agent_schedule_command(agent):
