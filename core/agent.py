@@ -270,6 +270,67 @@ def _fmt_num(x) -> str:
     return str(x)
 
 
+# ---------------------------------------------------------------
+# МОЗГ v3 «АНТИ-ЭХО» (23.11, вечер-3 — урок живого лога):
+# на два РАЗНЫХ вопроса мозг ответил ДОСЛОВНО одним текстом
+# («Стать лучше для меня — это…» дважды), а на прямые вопросы про
+# путь и время трижды вернул пустоту («Нет ответа»). Это не эволюция,
+# а зацикливание — Создатель сам поставил диагноз и потребовал
+# лечение начинать с признания ошибки. Лечение: пустой или повторный
+# ответ переспрашивается ОДИН раз с уколом в тело запроса; повторился
+# снова — Марфа честно говорит «я зациклилась», а не выдаёт эхо за
+# ответ. Сверка — с последним ответом Марфы в истории (текущий ход
+# в неё ещё не дописан: панель кладёт ходы ПОСЛЕ ответа).
+# ---------------------------------------------------------------
+
+def _norm_echo(s: str) -> str:
+    """Нормализация для сверки эха: без регистра, ё, пунктуации
+    и лишних пробелов — «Стать лучше…» и «стать лучше!» одно эхо."""
+    s = str(s or "").lower().replace("ё", "е")
+    s = re.sub(r"[«»\"'()\[\]{}.,;:!?…\-–—_/\\]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _last_assistant_text(history) -> str:
+    """Последний ответ Марфы в истории — с ним сверяем эхо.
+
+    H9: ход приходит и в формате мозга (content), и в формате
+    DialogStore (text) — берём оба, кто первый непустой с конца.
+    """
+    for t in reversed(history or []):
+        if isinstance(t, dict) and t.get("role") == "assistant":
+            content = t.get("content")
+            if not (isinstance(content, str) and content.strip()):
+                content = t.get("text")
+            if isinstance(content, str) and content.strip():
+                return content
+    return ""
+
+
+# Короткие ответы («Согласна», «Да», «не знаю») повторяются честно —
+# Создатель сам требует односложные ответы на прямые вопросы; эхо —
+# это дословный повтор ДЛИННОГО текста (в живом логе — 400+ символов)
+_ECHO_MIN_LEN = 60
+
+
+def _is_echo(answer: str, last_assistant: str) -> bool:
+    """Ответ дословно повторяет прошлый ответ Марфы (длинный — короткие мимо)."""
+    a, b = _norm_echo(answer), _norm_echo(last_assistant)
+    return bool(a) and bool(b) and len(a) >= _ECHO_MIN_LEN and a == b
+
+
+_NUDGE_EMPTY = (
+    "\n\n[система: твоя предыдущая попытка ответа вернулась ПУСТОЙ. "
+    "Ответь по существу сообщения словами — одно-четыре предложения. "
+    "Молчание — не ответ.]"
+)
+_NUDGE_ECHO = (
+    "\n\n[система: твой предыдущий ответ на прошлый вопрос был ДОСЛОВНО "
+    "таким же — это зацикливание. Прочитай НОВОЕ сообщение внимательно "
+    "и ответь по его существу, другими словами.]"
+)
+
+
 def _house_state() -> str:
     """Лёгкое состояние дома для промпта (тяжёлый осмотр — marfa_status.py).
     Г-2.1: сюда же — глаза. Мозг читает этот текст в каждом сообщении
@@ -1236,26 +1297,47 @@ class Agent:
             system_extra = IDENTITY + "\n\n" + identity.manifest() \
                 + "\n\n" + SPEED_LAW + "\n\n" + TONE_LAW
         progress.stage("мозг думает — кратко и по делу, ответ напечатается живьём…")
-        try:
-            decision = self.brain.ask_json(
-                user_text, system_extra=system_extra,
-                history=history,
-                max_tokens=config.BRAIN_ANSWER_TOKENS,
-                on_text=progress.preview)
-        except Exception as e:
-            _lesson("мозг-недоступен", str(e))
-            # Урок переписки 22.11: голое «timed out» Создатель читает как
-            # поломку. Чаще это медленный Pascal-мозг, честно думающий
-            # над длинным ответом, — говорим это человеческим языком.
-            note = ""
-            if "timed out" in str(e).lower():
-                note = (" — думал дольше %d сек и не успел. Это не поломка: "
-                        "мозг честно работает, просто медленно. Спроси "
-                        "покороче или повтори через минуту"
-                        % config.BRAIN_TIMEOUT_SEC)
-            return Reply("мозг недоступен: " + str(e) + note, "fallback", None)
-        if isinstance(decision, dict) and isinstance(decision.get("action"), dict):
-            return self._act(decision["action"])
+        # МОЗГ v3 «АНТИ-ЭХО»: пустой ответ и дословный повтор прошлого
+        # переспрашиваются ОДИН раз с уколом; эхо и после укола — честное
+        # признание, а не выдача повтора за ответ (урок живого лога 23.11)
+        last_assistant = _last_assistant_text(history)
+        decision = None
+        ans: str = ""
+        nudge = ""
+        for _attempt in (1, 2):
+            try:
+                decision = self.brain.ask_json(
+                    user_text + nudge, system_extra=system_extra,
+                    history=history,
+                    max_tokens=config.BRAIN_ANSWER_TOKENS,
+                    on_text=progress.preview)
+            except Exception as e:
+                _lesson("мозг-недоступен", str(e))
+                # Урок переписки 22.11: голое «timed out» Создатель читает как
+                # поломку. Чаще это медленный Pascal-мозг, честно думающий
+                # над длинным ответом, — говорим это человеческим языком.
+                note = ""
+                if "timed out" in str(e).lower():
+                    note = (" — думал дольше %d сек и не успел. Это не поломка: "
+                            "мозг честно работает, просто медленно. Спроси "
+                            "покороче или повтори через минуту"
+                            % config.BRAIN_TIMEOUT_SEC)
+                return Reply("мозг недоступен: " + str(e) + note, "fallback", None)
+            if isinstance(decision, dict) and isinstance(decision.get("action"), dict):
+                return self._act(decision["action"])
+            if isinstance(decision, dict):
+                raw_ans = decision.get("answer")
+                ans = "" if raw_ans is None else (
+                    raw_ans if isinstance(raw_ans, str) else str(raw_ans))
+                if not ans.strip() and _attempt == 1:
+                    _lesson("мозг-пустой-ответ", user_text[:120])
+                    nudge = _NUDGE_EMPTY
+                    continue
+                if _is_echo(ans, last_assistant) and _attempt == 1:
+                    _lesson("мозг-зацикливание", user_text[:120])
+                    nudge = _NUDGE_ECHO
+                    continue
+            break
         if isinstance(decision, dict):
             # СКОРОСТЬ v1: штамп несёт и токены — «40,2 с · мозг · 84 ток»;
             # снова две минуты? по токенам сразу видно, кто съел время.
@@ -1280,10 +1362,18 @@ class Agent:
                 meta["tok"] = tok
             if ptok:
                 meta["ptok"] = ptok
-            # Раунд 3, №9: {"answer": null} — ключ есть, значения нет;
-            # str(None) давал «None» вместо честного «Нет ответа»
-            ans = decision.get("answer")
-            if not isinstance(ans, str) or not ans.strip():
-                ans = "Нет ответа" if ans in (None, "") else str(ans)
+            # Раунд 3, №9 лечится честностью дважды: пустой ответ после
+            # ретрая — честный сбой с путём лечения («хвост brain пустой
+            # ответ»), эхо после укола — признание («Я зациклилась»),
+            # которому Создатель сам учил в живом разговоре 23.11
+            if not ans.strip():
+                return Reply("мозг вернулся с пустым ответом дважды — это сбой, "
+                             "а не пауза. Скажи «хвост brain пустой ответ» — "
+                             "покажу лог, или повтори ход", "brain", None,
+                             meta=meta or None)
+            if _is_echo(ans, last_assistant):
+                return Reply("Я зациклилась и повторила прошлый ответ. "
+                             "Скажи «ответь иначе» — и я попробую заново.",
+                             "brain", None, meta=meta or None)
             return Reply(ans, "brain", None, meta=meta or None)
         return Reply(str(decision), "brain", None)
