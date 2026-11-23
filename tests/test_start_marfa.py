@@ -200,6 +200,97 @@ def test_ears_alive_by_heartbeat(monkeypatch, tmp_path):
     assert sm._ears_alive() is False               # мусор в файле — не живо
 
 
+# ---------- Ф84 «ПРОГРЕВ МОЗГА» (день-12) ----------
+
+def test_warmup_brain_pays_static_prefix(monkeypatch):
+    """Прогрев едет ТЕМ ЖЕ путём ask_json: байт-в-байт системный
+    префикс живого хода (статичная система панели), крошечный бюджет
+    генерации и ОДНА попытка — прогрев не платит дважды за брак."""
+    import core.agent as agent_mod
+    seen = {}
+
+    class _Brain:
+        def ask_json(self, text, system_extra="", **kw):
+            seen["text"] = text
+            seen["sys"] = system_extra
+            seen["max_tokens"] = kw.get("max_tokens")
+            seen["retries"] = kw.get("retries")
+            return {"answer": "ок"}
+
+    class _Agent:
+        def __init__(self):
+            self.brain = _Brain()
+
+        def _static_system(self):
+            return "ЯДРО+МАНИФЕСТ+ЗАКОНЫ+ДОКТРИНА"
+
+    monkeypatch.setattr(agent_mod, "Agent", _Agent)
+    monkeypatch.setattr(sm, "_log", lambda line: None)
+    sm._warmup_brain()
+    assert "Прогрев" in seen["text"]
+    assert seen["sys"] == "ЯДРО+МАНИФЕСТ+ЗАКОНЫ+ДОКТРИНА"
+    assert seen["max_tokens"] <= 32 and seen["retries"] == 1
+
+
+def test_warmup_brain_failure_is_silent(monkeypatch):
+    """Прогрев — не орган дыхания: упал (нет порта, нет органа) —
+    молча, причина в журнал, дом и панель живут."""
+    import core.agent as agent_mod
+    logged = []
+
+    class _Boom:
+        def __init__(self):
+            raise RuntimeError("нет органа")
+
+    monkeypatch.setattr(agent_mod, "Agent", _Boom)
+    monkeypatch.setattr(sm, "_log", lambda line: logged.append(line))
+    sm._warmup_brain()                     # не поднялся и не упал
+    assert logged and "не орган дыхания" in logged[0]
+
+
+def test_start_warmup_dead_brain_no_thread(monkeypatch):
+    """Мозг не жив — прогрев не заводится (греть некого)."""
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    called = []
+    monkeypatch.setattr(sm, "_warmup_brain", lambda: called.append(1))
+    monkeypatch.setattr(sm, "_alive", lambda port, path: False)
+    assert sm._start_warmup() is None
+    assert not called
+
+
+def test_start_warmup_alive_brain_runs_thread(monkeypatch):
+    """Мозг жив — фоновый поток запускается и доезжает (daemon:
+    не держит старт дома и выход батареи)."""
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    called = []
+    monkeypatch.setattr(sm, "_warmup_brain", lambda: called.append(1))
+    monkeypatch.setattr(sm, "_alive", lambda port, path: True)
+    t = sm._start_warmup()
+    assert t is not None and t.daemon
+    t.join(timeout=5)
+    assert called == [1]
+
+
+def test_start_warmup_sleeps_in_battery(monkeypatch):
+    """Батарея не греет настоящий сервер: тестовое окружение — не
+    станция, побочных потоков в чужие порты не пускаем."""
+    called = []
+    monkeypatch.setattr(sm, "_warmup_brain", lambda: called.append(1))
+    monkeypatch.setattr(sm, "_alive", lambda port, path: True)
+    assert sm._start_warmup() is None      # PYTEST_CURRENT_TEST на страже
+    assert not called
+
+
+def test_main_pings_warmup_after_services(monkeypatch, tmp_path):
+    """main() зовёт прогрев ПОСЛЕ подъёма слуг: панель уже открылась,
+    мозг уже жив — дом платит префилл, пока Создатель тянет браузер."""
+    seen = []
+    monkeypatch.setattr(sm, "_start_warmup", lambda: seen.append(1))
+    _run_main(monkeypatch, tmp_path, {8082, 8083, 5001},
+              ears_alive=True, drive_alive=True)
+    assert seen == [1]
+
+
 # ---------- планировщик ----------
 
 def test_register_scheduler_ok(monkeypatch):
