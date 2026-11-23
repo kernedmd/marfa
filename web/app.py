@@ -331,6 +331,16 @@ def api_chat():
     DIALOGS.append(session, "user", text)          # ходы — после ответа:
     DIALOGS.append(session, "assistant", reply.text,  # неудача не портит память
                    meta=meta)
+    # Ф57 «говори вслух» (день-10): ответ озвучивается, если Создатель
+    # разрешил; голос живёт в потоке-демоне, чат НЕ ждёт звука, а вслух
+    # читаются первые REPLY_LIMIT символов — длинное остаётся глазам
+    # (закон эфира: голос не роняет дом и не держит ответ)
+    try:
+        from core import voice as _voice_mod
+        if _voice_mod.out_enabled():
+            _voice_mod.speak_async(reply.text)
+    except Exception:
+        pass
     # №12: готовый безопасный HTML — панель не доверяет мозгу ни байтом
     return jsonify({"reply": reply.text, "html": to_safe_html(reply.text),
                     "session": session, "secs": secs,

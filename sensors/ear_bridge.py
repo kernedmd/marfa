@@ -484,6 +484,19 @@ def _has_wake_exact(text: str) -> bool:
     return any(w in _WAKE_EXACT for w in normalize(text).split())
 
 
+def _speak_reply(text: str) -> None:
+    """Озвучить ответ голосового хода, если включена озвучка (Ф57,
+    день-10): Илья говорит — Марфа отвечает звуком, полный разговор
+    без рук и экрана. Любой крах глотается: слух не умирает из-за
+    рта (закон эфира — голос не роняет дом)."""
+    try:
+        from core import voice
+        if voice.out_enabled():
+            voice.speak_async(text)
+    except Exception:
+        pass
+
+
 def handle_phrase(pcm: bytes, sample_rate: int = 16000,
                   had_voice: bool = True) -> dict:
     """ПОЛНЫЙ ГОЛОСОВОЙ ХОД: фраза → текст → ответ дома → журнал.
@@ -538,10 +551,15 @@ def handle_phrase(pcm: bytes, sample_rate: int = 16000,
                          meta=meta)
         except (OSError, ValueError):
             pass  # сессия — не орган дыхания; журнал ниже всё запишет
-        return voice_append({"event": "exchange", "phrase": text,
-                             "answer": reply.text, "secs": secs_total,
-                             "src": reply.source, "tok": meta.get("tok"),
-                             "ptok": meta.get("ptok")})
+        rec = voice_append({"event": "exchange", "phrase": text,
+                            "answer": reply.text, "secs": secs_total,
+                            "src": reply.source, "tok": meta.get("tok"),
+                            "ptok": meta.get("ptok")})
+        # Ф57 (день-10): голосовой ход получил голосовой ответ — если
+        # Создатель сказал «говори вслух». Журнал уже записан (истина
+        # прежде звука); озвучка не держит и не роняет слух
+        _speak_reply(reply.text)
+        return rec
     except Exception as e:
         return voice_append({"event": "error", "stage": "voice",
                              "error": "%s: %s" % (type(e).__name__, e)})

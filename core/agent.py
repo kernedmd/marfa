@@ -455,6 +455,17 @@ def _house_state() -> str:
             watch_note = "; экран сейчас: " + wl
     except Exception as e:
         _lesson("сенсор-упал", "слежение: %s: %s" % (type(e).__name__, e))
+    # ГОЛОС (день-10, Ф56): организм заговорил — состояние знает
+    # правду о голосе (диагноз по образцу ушей: причина, не отговорка).
+    # Сенсор в своей броне: упавший голос не выдаёт себя за
+    # «мозг недоступен» (закон №10 р3)
+    voice_note = ""
+    try:
+        from core import voice as _voice_mod
+        voice_note = "; голос: " + _voice_mod.diagnosis()
+    except Exception as e:
+        _lesson("сенсор-упал", "голос: %s: %s" % (type(e).__name__, e))
+        voice_note = "; голос: диагноз недоступен — расскажи архитектору"
     return (
         "Состояние дома на " + clock +
         " (время и дата — отсюда, своих часов у тебя нет, не выдумывай): "
@@ -464,7 +475,7 @@ def _house_state() -> str:
         ", квант " + config.DEFAULT_QUANT +
         ", RAM-бюджет " + str(config.RAM_BUDGET_GB) + " ГБ; " + eyes_note +
         "; " + cam_note +
-        "; " + ears_note + bridge_line +
+        "; " + ears_note + bridge_line + voice_note +
         "; " + inner_note +
         "; " + sleep_note + thought_note + rules_note +
         "; я не сплю с " + started + watch_note
@@ -1133,14 +1144,15 @@ class Agent:
                 return Reply("осмотр ушей не собрался: %s — расскажи "
                              "архитектору" % e, "python", "ears_selftest")
 
-        # МОСТ УШЕЙ (23.11, фронт 4 «голос»): «проверь мост» — осмотр
+        # МОСТ УШЕЙ (23.11, фронт 4): «проверь мост» — осмотр
         # ВТОРОЙ ступени слуха (whisper-слуга, ловец фраз) по ступеням.
         # Ветка ПОСЛЕ ушей: «проверь уши» не должно попадать сюда (границы
-        # не пересекаются — «мост» отдельное слово, но порядок страховает)
-        if (lowq in ("проверь мост", "мост", "проверь мост ушей",
-                     "проверь голос", "как голос")
-                or low.startswith("проверь мост")
-                or low.startswith("проверь голос")):
+        # не пересекаются — «мост» отдельное слово, но порядок страховает).
+        # День-10: «проверь голос» ПЕРЕЕХАЛ к новому органу голоса (Ф59):
+        # раньше «голосом» называлась сама возможность говорить с Марфой
+        # (мост), теперь Марфа говорит сама — и проверка зовёт свой орган
+        if (lowq in ("проверь мост", "мост", "проверь мост ушей")
+                or low.startswith("проверь мост")):
             from sensors import ear_bridge as _bridge_mod
             try:
                 return Reply(_bridge_mod.selftest(), "python",
@@ -1298,7 +1310,23 @@ class Agent:
         # («запомни меня», «запомни, как я выгляжу», «запомни экран»)
         # разобраны выше и сюда не доходят — до них очередь доходит только
         # с чем-то новым: «запомни, что завтра созвон» — память, не мозг.
-        # Граница слова обязательна: «запомнится» — не команда
+        # Граница слова обязательна: «запомнится» — не команда.
+        # День-10 (Ф63): сюда же — «запомни буфер»: специфическая ветка
+        # над генералом, иначе «буфер» уезжал в память голым словом
+        if re.match(r"^(?:запомни|сохрани)\s+буфер(?:\s+обмена)?$", lowq):
+            from core import hands as _hands
+            try:
+                raw = _hands.clipboard_read_raw()
+            except Exception as e:
+                return Reply("буфер не отдался: " + str(e),
+                             "python", "clipboard_remember")
+            if not raw.strip():
+                return Reply("буфер пуст — запоминать нечего",
+                             "python", "clipboard_remember")
+            self.memory.remember(raw)
+            preview = raw if len(raw) <= 120 else raw[:117] + "…"
+            return Reply("запомнила из буфера: " + preview,
+                         "python", "clipboard_remember")
         m = re.match(r"^запомни(?![а-яё])[\s:,;—-]*(.*)$", t, re.IGNORECASE)
         if m:
             payload = m.group(1).strip().strip('«»"\'').strip()
@@ -1336,6 +1364,114 @@ class Agent:
                 return Reply("буфер не принял: " + str(e) +
                              " — скажи «проверь модуль pyperclip», аптечка "
                              "поставит сама", "python", "clipboard")
+
+        # ГОЛОС (день-10, Ф56–Ф59): Марфа заговаривает — Windows SAPI
+        # через PowerShell с EncodedCommand (закон дня-8 в новом
+        # обличье: кавычкам нет шанса), ноль моделей, ноль VRAM.
+        # «скажи вслух <текст>» — рефлекс; «говори вслух»/«молчи» —
+        # резолюция озвучки ответов (как моторика и живой язык);
+        # интонация — настройка; «проверь голос» — живой тест органа
+        m = re.match(r"^(?:скажи|произнеси)\s+вслух[\s:,;—-]+(.+?)\s*[?.!…]*$",
+                     t, re.IGNORECASE)
+        if m:
+            from core import voice as _voice
+            return Reply(_voice.say(m.group(1).strip()),
+                         "python", "voice")
+        # №18-урок: пустой приказ — подсказка на месте, а не молчаливый
+        # уход в медленный мозговой трек
+        if lowq in ("скажи вслух", "произнеси вслух"):
+            return Reply("что сказать? скажи «скажи вслух <текст>»",
+                         "python", "voice")
+        if lowq in ("говори вслух", "отвечай вслух", "говори голосом"):
+            from core import voice as _voice
+            return Reply(_voice.set_out(True), "python", "voice")
+        if lowq in ("молчи", "не говори вслух", "перестань говорить вслух",
+                    "отвечай текстом", "говори текстом"):
+            from core import voice as _voice
+            return Reply(_voice.set_out(False), "python", "voice")
+        m = re.match(r"^говори\s+(медленнее|быстрее|тише|громче|"
+                     r"нормально|обычно)$", lowq)
+        if m:
+            from core import voice as _voice
+            return Reply(_voice.tune(m.group(1)), "python", "voice")
+        if lowq in ("проверь голос", "проверка голоса", "как голос"):
+            from core import voice as _voice
+            return Reply(_voice.selftest(), "python", "voice")
+
+        # ЧТЕНИЕ И БУФЕР (день-10, Ф61–Ф65): глаза читают надписи
+        # списком, буфер отдаёт и принимает, голос читает органы.
+        # «прочитай вслух» — ПЕРВЫМ: «прочитай экран» и «прочитай
+        # буфер» — его младшие братья по префиксу (жадность разводится
+        # порядком сравнения, урок раунда 3)
+        m = re.match(r"^прочитай\s+вслух[\s:,;—-]+(.+?)\s*[?.!…]*$",
+                     t, re.IGNORECASE)
+        if m:
+            from core import voice as _voice
+            return Reply(_voice.read_aloud(m.group(1).strip()),
+                         "python", "read_aloud")
+        if lowq == "прочитай вслух":
+            return Reply("что прочитать вслух? экран, дневник, последний "
+                         "ответ или визитку", "python", "read_aloud")
+        if lowq in ("прочитай экран", "прочитай что на экране",
+                    "прочитай надписи", "прочитай надписи на экране",
+                    "что написано на экране"):
+            from core import eyes as _eyes
+            return Reply(_eyes.read_texts_text(), "python", "read_screen")
+        if lowq in ("экран в буфер", "перепиши экран в буфер",
+                    "скопируй экран", "скопируй экран в буфер",
+                    "надписи в буфер", "экран в буфер обмена"):
+            from core import eyes as _eyes
+            from core import hands as _hands
+            lines, note = _eyes.read_texts_list()
+            if not lines:
+                return Reply(note or "глаза не прочитали ни одной надписи",
+                             "python", "screen_to_clipboard")
+            try:
+                return Reply(_hands.clipboard_write_lines(lines),
+                             "python", "screen_to_clipboard")
+            except PermissionError as e:
+                return Reply("СТРАЖ отказал: " + str(e),
+                             "python", "screen_to_clipboard")
+            except Exception as e:
+                return Reply("в буфер не получилось: " + str(e),
+                             "python", "screen_to_clipboard")
+        if lowq in ("что в буфере", "прочитай буфер", "буфер",
+                    "что в буфере обмена"):
+            from core import hands as _hands
+            try:
+                return Reply(_hands.clipboard_read(), "python", "clipboard")
+            except Exception as e:
+                return Reply("буфер не отдался: " + str(e),
+                             "python", "clipboard")
+        if lowq in ("проверь буфер", "проверка буфера"):
+            from core import hands as _hands
+            return Reply(_hands.clipboard_selftest(),
+                         "python", "clipboard_selftest")
+
+        # ХРОНИКА (день-10, Ф66–Ф70): организм помнит свой путь — рост
+        # за неделю из git, вся история пары, день рождения, честные
+        # мечты из живых фронтов, первый разговор. Мозг молчит: это
+        # цифры и файлы дома, а не воспоминания 30B
+        from core import chronicle as _chronicle
+        if lowq in ("чем ты выросла", "чем выросла", "что ты приобрела",
+                    "как ты выросла", "как ты росла",
+                    "чем ты выросла за неделю"):
+            return Reply(_chronicle.growth(), "python", "growth")
+        if lowq in ("сколько мы вместе", "наш путь", "сколько мы вместе дней",
+                    "сколько мы уже вместе"):
+            return Reply(_chronicle.journey(memory=self.memory),
+                         "python", "journey")
+        if lowq in ("когда твой день рождения", "когда у тебя день рождения",
+                    "твой день рождения", "день рождения",
+                    "сколько тебе дней"):
+            return Reply(_chronicle.birthday(), "python", "birthday")
+        if lowq in ("о чём ты мечтаешь", "о чем ты мечтаешь",
+                    "какие у тебя мечты", "твои мечты", "мечты"):
+            return Reply(_chronicle.dreams(), "python", "dreams")
+        if lowq in ("наш первый разговор", "первый разговор",
+                    "о чём мы говорили в первый раз",
+                    "наш самый первый разговор"):
+            return Reply(_chronicle.first_talk(), "python", "first_talk")
 
         # №29 «доклад архитектора» (роадмап 30, architect_oncall v2):
         # еженедельный аудит дома — тесты, коммиты, диск, дрейф канона;

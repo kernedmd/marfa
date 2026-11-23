@@ -298,7 +298,7 @@ def test_describe_text_server_error(monkeypatch):
 
     monkeypatch.setattr(eyes, "_post_chat", boom)
     text = eyes.describe_text()
-    assert "глаза ошиблись" in text
+    assert "глаза ошибились" in text
 
 
 def test_describe_text_no_module(monkeypatch):
