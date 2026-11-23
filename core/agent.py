@@ -90,6 +90,8 @@ from core import musing, sleep                    # внутренняя жиз�
 from core import rules                             # законы дома: автор и исполнитель (№40)
 from core import notes, shopping, worklog, expenses, habits  # круг 1: быт (Ф11-Ф15)
 from core import birthdays, when                     # круг 2: календарь (Ф16-Ф19)
+from core import password, numeral, units            # круг 3: слова (Ф22-Ф25)
+from core.chance import rand_between, coin_times     # круг 3: жребий шире (Ф20-Ф21)
 from core import uptime as _uptime   # H7 аудита: момент рождения процесса — импорт модуля
                                     # (панель поднимает агента на старте), а не первый запрос
 from core.brain import BrainClient, is_refusal
@@ -814,6 +816,31 @@ class Agent:
         m = re.match(r"^какой\s+день\s+недели\s+(.+)$", lowq)
         if m:
             return Reply(when.weekday(m.group(1).strip()), "python", "when")
+
+        # Ф20-Ф25 «Случай и слова» — круг 3 (23.11): жребий шире,
+        # пароль, пропись, транслит, конвертер величин; мозг молчит
+        m = re.match(r"^число\s+от\s+(-?\d+)\s+до\s+(-?\d+)$", lowq)
+        if m:
+            return Reply(chance.rand_between(int(m.group(1)), int(m.group(2))),
+                         "python", "chance")
+        if lowq in ("случайное число", "рандомное число"):
+            return Reply(chance.rand_between(1, 100), "python", "chance")
+        m = re.match(r"^(?:брось\s+)?монетк[уа]\s+(\d+)\s+раз$", lowq)
+        if m:
+            return Reply(chance.coin_times(int(m.group(1))),
+                         "python", "chance")
+        m = re.match(r"^пароль(?:\s+(\d{1,3}))?$", lowq)
+        if m:
+            return Reply(password.generate(
+                int(m.group(1)) if m.group(1) else None),
+                "python", "password")
+        if re.match(r"^пропис[ья]\s+-?\d", lowq):
+            return Reply(numeral.parse(t), "python", "numeral")
+        if re.match(r"^транслит\s*[:;]", low):
+            from core import translit as _tr
+            return Reply(_tr.parse(t), "python", "translit")
+        if low.startswith("переведи"):
+            return Reply(units.parse(t), "python", "units")
 
         # СОН: «спи» — Создатель укладывает до утра или «проснись»
         if lowq in ("спи", "спать", "ложись спать", "на боковую"):
