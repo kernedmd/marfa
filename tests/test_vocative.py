@@ -75,7 +75,10 @@ def test_vocative_non_command_brain_sees_everything(agent, srv):
     r = agent.handle("Марфа, расскажи про законы дома")
     assert r.source == "brain"
     sent = srv.calls[0]["messages"][-1]["content"]
-    assert sent == "Марфа, расскажи про законы дома"   # целиком, без обрезки
+    # день-11 (Ф77): словами Создателя заканчивается ХВОСТ ХОДА (состояние+
+    # RAG служебным блоком раньше) — текст целиком, без обрезки обращения
+    assert "конец служебного контекста" in sent
+    assert sent.endswith("Марфа, расскажи про законы дома")
 
 
 def test_word_boundary_no_stripping(agent, srv):
@@ -130,4 +133,4 @@ def test_leading_and_non_command_brain_sees_original(agent, srv):
     r = agent.handle("И что дальше со всем этим делать?")
     assert r.source == "brain"
     sent = srv.calls[0]["messages"][-1]["content"]
-    assert sent == "И что дальше со всем этим делать?"   # целиком, без обрезки
+    assert sent.endswith("И что дальше со всем этим делать?")   # целиком, без обрезки

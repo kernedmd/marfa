@@ -302,6 +302,29 @@ def _norm_echo(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def _action_is_empty(action: dict) -> bool:
+    """Ф80: действие без аргументов — «баланс: ОК» без текста.
+
+    Живой лог: мозг звал check_brackets/code_patch с пустыми или
+    пробельными аргументами — инструмент честно отвечал своей
+    шпаргалкой, а ход Создателя сгорал. True — все значения args
+    пусты/пробельны (или args нет вовсе): переспросим с уколом.
+    """
+    args = action.get("args") if isinstance(action, dict) else None
+    if not isinstance(args, dict) or not args:
+        return True
+    for v in args.values():
+        if isinstance(v, str):
+            if v.strip():
+                return False
+        elif isinstance(v, (int, float, bool)):
+            if v not in (0, 0.0, False):
+                return False
+        elif v:
+            return False
+    return True
+
+
 def _last_assistant_text(history) -> str:
     """Последний ответ Марфы в истории — с ним сверяем эхо.
 
@@ -334,6 +357,17 @@ _NUDGE_EMPTY = (
     "\n\n[система: твоя предыдущая попытка ответа вернулась ПУСТОЙ. "
     "Ответь по существу сообщения словами — одно-четыре предложения. "
     "Молчание — не ответ.]"
+)
+# Ф80 «ЗАКОН ИНСТРУМЕНТА» (день-11): живой лог Создателя — на
+# философский разговор о правилах мозг ответил «баланс: ОК» и
+# «почини что?» — звал инструменты С ПУСТЫМИ аргументами, ход
+# сгорал зря. Пусто-аргументное действие без слов — та же пустота,
+# что и пустой ответ: переспрос с уколом, а не результат-мусор.
+_NUDGE_TOOL = (
+    "\n\n[система: твоя предыдущая попытка позвала инструмент БЕЗ "
+    "аргументов и без слов — так действие не работает. Создатель "
+    "говорит с тобой: ответь ему ТЕКСТОМ (\"answer\"), инструмент — "
+    "только если он ЯВНО просит действие, и с настоящими аргументами.]"
 )
 _NUDGE_ECHO = (
     "\n\n[система: твой предыдущий ответ на прошлый вопрос был ДОСЛОВНО "
@@ -1648,42 +1682,87 @@ class Agent:
 
     # ---------- системный контекст мозгового трека ----------
 
-    def _system_extra(self, user_text: str) -> str:
-        """Системный контекст мозгового трека — ЧЕРЕЗ Ф51 (H8 аудита раунда 2).
+    def _static_core(self) -> str:
+        """Статичное ядро системного промпта: личность + СТРОЙНЫЙ
+        манифест (Ф76) + законы. Не меняется от хода к ходу — вместе с
+        доктриной образует стабильный префикс для KV-кэша (Ф77).
+        """
+        return IDENTITY + "\n\n" + identity.manifest_slim() + "\n\n" \
+            + SPEED_LAW + "\n\n" + TONE_LAW
+
+    def _rag_lines(self, user_text: str) -> list[str]:
+        """Воспоминания RAG по теме вопроса — с потолком на запись (Ф78).
+
+        «Запомни буфер» кладёт в память до 2000 символов (~660 ток):
+        без потолка три таких воспоминания съедали 2000 ток каждый
+        ход. Обрезка — по границе слов с честным многоточием.
+        """
+        if self.memory is None:
+            return []
+        try:
+            found = self.memory.recall(user_text, top_k=3)
+        except Exception:
+            return []
+        out: list[str] = []
+        cap_chars = config.RAG_MEMORY_CAP_TOKENS * config.CHARS_PER_TOKEN_EST
+        for r in found:
+            if not (isinstance(r, dict) and r.get("text")):
+                continue
+            text = str(r["text"]).strip()
+            if len(text) > cap_chars:
+                cut = text[:cap_chars].rsplit(" ", 1)[0].rstrip(" ,;:-")
+                text = cut + "…"
+            if text:
+                out.append(text)
+        return out
+
+    def _static_system(self) -> str:
+        """СТАТИЧНАЯ система мозгового трека — Ф77 «стабильный префикс».
 
         Раньше промпт собирался руками: идентичность + манифест + закон
         скорости + доктрина + состояние + RAG — без бюджета и обрезки;
-        PROMPT_BUDGET_TOKENS=3072 был фикцией (context.build_system не звал
-        никто, кроме тестов). Теперь порядок тот же (статичное ядро —
-        первым, KV-кэш цел), но бюджет — ЗАКОН: RAG режется с конца,
-        переполнение — ЧП с уроком архитектору, а не молчаливый вылет
-        за контекст 4096.
+        PROMPT_BUDGET_TOKENS был фикцией (H8). День-11 делит контекст
+        на две жизни: СТАТИКА здесь (ядро+стройный манифест+законы+
+        доктрина — сообщение-система не меняется от хода к ходу,
+        KV-кэш llama-server живёт) и ПОДВИЖНОЕ в _turn_context
+        (состояние с часами и RAG — раньше они рвали префикс КАЖДЫЙ
+        ход, и мозг пересчитывал ~7400 ток заново; живой лог Создателя:
+        «токены убивают Марфу»).
         """
-        core = IDENTITY + "\n\n" + identity.manifest() + "\n\n" + SPEED_LAW \
-            + "\n\n" + TONE_LAW
-        state = _house_state()
-        rag: list[str] = []
-        if self.memory is not None:
-            try:
-                found = self.memory.recall(user_text, top_k=3)
-            except Exception:
-                found = []
-            rag = [str(r.get("text", "")) for r in found
-                   if isinstance(r, dict) and r.get("text")]
         try:
             prompt, rep = context.build_system(
-                doctrine=self.doctrine, state_text=state, genome_rules=[],
-                rag_memories=rag, core=core)
-        except ValueError as e:
-            _lesson("контекст-чп", str(e))
-            # ЧП дома не должно молча ронять чат: ядро и доктрина нерушимы,
-            # жертвуем состоянием и воспоминаниями — и честно говорим архитектору
-            prompt, rep = context.build_system(
                 doctrine=self.doctrine, state_text="", genome_rules=[],
-                rag_memories=[], core=core)
+                rag_memories=[], core=self._static_core())
+        except ValueError:
+            raise   # ядро+доктрина не влезают — ЧП дома, честный отказ в _dispatch
         for d in rep.dropped:
             _lesson("контекст-обрезан", d)   # что не влезло — видно архитектору
         return prompt
+
+    def _turn_context(self, user_text: str) -> str:
+        """Подвижный контекст ХОДА (Ф77): состояние дома + RAG.
+
+        Едет служебным блоком в сообщении Создателя (brain.ask_json,
+        turn_context) — ПОСЛЕ статичного префикса и истории. Часы
+        состояния меняются каждый ход: в системе им не место, иначе
+        KV-кэш рвётся и мозг платит полным префиллом за каждое
+        «Привет». Броня: упавшее состояние — пустой блок, ход живёт.
+        """
+        parts: list[str] = []
+        try:
+            state = _house_state()
+            if state:
+                parts.append("[КОНТЕКСТ ДОМА НА ЭТОТ ХОД — служебный, "
+                             "читай, но отвечай Создателю, а не блоку]\n"
+                             + state)
+        except Exception as e:
+            _lesson("контекст-сбой", "состояние: %s: %s" % (type(e).__name__, e))
+        rag = self._rag_lines(user_text)
+        if rag:
+            parts.append("ПАМЯТЬ (что дом вспомнил по теме — читай, "
+                         "опирайся, не повторяй дословно):\n- "
+                         + "\n- ".join(rag))
+        return "\n\n".join(parts)
 
     # ---------- действия мозга через РУКИ (надзор СТРАЖА) ----------
 
@@ -1908,7 +1987,7 @@ class Agent:
         # чат обязан видеть, ЧТО происходит, пока он идёт (не молчать)
         progress.stage("собираю контекст: доктрина, воспоминания, состояние дома…")
         try:
-            system_extra = self._system_extra(user_text)
+            system_extra = self._static_system()
         except ValueError as e:
             # Закон контекста (H8 раунда 2): ядро+доктрина не влезают в
             # бюджет — это ЗАКОН дома, а не сбой сенсора. Доктрина нерушима:
@@ -1924,8 +2003,14 @@ class Agent:
             # на нём и едем; без состояния и воспоминаний, зато честно
             # и с уроком архитектору
             _lesson("контекст-сбой", "%s: %s" % (type(e).__name__, e))
-            system_extra = IDENTITY + "\n\n" + identity.manifest() \
-                + "\n\n" + SPEED_LAW + "\n\n" + TONE_LAW
+            system_extra = self._static_core()
+        # Ф77: состояние и RAG — подвижный хвост хода (в системе им не
+        # место: часы рвали бы KV-кэш префикса каждым ходом)
+        turn_context = ""
+        try:
+            turn_context = self._turn_context(user_text)
+        except Exception as e:
+            _lesson("контекст-сбой", "хвост хода: %s: %s" % (type(e).__name__, e))
         progress.stage("мозг думает — кратко и по делу, ответ напечатается живьём…")
         # МОЗГ v3 «АНТИ-ЭХО»: пустой ответ и дословный повтор прошлого
         # переспрашиваются ОДИН раз с уколом; эхо и после укола — честное
@@ -1940,7 +2025,8 @@ class Agent:
                     user_text + nudge, system_extra=system_extra,
                     history=history,
                     max_tokens=config.BRAIN_ANSWER_TOKENS,
-                    on_text=progress.preview)
+                    on_text=progress.preview,
+                    turn_context=turn_context)
             except Exception as e:
                 _lesson("мозг-недоступен", str(e))
                 # Урок переписки 22.11: голое «timed out» Создатель читает как
@@ -1974,6 +2060,15 @@ class Agent:
                 raw_ans = decision.get("answer")
                 pre = ("" if raw_ans is None else
                        (raw_ans if isinstance(raw_ans, str) else str(raw_ans))).strip()
+                # Ф80: пусто-аргументное действие БЕЗ слов — не действие,
+                # а промах («баланс: ОК» живого лога): один переспрос
+                # с уколом, повторный промах — честный результат
+                if (not pre and _attempt == 1
+                        and _action_is_empty(decision["action"])):
+                    _lesson("инструмент-без-аргументов",
+                            "мозг позвал: %r" % (decision["action"],))
+                    nudge = _NUDGE_TOOL
+                    continue
                 acted = self._act(decision["action"])
                 if pre:
                     acted.text = pre + "\n\n" + acted.text

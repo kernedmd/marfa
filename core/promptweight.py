@@ -66,29 +66,35 @@ def _last_brain_prompt_tokens() -> int | None:
 
 
 def _layers() -> list[tuple[str, int]]:
-    """Оценка слоёв системного промпта теми же кусками, что собирает
-    агент: ядро (личность+манифест+законы), доктрина, состояние дома.
-    Каждый слой в своей броне: упавший орган не роняет ответ, слой
-    считается пустым (и честно подписывается)."""
+    """Оценка слоёв контекста теми же кусками, что собирает агент
+    (день-11, Ф77): СТАТИЧНЫЙ ПРЕФИКС (личность+стройный манифест+
+    законы+доктрина — не меняется от хода к ходу, KV-кэш живёт) и
+    ПОДВИЖНЫЙ ХВОСТ ХОДА (состояние+RAG — читается заново каждым
+    ходом). Каждый слой в своей броне: упавший орган не роняет ответ,
+    слой считается пустым (и честно подписывается)."""
     out: list[tuple[str, int]] = []
     try:
         from core import agent as _agent
         from core import identity
-        core_text = _agent.IDENTITY + "\n\n" + identity.manifest() \
+        static = _agent.IDENTITY + "\n\n" + identity.manifest_slim() \
             + "\n\n" + _agent.SPEED_LAW + "\n\n" + _agent.TONE_LAW
-        out.append(("ядро: личность, манифест, законы", len(core_text)))
+        out.append(("статичный префикс: личность, стройный манифест, "
+                    "законы", len(static)))
     except Exception:
-        out.append(("ядро (не собралось — орган спит)", 0))
+        out.append(("статичный префикс (не собрался — орган спит)", 0))
     try:
         from core import agent as _agent
-        out.append(("доктрина Создателя", len(_agent.load_doctrine())))
+        out.append(("доктрина Создателя (тоже статична — в префиксе)",
+                    len(_agent.load_doctrine())))
     except Exception:
         out.append(("доктрина (не собралась)", 0))
     try:
         from core import agent as _agent
-        out.append(("состояние дома (часы, органы)", len(_agent._house_state())))
+        out.append(("хвост хода: состояние дома (часы, органы) + RAG — "
+                    "перечитывается каждым ходом",
+                    len(_agent._house_state())))
     except Exception:
-        out.append(("состояние дома (не собралось)", 0))
+        out.append(("хвост хода (не собрался)", 0))
     return out
 
 
@@ -109,14 +115,14 @@ def render() -> str:
         tok = _est_tokens_from_chars(chars)
         total_est += tok
         lines.append("  · %s — ~%d ток (оценка)" % (name, tok))
-    lines.append("  · воспоминания RAG и история диалога — плавающие: "
-                 "история до %d ток (жёсткий лимит Ф53), RAG зависит "
-                 "от вопроса" % config.HISTORY_BUDGET_TOKENS)
+    lines.append("  · история диалога — до %d ток, отдельными сообщениями "
+                 "поверх системы; прошлые дни — выжимкой (Ф79)"
+                 % config.HISTORY_BUDGET_TOKENS)
     budget = config.PROMPT_BUDGET_TOKENS
-    lines.append("итого системный промпт ~%d ток из бюджета %d "
-                 "(свободно ~%d; + история, + сам вопрос)"
-                 % (total_est, budget, max(0, budget - total_est)))
-    lines.append("большой промпт = долгий ПРЕФИКС ответа: без KV-кэша "
-                 "мозг пересчитывает его каждый ход. Лечение: Ф42 "
-                 "(префикс на сервере) и краткость состояния.")
+    lines.append("итого ~%d ток из бюджета %d (+ история до %d, + вопрос)"
+                 % (total_est, budget, config.HISTORY_BUDGET_TOKENS))
+    lines.append("статичный префикс — KV-кэш сервера: платится один раз "
+                "за сессию. Перечитывается каждым ходом только хвост: "
+                "состояние+RAG+свежие ходы истории — диета дня-11 (Ф77). "
+                "Большой хвост = долгий ПРЕФИКС ответа.")
     return "\n".join(lines)

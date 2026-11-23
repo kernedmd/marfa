@@ -197,6 +197,22 @@ class DialogStore:
     # ---------- выдача в мозг ----------
 
     @staticmethod
+    def _turn_day(t: dict) -> Optional[dt.date]:
+        """День хода по штампу «dd.mm HH:MM» (год — от сегодняшнего,
+        декабрьский след в январе переносится). Битый штамп — None:
+        такой ход честно считается «свежим» (консервативно — лучше
+        лишняя строка дословно, чем потерянный день)."""
+        try:
+            ts = dt.datetime.strptime(str(t.get("ts", "")), "%d.%m %H:%M")
+        except ValueError:
+            return None
+        now = dt.datetime.now()
+        ts = ts.replace(year=now.year)
+        if ts > now + dt.timedelta(days=1):
+            ts = ts.replace(year=now.year - 1)
+        return ts.date()
+
+    @staticmethod
     def render_messages(turns: list[dict],
                         budget: int = config.HISTORY_BUDGET_TOKENS) -> list[dict]:
         """История ходов -> сообщения для мозга, не длиннее бюджета токенов.
@@ -205,17 +221,38 @@ class DialogStore:
         бюджета — одной выжимкой в начале (без LLM, гейт §5 уважен).
         H9: ходы принимаются и в формате DialogStore (text), и в формате
         мозга (content) — контракт устойчив к выбору вызывающего.
+
+        Ф79 «СВЕЖЕЕ УТРО» (день-11, живой лог Создателя: «чат накопился
+        за несколько дней и токены убивают Марфу»): сессия, живущая
+        днями, тащила хвост вчерашних разговоров в дословном хвосте —
+        каждый день переговаривать заново то, что уже прожито. Теперь
+        граница — день ПОСЛЕДНЕГО хода: сегодня едет дословно (в
+        бюджете), прошлые дни сворачиваются в выжимку «Ранее, прошлые
+        дни». Память не теряется: полный архив остаётся в файле
+        сессии, экспорте (Ф55) и памяти дома — диета касается только
+        контекста хода.
         """
         clean = [t for t in turns if t.get("role") in ("user", "assistant")
                  and _turn_text(t).strip()]
         if not clean:
             return []
 
-        # 1) дословный хвост: с новейшего, пока влезает (треть — запас под выжимку)
+        # Ф79: свежесть = день последнего хода сессии (не календарное
+        # «сегодня» — рендер старой сессии честно показывает её вечер)
+        last_day = DialogStore._turn_day(clean[-1])
+        fresh_from = len(clean)
+        for i in range(len(clean) - 1, -1, -1):
+            day = DialogStore._turn_day(clean[i])
+            if day is not None and last_day is not None and day != last_day:
+                break
+            fresh_from = i
+
+        # 1) дословный хвост: со свежего, пока влезает (треть — запас под выжимку)
+        fresh = clean[fresh_from:]
         tail: list[dict] = []
         used = 0
         reserve = budget // 3
-        for t in reversed(clean):
+        for t in reversed(fresh):
             need = config.token_estimate(_turn_text(t)) + 2
             if tail and used + need > budget - reserve:
                 break
@@ -227,8 +264,12 @@ class DialogStore:
             tail.insert(0, {"role": t["role"], "content": _turn_text(t)})
             used += need
 
-        # 2) более старые ходы — одной строкой-выжимкой
-        older = clean[:len(clean) - len(tail)]
+        # 2) прошлые дни + то из сегодня, что не влезло, — выжимкой.
+        #    День-граница (Ф79) сворачивает ПРОШЛЫЕ дни всегда; переполнение
+        #    свежего дня сворачивается как раньше (Ф53) — штампа нет или
+        #    день один, выжимка честно зовётся «ранее в разговоре»
+        older = clean[:fresh_from] + fresh[:len(fresh) - len(tail)]
+        had_past_days = fresh_from > 0
         out: list[dict] = []
         if older:
             lines = []
@@ -238,7 +279,7 @@ class DialogStore:
                     break
                 lines.append(line)
             if lines:
-                out.append({"role": "user",
-                            "content": "(Ранее в разговоре, кратко:)\n"
-                                       + "\n".join(lines)})
+                header = ("(Ранее, прошлые дни — кратко:)\n" if had_past_days
+                          else "(Ранее в разговоре, кратко:)\n")
+                out.append({"role": "user", "content": header + "\n".join(lines)})
         return out + tail

@@ -154,7 +154,7 @@ def test_ui_action_tool_exists():
 
 def test_manifest_lists_exact_tool_names():
     """Мозг видит в промпте ТОЧНЫЕ имена инструментов и запрет выдумывать."""
-    extra = _agent()._system_extra("привет")
+    extra = _agent()._static_system()
     assert "МОИ ВОЗМОЖНОСТИ" in extra
     for name in ("read_file", "write_file", "run_python",
                  "browser_search", "check_brackets"):
@@ -163,19 +163,23 @@ def test_manifest_lists_exact_tool_names():
 
 
 def test_manifest_static_prefix_for_kv_cache():
-    """Порядок промпта: ЯДРО -> МАНИФЕСТ -> доктрина -> состояние -> RAG.
-    Статичный префикс не меняется от сообщения к сообщению (№51)."""
-    extra = _agent()._system_extra("привет")
+    """День-11 (Ф77): система — ТОЛЬКО статика: ЯДРО -> СТРОЙНЫЙ манифест
+    -> доктрина. Часы и RAG уехали в хвост хода — префикс не меняется
+    от сообщения к сообщению, KV-кэш сервера живёт."""
+    extra = _agent()._static_system()
     i_core = extra.index("ЯДРО — кто я")
     i_manifest = extra.index("МОИ ВОЗМОЖНОСТИ")
     i_doctrine = extra.index("ДОКТРИНА-ТЕСТ")
-    i_state = extra.index("Состояние дома")
-    assert i_core < i_manifest < i_doctrine < i_state
+    assert i_core < i_manifest < i_doctrine
+    assert "Состояние дома" not in extra     # подвижное — не в системе
+    tail = _agent()._turn_context("привет")
+    assert "Состояние дома" in tail          # оно — в хвосте хода
+    assert extra == _agent()._static_system()  # система статична между ходами
 
 
 def test_manifest_mentions_fast_commands():
     """Мозг знает быстрые команды дома — чтобы подсказывать, а не фантазировать."""
-    extra = _agent()._system_extra("привет")
+    extra = _agent()._static_system()
     for cmd in ("посмотри", "помни", "подведи день", "сколько ты не спала",
                 "посмотри в камеру", "руки <задача>"):
         assert cmd in extra, "в манифесте нет команды: " + cmd
@@ -184,7 +188,7 @@ def test_manifest_mentions_fast_commands():
 def test_manifest_warns_about_dry_hands():
     """Мозг знает: без резолюции Создателя руки не кликают — и не
     говорит Создателю «уже нажала»."""
-    extra = _agent()._system_extra("привет").lower()
+    extra = _agent()._static_system().lower()
     assert "сухом режиме" in extra
     assert "уже нажала" in extra
 

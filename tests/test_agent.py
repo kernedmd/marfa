@@ -123,14 +123,20 @@ def test_brain_down_honest(agent, monkeypatch):
 
 # ---------- контекст ----------
 def test_doctrine_and_rag_injected(agent, srv):
-    """В промпт попадают доктрина, состояние и RAG-воспоминания (3.1)."""
+    """День-11 (Ф77): доктрина — в СТАТИЧНОЙ системе, состояние и
+    RAG-воспоминания — в хвосте хода (сообщение Создателя)."""
     agent.memory.remember("дом Марфа живёт в C:\\Marfa")
     srv.reply_content = '{"answer": "принято"}'
     agent.handle("напомни, где живёт дом")
     sys_msg = next(m for m in srv.calls[-1]["messages"] if m["role"] == "system")
     assert "Тестовая доктрина" in sys_msg["content"]
-    assert "Состояние дома" in sys_msg["content"]
-    assert "C:\\Marfa" in sys_msg["content"]
+    # подвижное — НЕ в системе: префикс статичен, KV-кэш цел
+    assert "Состояние дома" not in sys_msg["content"]
+    assert "дом Марфа живёт" not in sys_msg["content"]
+    user_msg = next(m for m in srv.calls[-1]["messages"] if m["role"] == "user")
+    assert "Состояние дома" in user_msg["content"]      # хвост хода
+    assert "дом Марфа живёт в C:\\Marfa" in user_msg["content"]   # RAG — там же
+    assert "напомни, где живёт дом" in user_msg["content"]  # слова Создателя живы
 
 
 def test_doctrine_file_loaded(home):
@@ -149,7 +155,7 @@ def test_doctrine_missing_falls_back(home):
 def test_speed_law_in_brain_prompt(agent):
     """«ответ через две минуты — очень долго»: мозг ВИДИТ закон
     краткости в каждом системном промпте (статично — KV-кэш цел)."""
-    extra = agent._system_extra("привет")
+    extra = agent._static_system()
     assert "ЗАКОН СКОРОСТИ" in extra
     assert "одно-четыре предложения" in extra
 

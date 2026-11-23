@@ -600,14 +600,21 @@ def test_h9_ask_json_accepts_text_key():
 
 
 def test_h8_agent_prompt_under_law(agent_srv):
-    """Промпт агентского трека — через Ф51: бюджет 3072 соблюдается,
-    RAG режется с конца, а не уезжает за контекст 4096 молча."""
+    """Промпт агентского трека — через Ф51: бюджет соблюдается, RAG
+    (день-11: в хвосте хода, с потолком Ф78) не уезжает за контекст
+    молча."""
     agent, srv = agent_srv
     for i in range(60):                        # жирные воспоминания
         agent.memory.remember("воспоминание %d: %s" % (i, "деталь " * 60))
-    extra = agent._system_extra("о доме")
+    extra = agent._static_system()
     assert config.token_estimate(extra) <= config.PROMPT_BUDGET_TOKENS
     assert "ЗАКОН СКОРОСТИ" in extra           # ядро живо
+    tail = agent._turn_context("о доме")
+    # Ф78: хвост хода — состояние + НЕ БОЛЕЕ трёх воспоминаний в потолке,
+    # жирная запись режется по границе слов с многоточием
+    assert "ПАМЯТЬ" in tail
+    assert tail.count("\n- ") + tail.count("\n– ") <= 3
+    assert config.token_estimate(tail) <= 1000  # хвост не дороже истории
     srv.reply_content = '{"answer": "ок"}'
     agent.handle("расскажи о доме")
     sys_msg = next(m for m in srv.calls[-1]["messages"] if m["role"] == "system")
