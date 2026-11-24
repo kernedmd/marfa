@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-r"""МАРФА — server_sync.py: забор, распаковка и тесты на станции архитектора. v1.4
+r"""МАРФА — server_sync.py: забор, распаковка и тесты на станции архитектора. v1.5
 
 Станция = персистентная Linux-песочница архитектора (Z.ai) или любой сервер,
 где работает архитектор. Файлы станции переживают смену контекста — это
 долгосрочная память архитектора.
 
-Петля (docs/SYNC_PROTOCOL_v1.md, v1.8):
+Петля (docs/SYNC_PROTOCOL_v1.md, v1.9):
     Z440 --(80_sync_github.bat)--> GitHub --(прямой забор станции, без токена:
     репозиторий публичный, резолюция Создателя от 20.11.2026)--> рабочая копия
     marfa\ + тесты + журнал ARCHITECT_LOG.md --(bundle в чат)--> обратно
@@ -329,6 +329,15 @@ def append_log(events, tests):
 
 
 def export_bundle():
+    """Шаг 6: bundle станции для Создателя. v1.5 — страж выпуска.
+
+    Урок бандла-1930 (24.11): финальный bundle круга-17 был собран вручную
+    по ref HEAD — без ветки main. Кнопка 80 дома зовёт «git fetch <bundle>
+    main», живой bundle падал «couldn't find remote ref main» и назывался
+    битым — Создатель застрял. Страж: bundle без refs/heads/main не
+    выпускается со станции НИКОГДА — брак ловится на месте выпуска,
+    а не на берегу Создателя.
+    """
     stamp = now().replace("-", "").replace(":", "").replace(" ", "-")
     try:
         os.makedirs(DOWNLOAD, exist_ok=True)
@@ -336,7 +345,20 @@ def export_bundle():
         return None
     out = os.path.join(DOWNLOAD, "marfa-station-%s.bundle" % stamp)
     code, _ = git("bundle", "create", out, "main")
-    return out if code == 0 else None
+    if code != 0:
+        print("[6] ПРОВАЛ: git bundle create не собрался — скажи архитектору")
+        return None
+    code, heads = git("bundle", "list-heads", out)
+    if code != 0 or "refs/heads/main" not in heads:
+        try:
+            os.remove(out)
+        except OSError:
+            pass
+        print("[6] БРАК ОТЛОВЛЕН: bundle без refs/heads/main — кнопка 80 дома\n"
+              "    не смогла бы его принять (git fetch <bundle> main). Удалён.\n"
+              "    Собирай через export_bundle() — ручная сборка по HEAD запрещена.")
+        return None
+    return out
 
 
 def audit_download(clean=False):
@@ -429,6 +451,8 @@ def main():
         print("[6] Bundle станции:", out)
         print("    (отправь его Создателю — он положит в C:\\Marfa\\incoming\\")
         print("     и нажмёт scripts\\80_sync_github.bat)")
+    else:
+        print("[6] Bundle станции НЕ собран — см. причину выше")
 
     p = github_push(env)
     if p:
