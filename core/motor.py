@@ -50,7 +50,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from core import config, progress
+from core import config, loghygiene, progress
 from safety import guard
 
 # Задание на РАЗГЛЯДЫВАНИЕ — не для рук (урок живого прогона 22.11:
@@ -432,11 +432,10 @@ def _pixel_diff(before_b64: str, after_b64: str, box=None) -> Optional[float]:
 def _log_act(rec: dict) -> None:
     try:
         p = Path(config.HANDS_LOG_FILE)
-        p.parent.mkdir(parents=True, exist_ok=True)
         rec = dict(rec)
         rec.setdefault("ts", dt.datetime.now().isoformat(timespec="seconds"))
-        with p.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        # Ф96 (круг 17): копилка моторных ходов — через дверь ротации
+        loghygiene.append_line(p, json.dumps(rec, ensure_ascii=False) + "\n")
     except OSError:
         pass
 

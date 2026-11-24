@@ -21,7 +21,7 @@ import json
 import time
 from pathlib import Path
 
-from core import config
+from core import config, loghygiene
 
 
 def _file() -> Path:
@@ -79,32 +79,42 @@ def _counts_today() -> dict:
 def _brain_today() -> dict:
     """Мозг сегодня — из журнала трафика (истина): генерации, секунды,
     токены ответа. Считает ВСЕ генерации: повторы-ретраи тоже честно
-    едят время дома."""
+    едят время дома.
+
+    Ф98 (круг 17): читаем ограниченное множество recent_paths() —
+    текущий файл + архивы ротации: ротация среди дня не роняет
+    «сегодня» из бухгалтерии энергии.
+    """
     gen = secs = ctok = 0
     today = _today()
     try:
-        for line in Path(config.BRAIN_LOG_FILE).read_text(
-                encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or not line.startswith("{"):
-                continue
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(rec, dict):
-                continue
-            if not str(rec.get("ts", "")).startswith(today):
-                continue
-            gen += 1
-            try:
-                secs += float(rec.get("secs") or 0)
-            except (TypeError, ValueError):
-                pass
-            try:
-                ctok += int(rec.get("ctok") or 0)
-            except (TypeError, ValueError):
-                pass
+        for p in loghygiene.recent_paths(Path(config.BRAIN_LOG_FILE)):
+            for line in p.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or not line.startswith("{"):
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                if not str(rec.get("ts", "")).startswith(today):
+                    continue
+                gen += 1
+                try:
+                    secs += float(rec.get("secs") or 0)
+                except (TypeError, ValueError):
+                    pass
+                # день-13, урок живого чтения: журнал мозга ПИШЕТ
+                # «completion_tokens» (_log_brain_call, с рождения журнала
+                # 23.11), а бухгалтерия читала «ctok» — поле, которого в
+                # живом журнале нет; якорь годами проверял свою опечатку
+                # против опечатки фикстуры. Читаем живое имя поля
+                try:
+                    ctok += int(rec.get("completion_tokens") or 0)
+                except (TypeError, ValueError):
+                    pass
     except OSError:
         pass
     return {"gen": gen, "secs": secs, "ctok": ctok}

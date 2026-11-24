@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from core import config
+from core import config, loghygiene
 
 
 def classify(pct: float) -> str:
@@ -56,11 +56,11 @@ class RAMMonitor:
 
     # ---------- журнал ----------
     def _log_event(self, status: dict) -> None:
-        self.log_file.parent.mkdir(parents=True, exist_ok=True)
         rec = {"ts": status["ts"], "level": status["level"], "pct": status["pct"],
                "used_gb": status["used_gb"]}
-        with self.log_file.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        # Ф96 (круг 17): копилка монитора — через дверь ротации, как все
+        loghygiene.append_line(self.log_file,
+                                json.dumps(rec, ensure_ascii=False) + "\n")
 
     def observe(self) -> dict:
         """Замер + запись статуса + событие при смене уровня (WARN/CRIT)."""

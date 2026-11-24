@@ -102,6 +102,27 @@ def render(now: dt.datetime = None) -> str:
     except Exception:
         pass
 
+    # Ф90 «ТЕЛО В СВОДКЕ» (день-13, круг 16): быт дня — про Создателя,
+    # а чем жило ТЕЛО организма — пульс из журнала мозга. «как прошел
+    # день» теперь отвечает обоими: что делали и почём это стоило.
+    # Сенсор в броне: упавший пульс не роняет сводку (закон №10 р3)
+    try:
+        from core import daypulse
+        body = daypulse.collect(now)
+        if body["turns"]:
+            rows = ["%d %s мозга" % (body["turns"],
+                                     "ход" if body["turns"] == 1 else
+                                     ("хода" if 2 <= body["turns"] % 10 <= 4
+                                      and not 12 <= body["turns"] % 100 <= 14
+                                      else "ходов"))]
+            if body["median"] is not None:
+                rows.append("медиана %.1f с" % body["median"])
+            if body["empty"]:
+                rows.append("пустых ответов %d" % body["empty"])
+            sections.append(("тело", rows))
+    except Exception:
+        pass
+
     if not sections:
         return ("день только начался — фактов ещё нет; вечером я напишу "
                 "дневник сама («подведи день»), а пока — «чем занимался»")

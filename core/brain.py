@@ -25,7 +25,7 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
 
-from core import config
+from core import config, loghygiene
 
 
 class BrainError(Exception):
@@ -102,9 +102,10 @@ def _log_brain_call(kind: str, raw_full: str, stripped: str,
         if note:
             rec["raw"] = (stripped or "")[:600]
         p = Path(config.BRAIN_LOG_FILE)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with p.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        # Ф96 (круг 17): журнал — копилка, пишет через ЕДИНУЮ дверь
+        # ротации (loghygiene.append_line): живёт месяцами — диск не
+        # бесконечен; закон 8 МБ × 3 архива, страж-хеш-цепь exempt
+        loghygiene.append_line(p, json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:
         pass   # журнал — не орган дыхания; разговор живёт дальше
 

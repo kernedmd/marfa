@@ -127,7 +127,10 @@ def test_what_did_you_dream(agent):
     assert "снов ещё не записано" in r.text   # честно, без выдумки
 
 
-def test_think_now(agent, home, srv):
+def test_think_now(agent, home, srv, daytime):
+    # день-13: якорь против ночи — «подумай» честно ждёт утра в окне
+    # сна; тест зелёный в любой час станции (урок «тест, зелёный
+    # только в свой час, — не тест»)
     (home / "data" / "live_voice.json").write_text(
         json.dumps({"enabled": True}), encoding="utf-8")
     mem_file = home / "data" / "memory" / "memory.json"

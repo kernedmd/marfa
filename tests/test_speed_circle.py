@@ -246,8 +246,13 @@ def test_kv_prefix_probe_failure_is_silent(tmp_path, monkeypatch):
 # ---------- Ф43 вес промпта ----------
 
 def _brain_log_line(ptok=0, ctok=0, secs=1.0):
+    # день-13: фикстура пишет ЖИВЫЕ имена полей журнала
+    # (prompt_tokens/completion_tokens — как _log_brain_call), а не
+    # свои сокращения: якорь, читающий выдуманное поле, проверяет
+    # опечатку фикстуры, а не дом
     return json.dumps({"ts": "2026-11-24 12:00:00", "kind": "ask",
-                       "ptok": ptok, "ctok": ctok, "secs": secs,
+                       "prompt_tokens": ptok, "completion_tokens": ctok,
+                       "secs": secs,
                        "answer": "ok"}, ensure_ascii=False)
 
 
@@ -339,12 +344,12 @@ def test_energy_counts_from_both_sources(home):
     today = time.strftime("%Y-%m-%d")
     config.BRAIN_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     config.BRAIN_LOG_FILE.write_text("\n".join([
-        json.dumps({"ts": today + " 10:00:00", "ctok": 84, "secs": 40.2,
-                    "answer": "a"}, ensure_ascii=False),
-        json.dumps({"ts": today + " 11:00:00", "ctok": 100, "secs": 59.8,
-                    "answer": "b"}, ensure_ascii=False),
-        json.dumps({"ts": "2020-01-01 10:00:00", "ctok": 5, "secs": 1.0,
-                    "answer": "чужой день"}, ensure_ascii=False),
+        json.dumps({"ts": today + " 10:00:00", "completion_tokens": 84,
+                    "secs": 40.2, "answer": "a"}, ensure_ascii=False),
+        json.dumps({"ts": today + " 11:00:00", "completion_tokens": 100,
+                    "secs": 59.8, "answer": "b"}, ensure_ascii=False),
+        json.dumps({"ts": "2020-01-01 10:00:00", "completion_tokens": 5,
+                    "secs": 1.0, "answer": "чужой день"}, ensure_ascii=False),
     ]) + "\n", encoding="utf-8")
     energy.note("python", 0.05)
     energy.note("python", 0.04)

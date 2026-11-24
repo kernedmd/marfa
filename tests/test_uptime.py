@@ -40,7 +40,11 @@ def test_uptime_hours():
     assert "5 ч 32 мин" in uptime.uptime_text(now=now)
 
 
-def test_agent_command_how_long_awake(home):
+def test_agent_command_how_long_awake(home, monkeypatch):
+    # день-13: якорь против ночи — в окне сна организм честно спит
+    # и «не сплю» не говорит; тест зелёный в любой час станции
+    from core import sleep as sleep_mod
+    monkeypatch.setattr(sleep_mod, "_in_window", lambda now: False)
     from core.agent import Agent
     r = Agent(brain=None, memory=None, doctrine="").handle(
         "сколько ты не спала")

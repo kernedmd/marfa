@@ -244,12 +244,25 @@ def _src_canon_drift() -> str:
         return "git не ответил: %s" % e
 
 
+def _src_pulse() -> str:
+    """Ф92 «ТЕЛО В ДОКЛАДЕ» (день-13): живой пульс недели — ходы,
+    медиана, пустые ответы, тренд против прошлой недели. Источник
+    в своей броне (закон №10 р3): упавший пульс — честная строка,
+    доклад жив."""
+    try:
+        from core import daypulse
+        return daypulse.week_render()
+    except Exception as e:
+        return "пульс не ответил: %s: %s" % (type(e).__name__, e)
+
+
 _WEEKLY_SOURCES = (
     ("СЛУЖБЫ", "_src_services"),
     ("ТЕСТЫ", "_src_tests"),
     ("КОММИТЫ", "_src_commits"),
     ("ДИСК", "_src_disk"),
     ("КАНОН", "_src_canon_drift"),
+    ("ПУЛЬС НЕДЕЛИ", "_src_pulse"),
 )
 
 
