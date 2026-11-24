@@ -63,12 +63,75 @@ exit /b %ERRORLEVEL%
 
 :run
 cd /d C:\Marfa
-if not defined MARFA_SYNC_TURNS set "MARFA_SYNC_TURNS=1"
+title МАРФА — синхронизация дома с GitHub (одна кнопка, v3.7)
+rem ТЕЛО КНОПКИ 3.7
+rem ------------------------------------------------------------
+rem  v3.7 (24.11.2026, круг 21 «ТИХАЯ ПЕТЛЯ»): приём krug19 завис
+rem  НАВСЕГДА — git gc --auto (его зовут сами fetch и merge) спросил
+rem  «Should I try again?» про залоченный pack-файл (лог дома
+rem  24.11 10:16: ручной прогон сошёлся с автопрогоном планировщика
+rem  на одном .git) — вопрос интерактивный, кнопка отвечать не может.
+rem  Два закона круга 21: (1) ТИХИЙ GIT — авто-gc выключен, терминальные
+rem  вопросы запрещены: петля не может зависнуть на вопросе, на который
+rem  у неё нет ответа; (2) ОДНА ПЕТЛЯ — страж с lock-файлом: второй
+rem  прогон (ручной поверх /auto) не стартует, пока жив первый.
+rem  v3.6 (24.11.2026, круг 19 «СМЕНА ТЕЛА БЕЗ ПАДЕНИЯ»): первый
+rem  живой прогон самообновления упал на смене тела — старый шаг 3z
+rem  перезаписал РАБОТАЮЩУЮ временную копию и позвал рестарт; cmd.exe
+rem  читает батник по смещению байтов, тело под процессом сменилось,
+rem  и парсер упал в середину строки нового тела («was unexpected at
+rem  this time», лог дома 24.11 09:32; прогон №2 доехал до ГОТОВО
+rem  только со второго нажатия). Закон круга 19: работающий файл не
+rem  трогаем НИКОГДА — 3z сверяет тела побайтно, объявляет смену и
+rem  доезжает петлю на старом теле; новое вступает в силу со
+rem  следующего запуска (планировщик /auto — каждые 2 часа).
+rem  Запускник (строки до :run) заморожен байт-точно: родитель,
+rem  ждущий на cmd /c, читает exit /b на прежнем смещении при любом
+rem  новом теле. Живая версия — этой строкой и заголовком окна;
+rem  старый маркер версии остался в замороженной шапке один раз и
+rem  навсегда: новые строки того формата разбудили бы призрака
+rem  перезаписи в старых кнопках, живших поиском по нему.
+rem ------------------------------------------------------------
 if /i "%~1"=="/auto" set "MARFA_SYNC_AUTO=1"
+
+rem ТИХИЙ GIT (закон круга 21): петля не имеет права зависнуть на
+rem вопросе, на который у неё нет ответа. Терминальные вопросы git
+rem (кредиты) запрещены — пуш честно падает с сообщением, бандл
+rem собирается всё равно. А «Should I try again?» про залоченный
+rem pack — от gc --auto: причина удалена ниже (gc.auto=0 в :ensure_repo).
+set "GIT_TERMINAL_PROMPT=0"
+
+:: ---------- 0e. Страж одной петли: один дом — одна петля (закон круга 21) ----------
+rem Урок 24.11 10:16: два прогона на одном .git держат pack-файлы друг
+rem друга — gc не может удалить старый pack и спрашивает «Should I try
+rem again?» бесконечно. Закон: второй прогон не стартует, пока жив
+rem первый. Lock с PID: мёртвый (окно закрыли крестиком) — lock
+rem забирается, петля едет; powershell не сказал PID — страж спит,
+rem петля едет как раньше (честная деградация, рассказать архитектору).
+set "SYNC_LOCK=%TEMP%\marfa_sync.pid"
+set "MYPID="
+for /f %%p in ('powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter ('ProcessId={0}' -f $PID)).ParentProcessId"') do set "MYPID=%%p"
+if not defined MYPID (
+  echo [i] Страж петли спит ^(не вижу свой PID^) — работаю без него, расскажи архитектору
+  goto :no_lock
+)
+if not exist "%SYNC_LOCK%" goto :lock_take
+set /p LOCKPID=<"%SYNC_LOCK%"
+tasklist /FI "PID eq %LOCKPID%" 2>nul | findstr /i "cmd.exe" >nul 2>&1
+if errorlevel 1 goto :lock_take
+echo [!] Прогон уже идёт ^(PID %LOCKPID%^) — второй не стартует:
+echo     один дом — одна петля одновременно ^(закон круга 21^).
+echo     Дождись ГОТОВО в первом окне или закрой его и нажми кнопку снова.
+if not defined MARFA_SYNC_AUTO pause
+exit /b 0
+:lock_take
+>"%SYNC_LOCK%" echo %MYPID%
+set "LOCKED=1"
+:no_lock
 
 echo ============================================================
 echo  МАРФА — синхронизация Z440 ^<-^> GitHub ^<-^> Архитектор
-echo  Петля: docs\SYNC_PROTOCOL_v1.md (v1.9, разделы 2 и 8)
+echo  Петля: docs\SYNC_PROTOCOL_v1.md (v1.11, разделы 2 и 8)
 echo ============================================================
 
 :: ---------- 0b-0. Толщина истории: тяжёлым сборкам в git не место ----------
@@ -144,23 +207,22 @@ if exist incoming\*.bundle (
   echo [3] Входящих bundle нет — синхронизирую локальное состояние
 )
 
-:: ---------- 3z. Самообновление кнопки: один прогон до конца ----------
-rem Если слияние принесло НОВУЮ версию кнопки — перезапускаемся ею
-rem сразу, в этом же прогоне (требование Создателя: без второго нажатия).
-rem Предохранитель MARFA_SYNC_TURNS=2: максимум один перезапуск за прогон.
+:: ---------- 3z. Смена тела: объявление, а не операция (закон круга 19) ----------
+rem Работающий файл не трогаем НИКОГДА: cmd.exe читает батник по
+rem смещению байтов, и перезапись под ногами роняет парсер в середину
+rem строки нового тела («was unexpected at this time», лог дома
+rem 24.11 09:32 — первый живой прогон самообновления). Слияние уже
+rem положило новое тело в scripts\; тела сверяются побайтно (fc /b),
+rem смена объявляется вслух, петля доезжает до ГОТОВО на старом теле —
+rem второе нажатие не нужно: планировщик /auto поднимет новое тело
+rem следующим запуском (каждые 2 часа).
 if not "%IMPORTED%"=="1" goto :no_selfupdate
-if "%MARFA_SYNC_TURNS%"=="2" goto :no_selfupdate
-set "RUN_VER=" & set "TREE_VER="
-for /f "delims=" %%a in ('findstr /C:"rem BTN_VER" "%TEMP%\marfa_sync_run.bat" 2^>nul') do set "RUN_VER=%%a"
-for /f "delims=" %%a in ('findstr /C:"rem BTN_VER" "scripts\80_sync_github.bat" 2^>nul') do set "TREE_VER=%%a"
-if not defined RUN_VER goto :no_selfupdate
-if not defined TREE_VER goto :no_selfupdate
-if "%RUN_VER%"=="%TREE_VER%" goto :no_selfupdate
-echo [3z] Слияние принесло новую версию кнопки — перезапускаюсь ею
-set /a MARFA_SYNC_TURNS+=1
-copy /y "scripts\80_sync_github.bat" "%TEMP%\marfa_sync_run.bat" >nul
-cmd /c ""%TEMP%\marfa_sync_run.bat" %*"
-exit /b %ERRORLEVEL%
+fc /b "%~f0" "scripts\80_sync_github.bat" >nul 2>&1
+if errorlevel 2 goto :no_selfupdate
+if not errorlevel 1 goto :no_selfupdate
+echo [3z] Смена тела кнопки: слияние принесло новое — прогон доезжаю
+echo      до ГОТОВО на старом теле, петля не рвётся; новое тело вступит
+echo      в силу со следующего запуска ^(авто каждые 2 часа^).
 :no_selfupdate
 
 :: ---------- 3b. Чистка дома: наследие v9.3 уезжает в _trash ----------
@@ -231,6 +293,7 @@ echo  Положи outgoing\marfa-%STAMP%.bundle в чат архитектор�
 echo  он заберёт его на станцию, прогонит тесты и вернёт правки.
 echo  ^(_тяжёлые старые bundle из outgoing уже убраны автоматом_^)
 echo ============================================================
+if defined LOCKED del /q "%SYNC_LOCK%" >nul 2>&1
 if not defined MARFA_SYNC_AUTO pause
 goto :eof
 
@@ -320,6 +383,12 @@ if not exist .git (
 )
 git remote get-url origin >nul 2>&1
 if errorlevel 1 git remote add origin https://github.com/kernedmd/marfa.git
+rem ТИХИЙ GIT (закон круга 21, урок 24.11 10:16): git gc --auto, который
+rem зовут сами fetch и merge, спросил «Should I try again?» про
+rem залоченный pack и повесил петлю навсегда. Причина удалена:
+rem авто-gc выключен; история дома — 3,8 МБ кода, чистка — дело
+rem архитектора на станции, не петли.
+git config gc.auto 0
 exit /b 0
 
 :ensure_gitignore
@@ -333,5 +402,6 @@ exit /b 0
 echo ============================================================
 echo  ОСТАНОВКА ПО ОШИБКЕ. Протокол: docs\SYNC_PROTOCOL_v1.md
 echo ============================================================
+if defined LOCKED del /q "%SYNC_LOCK%" >nul 2>&1
 if not defined MARFA_SYNC_AUTO pause
 exit /b 1

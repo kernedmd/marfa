@@ -516,4 +516,15 @@ def chat_page():
 
 
 if __name__ == "__main__":
+    # Круг 20, Ф113 «САМОРОЖДЕНИЕ ЖУРНАЛА»: журнал уроков рождается
+    # вместе с домом — папка journal\ и скелет lessons.json создаются
+    # на старте (урок дня-13: механизм эволюции падал с WinError 3 на
+    # отсутствующей папке). Существующий файл не трогаем НИКОГДА;
+    # броня: панель живёт и без журнала — орган самопочинится при
+    # первом чтении.
+    try:
+        from evolution import lessons as _lessons
+        _lessons.ensure_file()
+    except Exception:
+        pass
     app.run(host="127.0.0.1", port=PORT_WEB, debug=False)
