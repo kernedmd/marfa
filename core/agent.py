@@ -88,6 +88,7 @@ from typing import Optional
 from core import config, context, creator_gate, daypulse, diary, eyes, feelings, hands, identity, loghygiene, progress
 from core import musing, sleep                    # внутренняя жизнь организма (23.11)
 from core import rules                             # законы дома: автор и исполнитель (№40)
+from evolution import lessons                      # журнал уроков: ядерные правила — в каждом ходе (круг 20)
 from core import notes, shopping, worklog, expenses, habits  # круг 1: быт (Ф11-Ф15)
 from core import birthdays, when                     # круг 2: календарь (Ф16-Ф19)
 from core import password, numeral, units            # круг 3: слова (Ф22-Ф25)
@@ -1825,6 +1826,21 @@ class Agent:
         return IDENTITY + "\n\n" + identity.manifest_slim() + "\n\n" \
             + SPEED_LAW + "\n\n" + TONE_LAW
 
+    def _lessons_lines(self) -> list[str]:
+        """Ядерные правила журнала уроков — строками промпта (Ф112).
+
+        Цикл «ошибка -> урок -> правило -> проверка» доезжает до мозга
+        в КАЖДОМ ходе: до круга 20 журнал был складом — файл лежал, а
+        правило читалось после краша, не до действия. Сенсор в броне
+        (закон №10 р3): упавший журнал не роняет ход — префикс живёт
+        без правил, урок летит архитектору.
+        """
+        try:
+            return lessons.prompt_lines()
+        except Exception as e:
+            _lesson("сенсор-упал", "уроки: %s: %s" % (type(e).__name__, e))
+            return []
+
     def _rag_lines(self, user_text: str) -> list[str]:
         """Воспоминания RAG по теме вопроса — с потолком на запись (Ф78).
 
@@ -1867,7 +1883,8 @@ class Agent:
         try:
             prompt, rep = context.build_system(
                 doctrine=self.doctrine, state_text="", genome_rules=[],
-                rag_memories=[], core=self._static_core())
+                rag_memories=[], core=self._static_core(),
+                lessons_rules=self._lessons_lines())
         except ValueError:
             raise   # ядро+доктрина не влезают — ЧП дома, честный отказ в _dispatch
         for d in rep.dropped:

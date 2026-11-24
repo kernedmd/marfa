@@ -11,6 +11,8 @@
   L0 доктрина        — нерушима, не режется никогда (Раздел 7);
   L1 состояние дома  — время, RAM, квант (короткое, не режется);
   L2 правила генома  — режем целиком с конца, никогда не разрезаем правило;
+  L2.5 уроки-законы  — ядерные правила журнала уроков (круг 20, Ф112):
+                        свой потолок, те же законы резки, что у L2;
   L3 RAG-воспоминания — режем целиком с конца по слабейшей релевантности;
   L4 история диалога — приходит из core/history.py (Ф53), не более 1000 токенов.
 
@@ -76,7 +78,9 @@ def build_system(doctrine: str, state_text: str, genome_rules: list[str],
                  rag_memories: Optional[list[str]] = None,
                  history_text: str = "",
                  budget: int = config.PROMPT_BUDGET_TOKENS,
-                 core: str = "") -> tuple[str, ContextReport]:
+                 core: str = "",
+                 lessons_rules: Optional[list[str]] = None
+                 ) -> tuple[str, ContextReport]:
     """Собрать системный промпт по иерархии с гарантией бюджета (0.3).
 
     Возвращает (промпт, отчёт). История (Ф53) вписывается первой из остатка —
@@ -127,6 +131,21 @@ def build_system(doctrine: str, state_text: str, genome_rules: list[str],
     used += config.token_estimate(block)
     parts.append(block)
     remaining = budget - used
+
+    # L2.5: УРОКИ-ЗАКОНЫ (круг 20, Ф112) — ядерные правила журнала
+    # уроков: «ошибка -> урок -> правило -> проверка» доезжает до
+    # мозга в каждом ходе. Свой потолок (диета: правило — не трактат)
+    # поверх остатка; законы резки — как у генома: ЦЕЛЫЕ правила, с
+    # конца, никогда не разрезаем (полузакон опаснее отсутствия).
+    # Пусто — блока нет вовсе (Ф77: заголовок без содержания — мусор).
+    if lessons_rules:
+        cap = min(remaining, config.LESSONS_PROMPT_CAP_TOKENS)
+        block = _fit_block("УРОКИ-ЗАКОНЫ — из ошибок дома, читаю до действия",
+                           "", cap, report, "L2_lessons",
+                           splittable_lines=["- " + r for r in lessons_rules])
+        used += config.token_estimate(block)
+        parts.append(block)
+        remaining = budget - used
 
     # L3: RAG — целиком воспоминание, режем с конца (слабейшие внизу списка)
     block = _fit_block("ПАМЯТЬ (RAG)", "", remaining, report, "L3_rag",
