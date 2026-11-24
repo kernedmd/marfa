@@ -63,9 +63,18 @@ exit /b %ERRORLEVEL%
 
 :run
 cd /d C:\Marfa
-title МАРФА — синхронизация дома с GitHub (одна кнопка, v3.6)
-rem ТЕЛО КНОПКИ 3.6
+title МАРФА — синхронизация дома с GitHub (одна кнопка, v3.7)
+rem ТЕЛО КНОПКИ 3.7
 rem ------------------------------------------------------------
+rem  v3.7 (24.11.2026, круг 21 «ТИХАЯ ПЕТЛЯ»): приём krug19 завис
+rem  НАВСЕГДА — git gc --auto (его зовут сами fetch и merge) спросил
+rem  «Should I try again?» про залоченный pack-файл (лог дома
+rem  24.11 10:16: ручной прогон сошёлся с автопрогоном планировщика
+rem  на одном .git) — вопрос интерактивный, кнопка отвечать не может.
+rem  Два закона круга 21: (1) ТИХИЙ GIT — авто-gc выключен, терминальные
+rem  вопросы запрещены: петля не может зависнуть на вопросе, на который
+rem  у неё нет ответа; (2) ОДНА ПЕТЛЯ — страж с lock-файлом: второй
+rem  прогон (ручной поверх /auto) не стартует, пока жив первый.
 rem  v3.6 (24.11.2026, круг 19 «СМЕНА ТЕЛА БЕЗ ПАДЕНИЯ»): первый
 rem  живой прогон самообновления упал на смене тела — старый шаг 3z
 rem  перезаписал РАБОТАЮЩУЮ временную копию и позвал рестарт; cmd.exe
@@ -85,9 +94,44 @@ rem  перезаписи в старых кнопках, живших поис�
 rem ------------------------------------------------------------
 if /i "%~1"=="/auto" set "MARFA_SYNC_AUTO=1"
 
+rem ТИХИЙ GIT (закон круга 21): петля не имеет права зависнуть на
+rem вопросе, на который у неё нет ответа. Терминальные вопросы git
+rem (кредиты) запрещены — пуш честно падает с сообщением, бандл
+rem собирается всё равно. А «Should I try again?» про залоченный
+rem pack — от gc --auto: причина удалена ниже (gc.auto=0 в :ensure_repo).
+set "GIT_TERMINAL_PROMPT=0"
+
+:: ---------- 0e. Страж одной петли: один дом — одна петля (закон круга 21) ----------
+rem Урок 24.11 10:16: два прогона на одном .git держат pack-файлы друг
+rem друга — gc не может удалить старый pack и спрашивает «Should I try
+rem again?» бесконечно. Закон: второй прогон не стартует, пока жив
+rem первый. Lock с PID: мёртвый (окно закрыли крестиком) — lock
+rem забирается, петля едет; powershell не сказал PID — страж спит,
+rem петля едет как раньше (честная деградация, рассказать архитектору).
+set "SYNC_LOCK=%TEMP%\marfa_sync.pid"
+set "MYPID="
+for /f %%p in ('powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter ('ProcessId={0}' -f $PID)).ParentProcessId"') do set "MYPID=%%p"
+if not defined MYPID (
+  echo [i] Страж петли спит ^(не вижу свой PID^) — работаю без него, расскажи архитектору
+  goto :no_lock
+)
+if not exist "%SYNC_LOCK%" goto :lock_take
+set /p LOCKPID=<"%SYNC_LOCK%"
+tasklist /FI "PID eq %LOCKPID%" 2>nul | findstr /i "cmd.exe" >nul 2>&1
+if errorlevel 1 goto :lock_take
+echo [!] Прогон уже идёт ^(PID %LOCKPID%^) — второй не стартует:
+echo     один дом — одна петля одновременно ^(закон круга 21^).
+echo     Дождись ГОТОВО в первом окне или закрой его и нажми кнопку снова.
+if not defined MARFA_SYNC_AUTO pause
+exit /b 0
+:lock_take
+>"%SYNC_LOCK%" echo %MYPID%
+set "LOCKED=1"
+:no_lock
+
 echo ============================================================
 echo  МАРФА — синхронизация Z440 ^<-^> GitHub ^<-^> Архитектор
-echo  Петля: docs\SYNC_PROTOCOL_v1.md (v1.10, разделы 2 и 8)
+echo  Петля: docs\SYNC_PROTOCOL_v1.md (v1.11, разделы 2 и 8)
 echo ============================================================
 
 :: ---------- 0b-0. Толщина истории: тяжёлым сборкам в git не место ----------
@@ -249,6 +293,7 @@ echo  Положи outgoing\marfa-%STAMP%.bundle в чат архитектор�
 echo  он заберёт его на станцию, прогонит тесты и вернёт правки.
 echo  ^(_тяжёлые старые bundle из outgoing уже убраны автоматом_^)
 echo ============================================================
+if defined LOCKED del /q "%SYNC_LOCK%" >nul 2>&1
 if not defined MARFA_SYNC_AUTO pause
 goto :eof
 
@@ -338,6 +383,12 @@ if not exist .git (
 )
 git remote get-url origin >nul 2>&1
 if errorlevel 1 git remote add origin https://github.com/kernedmd/marfa.git
+rem ТИХИЙ GIT (закон круга 21, урок 24.11 10:16): git gc --auto, который
+rem зовут сами fetch и merge, спросил «Should I try again?» про
+rem залоченный pack и повесил петлю навсегда. Причина удалена:
+rem авто-gc выключен; история дома — 3,8 МБ кода, чистка — дело
+rem архитектора на станции, не петли.
+git config gc.auto 0
 exit /b 0
 
 :ensure_gitignore
@@ -351,5 +402,6 @@ exit /b 0
 echo ============================================================
 echo  ОСТАНОВКА ПО ОШИБКЕ. Протокол: docs\SYNC_PROTOCOL_v1.md
 echo ============================================================
+if defined LOCKED del /q "%SYNC_LOCK%" >nul 2>&1
 if not defined MARFA_SYNC_AUTO pause
 exit /b 1
