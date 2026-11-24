@@ -101,8 +101,13 @@ def _brain_today() -> dict:
                 secs += float(rec.get("secs") or 0)
             except (TypeError, ValueError):
                 pass
+            # день-13, урок живого чтения: журнал мозга ПИШЕТ
+            # «completion_tokens» (_log_brain_call, с рождения журнала
+            # 23.11), а бухгалтерия читала «ctok» — поле, которого в
+            # живом журнале нет; якорь годами проверял свою опечатку
+            # против опечатки фикстуры. Читаем живое имя поля
             try:
-                ctok += int(rec.get("ctok") or 0)
+                ctok += int(rec.get("completion_tokens") or 0)
             except (TypeError, ValueError):
                 pass
     except OSError:

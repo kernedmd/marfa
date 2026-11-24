@@ -35,7 +35,14 @@ def home(tmp_path, monkeypatch):
 
 # ---------- тик службы ----------
 
-def test_one_tick_runs_schedule_and_writes_heartbeat(home):
+def test_one_tick_runs_schedule_and_writes_heartbeat(home, monkeypatch):
+    # день-13: якорь против ночи — тик передаёт расписание своё «сейчас»
+    # (12:00), но ночные работы (библиотекарь) спрашивают живой сон
+    # организма; в окне сна полка честно ждёт утра и файл не пишется.
+    # Тест зелёный в любой час станции (урок «тест, зелёный только в
+    # свой час, — не тест»)
+    from core import sleep as sleep_mod
+    monkeypatch.setattr(sleep_mod, "_in_window", lambda now: False)
     (home / "docs" / "chapter.md").write_text(
         "Глава про стремление. Марфа хочет знать больше.", encoding="utf-8")
     status = drive.one_tick(now=dt.datetime(2026, 11, 21, 12, 0))

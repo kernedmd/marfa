@@ -85,7 +85,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from core import config, context, creator_gate, diary, eyes, feelings, hands, identity, progress
+from core import config, context, creator_gate, daypulse, diary, eyes, feelings, hands, identity, progress
 from core import musing, sleep                    # внутренняя жизнь организма (23.11)
 from core import rules                             # законы дома: автор и исполнитель (№40)
 from core import notes, shopping, worklog, expenses, habits  # круг 1: быт (Ф11-Ф15)
@@ -566,6 +566,14 @@ def _house_state() -> str:
     except Exception as e:
         _lesson("сенсор-упал", "голос: %s: %s" % (type(e).__name__, e))
         voice_note = "; голос: диагноз недоступен — расскажи архитектору"
+    # Ф89 «ПУЛЬС В ЗЕРКАЛЕ» (день-13): тело — в состоянии дома: мозг
+    # знает цену дня (сколько ходов уже прожито, пустые ли были),
+    # «статус» отвечает телом, а не только душой. Сенсор в своей броне
+    pulse_note = ""
+    try:
+        pulse_note = "; " + daypulse.body_line()
+    except Exception as e:
+        _lesson("сенсор-упал", "пульс: %s: %s" % (type(e).__name__, e))
     return (
         "Состояние дома на " + clock +
         " (время и дата — отсюда, своих часов у тебя нет, не выдумывай): "
@@ -578,7 +586,7 @@ def _house_state() -> str:
         "; " + ears_note + bridge_line + voice_note +
         "; " + inner_note +
         "; " + sleep_note + thought_note + rules_note +
-        "; я не сплю с " + started + watch_note
+        "; я не сплю с " + started + watch_note + pulse_note
     )
 
 
@@ -809,7 +817,18 @@ class Agent:
         # дома: доминанта с причиной, без ролевой драмы 30B
         if lowq in ("как ты", "как ты себя чувствуешь", "что чувствуешь",
                     "что ты чувствуешь", "как настроение"):
-            return Reply(feelings.report(), "python", "feelings")
+            # Ф86 «ДУША И ТЕЛО» (день-13): чувства — про настроение,
+            # пульс — про железо и секунды; организм отвечает ЦЕЛИКОМ.
+            # Граница честная: душа не притворяется телом (нет «мне
+            # тяжело» от цифр), тело не рисует эмоций. Тело в своей
+            # броне: упавший пульс не роняет ответ чувств
+            try:
+                body = daypulse.body_line()
+            except Exception as e:
+                _lesson("сенсор-упал", "пульс: %s: %s" % (type(e).__name__, e))
+                body = ""
+            text = feelings.report() + (("\n\n" + body) if body else "")
+            return Reply(text, "python", "feelings")
 
         # Ф6 «похвала — факт» (23.11): «спасибо» от Создателя — событие
         # дня, оно ложится в книжку радостей и кормит барометр; ответ
@@ -1056,6 +1075,14 @@ class Agent:
         if lowq in ("здоровье мозга", "как здоровье мозга",
                     "как себя чувствует мозг"):
             return Reply(brainhealth.render(), "python", "brainhealth")
+        # Ф85 «ПУЛЬС ДНЯ» (день-13, круг 15): тело организма в живых
+        # цифрах — ходы, секунды, токены, пустые ответы, дрейф (Ф87).
+        # Мозг молчит: пульс читает его собственный журнал — кто, как
+        # не он, знает, сколько секунд стоил день. Честность: пустой
+        # журнал — «молчал», а не нули; дрейф без ходов — «мало ходов»
+        if lowq in ("пульс", "пульс дня", "пульс дома",
+                    "какой у тебя пульс"):
+            return Reply(daypulse.render(), "python", "pulse")
         if lowq in ("энергия дома", "энергия", "сколько сил"):
             return Reply(energy.render(), "python", "energy")
         m = answercache.parse(t)
@@ -1828,6 +1855,17 @@ class Agent:
             parts.append("ПАМЯТЬ (что дом вспомнил по теме — читай, "
                          "опирайся, не повторяй дословно):\n- "
                          + "\n- ".join(rag))
+        # Ф88 «ШРАМЫ В ХВОСТ» (день-13): сутки с серией пустых ответов —
+        # каждый следующий ход несёт закон ключа ДО новой беды. Ф82
+        # лечит ПОСЛЕ улики (укол на ретрае), это — профилактика:
+        # чистые сутки блок молчит (хвост дорог — урок диеты). Сенсор
+        # в броне: упавший пульс не роняет ход
+        try:
+            scars = daypulse.scars_block()
+            if scars:
+                parts.append(scars)
+        except Exception as e:
+            _lesson("контекст-сбой", "шрамы: %s: %s" % (type(e).__name__, e))
         return "\n\n".join(parts)
 
     # ---------- действия мозга через РУКИ (надзор СТРАЖА) ----------

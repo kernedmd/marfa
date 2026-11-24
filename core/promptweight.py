@@ -57,7 +57,10 @@ def _last_brain_prompt_tokens() -> int | None:
         if not isinstance(rec, dict):
             continue
         try:
-            v = int(rec.get("ptok") or 0)
+            # день-13, урок живого чтения: журнал пишет «prompt_tokens»,
+            # а читали «ptok» — на живой станции истина сервера была
+            # всегда None, якорь проверял опечатку фикстуры
+            v = int(rec.get("prompt_tokens") or 0)
         except (TypeError, ValueError):
             v = 0
         if v > 0:
