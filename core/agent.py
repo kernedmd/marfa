@@ -1565,6 +1565,32 @@ class Agent:
         if lowq in ("проверь голос", "проверка голоса", "как голос"):
             from core import voice as _voice
             return Reply(_voice.selftest(), "python", "voice")
+        # ГОЛОС v2 (круг 23, Ф121–Ф123): слуга-горло Silero v5_6 на 8084 —
+        # интонация вопроса и восклицания живая; SAPI — запасной рот.
+        # «голос <имя>» / «смени голос на <имя>» — голос горла;
+        # «какой голос» — цепь; «какие голоса» — весь дом. Порядок
+        # безопасен: «проверь голос» и «как голос» разобраны ВЫШЕ
+        # точным списком, «говори …» — другим префиксом.
+        m = re.match(r"^(?:смени|поменяй)\s+голос(?:\s+на)?[\s:,;—-]+"
+                     r"(.+?)\s*[?.!…]*$", t, re.IGNORECASE)
+        if m:
+            from core import voice as _voice
+            return Reply(_voice.set_speaker(m.group(1).strip()),
+                         "python", "voice")
+        m = re.match(r"^голос[\s:,;—-]+(.+?)\s*[?.!…]*$", t, re.IGNORECASE)
+        if m:
+            from core import voice as _voice
+            return Reply(_voice.set_speaker(m.group(1).strip()),
+                         "python", "voice")
+        if lowq in ("какой голос", "какой у тебя голос",
+                    "каким голосом говоришь",
+                    "каким голосом ты говоришь"):
+            from core import voice as _voice
+            return Reply(_voice.voice_report(), "python", "voice")
+        if lowq in ("голоса", "какие голоса", "какие голоса есть",
+                    "список голосов"):
+            from core import voice as _voice
+            return Reply(_voice.voices_list(), "python", "voice")
 
         # ЧТЕНИЕ И БУФЕР (день-10, Ф61–Ф65): глаза читают надписи
         # списком, буфер отдаёт и принимает, голос читает органы.
