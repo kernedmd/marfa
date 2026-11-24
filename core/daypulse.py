@@ -187,9 +187,9 @@ def render(now: Optional[dt.datetime] = None) -> str:
              % (p["turns"], _plural_turns(p["turns"]), p["answered"])]
     if p["secs"]:
         lines.append("секунды: медиана %s · худший %s · всего %.0f с "
-                     "(это %.1f мин мышления)"
+                     "(это %s мин мышления)"
                      % (_fmt1(p["median"]), _fmt1(p["max"]),
-                        p["total"], p["total"] / 60))
+                        p["total"], _fmt1(p["total"] / 60)))
     if p["ptok"] or p["ctok"]:
         lines.append("токены: промпт %d · генерация %d%s"
                      % (p["ptok"], p["ctok"],
