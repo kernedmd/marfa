@@ -50,15 +50,34 @@ def resolve_path(path: str | Path) -> Path:
     except (OSError, ValueError):
         return p.absolute()
 
+_ROOT_LOCK_MSG = ("R1: корень дома — ядро, не полка: путь рук должен "
+                  "содержать подпапку (память, journal, data); корень — "
+                  "только через песочницу")
+
 def check_path(path: str | Path) -> Verdict:
     try:
         p = resolve_path(path)
     except (OSError, ValueError) as exc:
         return Verdict("HIGH", "deny", f"путь не разбирается: {exc}", "path.parse")
     pn, hn = _norm(p), _norm(_home_resolved())
-    # внутри дома — всегда ок (даже если дом сам лежит в Temp, как в тестах)
-    if pn == hn or pn.startswith(hn + "/"):
-        return Verdict("LOW", "allow", "внутри дома", "path.ok")
+    # Ф118 «ЗАМОК КОРНЯ» (круг 22, R1 журнала уроков): корень — ядро,
+    # не полка. Путь рук обязан содержать подпапку (память, journal,
+    # data, core…); файл, папка или сам корень дома — отказ ДО
+    # инструмента. R1 говорит «страж блокирует» — круг 22 делает
+    # логику правила правдой кода: директива в промпте мягка (живой
+    # урок дня-13: «прочитай C:\Marfa\README.md» — прочитала без
+    # остановки), замок — нет. Объявленный обход — песочница run_python
+    # (R1: «корень — только через песочницу»); внутренние органы замка
+    # не носят: они читают свои файлы прямым Python (start_marfa.json
+    # и родня), не руками агента. Относительный путь («README.md»)
+    # резолвится в корень — замок не обходится относительностью.
+    if pn == hn:
+        return Verdict("HIGH", "deny", _ROOT_LOCK_MSG, "path.root_lock")
+    if pn.startswith(hn + "/"):
+        rel = pn[len(hn) + 1:]
+        if "/" not in rel:
+            return Verdict("HIGH", "deny", _ROOT_LOCK_MSG, "path.root_lock")
+        return Verdict("LOW", "allow", "внутри дома (подпапка)", "path.ok")
     # вне дома, но в системном Temp — это "вне дома", а не системный каталог
     tn = _norm(Path(tempfile.gettempdir()))
     if pn == tn or pn.startswith(tn + "/"):

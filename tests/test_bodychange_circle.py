@@ -96,15 +96,15 @@ def test_live_body_marker_below_run():
     """Живая версия — строкой «ТЕЛО КНОПКИ» и заголовком окна ниже :run."""
     t = _text()
     run = t.index("\n:run")
-    live = "rem ТЕЛО КНОПКИ 3.7"
+    live = "rem ТЕЛО КНОПКИ 3.8"
     assert live in t and t.index(live) > run, "живой маркер тела не ниже :run"
-    assert "title МАРФА — синхронизация дома с GitHub (одна кнопка, v3.7)" in t
+    assert "title МАРФА — синхронизация дома с GitHub (одна кнопка, v3.8)" in t
 
 
-def test_banner_names_protocol_v111():
-    """Баннер петли называет протокол v1.11 — книга и кнопка говорят одно."""
+def test_banner_names_protocol_v112():
+    """Баннер петли называет протокол v1.12 — книга и кнопка говорят одно."""
     t = _text()
-    assert "echo  Петля: docs\\SYNC_PROTOCOL_v1.md (v1.11, разделы 2 и 8)" in t
+    assert "echo  Петля: docs\\SYNC_PROTOCOL_v1.md (v1.12, разделы 2 и 8)" in t
 
 
 # ------------------------------------------------------------------- Ф109
@@ -174,7 +174,7 @@ def test_protocol_names_body_change_law():
     не трогаем, запускник заморожен, сверка побайтная.
     """
     doc = PROTOCOL.read_text(encoding="utf-8")
-    assert "ПРОТОКОЛ СИНХРОНИЗАЦИИ v1.11" in doc
+    assert "ПРОТОКОЛ СИНХРОНИЗАЦИИ v1.12" in doc
     assert "закон смены тела" in doc.lower()
     assert "заморожен" in doc
     assert "fc /b" in doc

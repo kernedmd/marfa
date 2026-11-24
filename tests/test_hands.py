@@ -70,7 +70,10 @@ def test_run_python_timeout(home):
 
 def test_read_file_too_big_refused_before_reading(home):
     """K2 аудита: размер проверяется ДО read_bytes — файл весов не грузится в RAM."""
-    big = config.HOME_DIR / "weights.gguf"
+    # круг 22 (Ф118): корень дома — не полка (замок R1), весовому файлу
+    # место в models/ — как в живом доме
+    big = config.HOME_DIR / "models" / "weights.gguf"
+    big.parent.mkdir(parents=True, exist_ok=True)
     big.write_bytes(b"x" * (hands.MAX_READ_BYTES + 1024))
     with pytest.raises(ValueError):
         hands.read_file(big)

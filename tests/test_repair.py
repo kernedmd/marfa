@@ -172,10 +172,13 @@ def test_make_patch_usage_without_requirement(home):
 
 
 def test_make_patch_big_file_honest(home):
-    target = home / "big.py"
+    # круг 22 (Ф118): корень — не полка (замок R1), большой модуль
+    # живёт в подпапке — как в живом доме (core/big.py)
+    target = home / "core" / "big.py"
+    target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("\n".join("x = %d" % i for i in range(300)),
                       encoding="utf-8")
-    out = repair.make_patch("big.py", "измени")
+    out = repair.make_patch("core/big.py", "измени")
     assert "больше" in out and "архитектору" in out
 
 
