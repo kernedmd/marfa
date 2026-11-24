@@ -49,7 +49,7 @@ from typing import Optional
 
 import requests
 
-from core import config, hands, progress
+from core import config, hands, loghygiene, progress
 from safety import guard
 
 CODER_PROMPT = (
@@ -225,11 +225,10 @@ def _log(rec: dict) -> None:
     """Лог ремонта — правило 6.6: логи истина, даже когда всё упало."""
     try:
         p = Path(config.REPAIR_LOG_FILE)
-        p.parent.mkdir(parents=True, exist_ok=True)
         rec = dict(rec)
         rec.setdefault("ts", dt.datetime.now().isoformat(timespec="seconds"))
-        with p.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        # Ф96 (круг 17): копилка ремонта — через дверь ротации, как все
+        loghygiene.append_line(p, json.dumps(rec, ensure_ascii=False) + "\n")
     except OSError:
         pass
 

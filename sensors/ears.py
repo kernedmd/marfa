@@ -38,7 +38,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core import config  # noqa: E402
+from core import config, loghygiene  # noqa: E402
 
 _PUNCT = re.compile(r"[^\wа-яёА-ЯЁ]+", re.UNICODE)
 
@@ -251,9 +251,9 @@ class NameSentinel:
         if word:
             rec["word"] = word
         try:
-            self.log_file.parent.mkdir(parents=True, exist_ok=True)
-            with self.log_file.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            # Ф96 (круг 17): копилка слуха — через дверь ротации, как все
+            loghygiene.append_line(self.log_file,
+                                    json.dumps(rec, ensure_ascii=False) + "\n")
         except OSError:
             pass  # лог не должен рвать слух
 

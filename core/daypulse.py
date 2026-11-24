@@ -27,7 +27,7 @@ import statistics
 from pathlib import Path
 from typing import Optional
 
-from core import config
+from core import config, loghygiene
 
 # порог дрейфа скорости, % (тот же порядок, что Ф44 по батарее)
 DRIFT_WARN_PCT = 30
@@ -41,22 +41,26 @@ SCAR_CAP_CHARS = 200
 
 def _read_records() -> list[dict]:
     """Живые строки мозгового журнала; битые JSON пропускаются молча —
-    журнал не орган дыхания, пульс не должен падать от кривой строки."""
+    журнал не орган дыхания, пульс не должен падать от кривой строки.
+
+    Ф98 (круг 17): читатель ходит по recent_paths() — текущий файл
+    ПЛЮС архивы ротации по старшинству: ротация среди дня не имеет
+    права ронять «сегодня» из пульса. Множество ограничено законом
+    (keep+1 файлов) — цена чтения не растёт с возрастом организма.
+    """
     try:
-        p = Path(config.BRAIN_LOG_FILE)
-        if not p.exists():
-            return []
         out: list[dict] = []
-        for line in p.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(rec, dict):
-                out.append(rec)
+        for p in loghygiene.recent_paths(Path(config.BRAIN_LOG_FILE)):
+            for line in p.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict):
+                    out.append(rec)
         return out
     except OSError:
         return []
