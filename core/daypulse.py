@@ -246,3 +246,70 @@ def scars_block(now: Optional[dt.datetime] = None) -> Optional[str]:
             "текст; null, пустая строка и русский ключ «ответ» — не "
             "ответ." % n)
     return text[:SCAR_CAP_CHARS]
+
+
+# ---------- круг 16 «ИТОГ ДНЯ» (Ф90-Ф93) ----------
+
+def today_memories(memory, now: Optional[dt.datetime] = None,
+                   limit: int = 10) -> list[str]:
+    """Ф91 «ЧТО ЗАПОМНИЛА СЕГОДНЯ»: записи памяти, рождённые сегодня.
+
+    Память живёт годами, а день — это день: Создатель спрашивает не
+    «что ты помнишь» (это recall), а «что НОВОГО легло сегодня».
+    Источник — created_at живых записей; битые даты честно мимо
+    (урок recent: дайджест строится из честных дат, а не из мусора).
+    """
+    now = now or dt.datetime.now()
+    midnight = dt.datetime.combine(now.date(), dt.time.min).timestamp()
+    try:
+        recs = memory.recent(midnight, limit=limit)
+    except Exception:
+        return []
+    out = []
+    for rec in recs:
+        text = str(rec.get("text") or "").strip()
+        if not text:
+            continue
+        tags = rec.get("tags") or []
+        if tags:
+            out.append("%s (%s)" % (text, ", ".join(str(t) for t in tags)))
+        else:
+            out.append(text)
+    return out
+
+
+def week_render(now: Optional[dt.datetime] = None) -> str:
+    """Ф92 «ТЕЛО В ДОКЛАДЕ»: неделя организма против предыдущей —
+    для еженедельного доклада архитектора (№29).
+
+    Доклад архитектора видел тесты, коммиты, диск и канон — всё это
+    про ДОМ; про ТЕЛО (живые ходы, медиана, пустые ответы) доклад
+    молчал. Неделя против недели — честный тренд: одна медленная
+    суббота не диагноз, две недели подряд — дрейф, о котором Создатель
+    обязан знать раньше, чем почувствует.
+    """
+    now = now or dt.datetime.now()
+    records = _read_records()
+    this = _collect_window(records, now.date() - dt.timedelta(days=6),
+                           now.date())
+    prev = _collect_window(records, now.date() - dt.timedelta(days=13),
+                           now.date() - dt.timedelta(days=7))
+    if not this["turns"] and not prev["turns"]:
+        return "живых ходов за две недели нет — журнал мозга пуст"
+    parts = ["неделя: %d %s" % (this["turns"], _plural_turns(this["turns"]))]
+    if this["median"] is not None:
+        parts.append("медиана %s с" % _fmt1(this["median"]))
+    if this["empty"]:
+        parts.append("пустых ответов %d" % this["empty"])
+    if this["ptok"] or this["ctok"]:
+        parts.append("токены: промпт %d · генерация %d"
+                     % (this["ptok"], this["ctok"]))
+    out = "; ".join(parts)
+    if this["turns"] and prev["turns"] and this["median"] and prev["median"]:
+        pct = (this["median"] - prev["median"]) / prev["median"] * 100
+        if pct >= DRIFT_WARN_PCT:
+            out += ("; ТЯЖЕЛЕЕ прошлой недели на %d%% (медиана %s с — "
+                    "взгляни, что изменилось)" % (int(pct), _fmt1(prev["median"])))
+        elif pct <= -DRIFT_WARN_PCT:
+            out += "; легче прошлой недели на %d%%" % int(-pct)
+    return out

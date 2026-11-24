@@ -69,3 +69,40 @@ def today_plan(now: dt.datetime = None) -> str:
         lines.append("Очередь пуста: «задача: <текст>» — и завтрашний план "
                      "наполнится.")
     return "\n".join(lines)
+
+
+def tomorrow_plan(now: dt.datetime = None) -> str:
+    """Ф93 «ЧТО ЗАВТРА» (день-13, круг 16): завтра глазами сегодня.
+
+    Честность по построению: завтрашний план строится службой
+    стремления в 08:00 ЗАВТРА — раньше его не существует, и рисовать
+    его сегодня нельзя (закон фактов). Что честно известно сегодня:
+    незакрытые задачи сегодняшнего плана (перенос К6 переедут сами)
+    и открытая очередь (войдёт в строительство). Пусто и там и там —
+    завтра начинается чистым листом, и это тоже правда.
+    """
+    now = now or dt.datetime.now()
+    planner = DayPlanner()
+    plan = planner.load_plan(now.date())
+    open_tasks = []
+    if plan:
+        open_tasks = [t for t in plan.get("tasks", [])
+                      if isinstance(t, dict)
+                      and t.get("status") not in ("done", "cancelled")]
+    queue = [t for t in load_queue()
+             if isinstance(t, dict) and t.get("status") == "pending"]
+    tomorrow = (now.date() + dt.timedelta(days=1)).strftime("%d.%m")
+    lines = ["ЗАВТРА (%s):" % tomorrow]
+    if open_tasks:
+        lines.append("переедет с сегодня (не закрыто):")
+        for t in open_tasks[:10]:
+            lines.append("  " + _render_task(t))
+        if len(open_tasks) > 10:
+            lines.append("  … и ещё %d" % (len(open_tasks) - 10))
+    if queue:
+        lines.append("из очереди войдёт в план: %d задач" % len(queue))
+    if not open_tasks and not queue:
+        lines.append("открытых задач нет — завтра начинается чистым листом")
+    lines.append("План построю в 08:00 сама (служба стремления); "
+                 "добавить сейчас: «задача: <текст>»")
+    return "\n".join(lines)
