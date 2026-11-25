@@ -406,3 +406,72 @@ def test_live_throat_speakers_differ(live_throat):
     ok_b, wav_b = throat.synthesize("Привет, Илья", "baya")
     ok_k, wav_k = throat.synthesize("Привет, Илья", "kseniya")
     assert ok_b and ok_k and wav_b != wav_k
+
+
+# ------------------------------------------------------------- круг 23-2
+# РОТ v2.1: живой приём круга 23 вскрыл — в RDP-сеансе winsound (winmm)
+# МОЛЧА отказывает: синтез есть (счётчик фраз слуги растёт), звука нет,
+# цепь честно уходит в SAPI (Ирину слышно — WASAPI жив, winmm нет).
+# Второй рот — PortAudio (sounddevice, стек ушей), БЕЗ NUMPY (закон
+# правки 23.1: «почти наверняка есть — не закон»).
+
+
+def _wav_bytes(rate=48000, n=2000):
+    """Минимальный честный RIFF/PCM mono 16-bit — как отдаёт слуга."""
+    header = (b"RIFF" + struct.pack("<I", 36 + n * 2) + b"WAVE"
+              + b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate,
+                                      rate * 2, 2, 16)
+              + b"data" + struct.pack("<I", n * 2))
+    return header + b"\x01\x00" * n
+
+
+def test_mouth_second_rot_saves_silero(home, monkeypatch):
+    """ГЛАВНЫЙ 23-2: winsound мёртв (живой урок RDP-станции), PortAudio
+    жив — Марфа говорит ГОРИЛОМ: приговор silero/бая, SAPI не будили,
+    байты доехали до второго рта ЦЕЛИКОМ."""
+    monkeypatch.setattr(voice, "_throat_alive", lambda: True)
+    wav = _wav_bytes()
+    monkeypatch.setattr(throat, "synthesize",
+                        lambda *a, **k: (True, wav))
+    monkeypatch.setattr(voice, "_play_wav_winsound", lambda data: False)
+    played = []
+    monkeypatch.setattr(voice, "_play_wav_portaudio",
+                        lambda data: played.append(data) or True)
+    sapi = []
+    monkeypatch.setattr(voice, "available",
+                        lambda: sapi.append("ps") or True)
+    out = voice.speak("Марфа на связи. Слышно меня?")
+    assert "silero" in out and "бая" in out
+    assert played and played[0] == wav      # второй рот получил те же байты
+    assert not sapi                         # запасной рот не будили
+
+
+def test_mouth_portaudio_numpy_free_and_honest(home):
+    """Закон правки 23.1 — numpy «почти наверняка есть» НЕ закон: второй
+    рот собран на stdlib + sounddevice (RawOutputStream ест байты, док:
+    «NumPy is not necessary for using this»). Якорь читает исходник:
+    ни одного numpy-импорта внутри органа; мусорный буфер — честный
+    False, не крах (закон эфира)."""
+    import ast
+    tree = ast.parse(Path(voice.__file__).read_text(encoding="utf-8"))
+    func = [n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef)
+            and n.name == "_play_wav_portaudio"]
+    assert func, "орган второго рта не найден"
+    imports = [ast.dump(n) for n in ast.walk(func[0])
+               if isinstance(n, (ast.Import, ast.ImportFrom))]
+    assert not any("numpy" in s for s in imports), \
+        "второй рот нанял numpy — закон 23.1 нарушен"
+    assert voice._play_wav_portaudio(b"NOTAWAVE" + b"\x00" * 99) is False
+    assert voice._play_wav_portaudio(_wav_bytes()[:30]) is False
+
+
+def test_mouth_fall_prints_honest_trace(home, monkeypatch, capsys):
+    """Молчаливых ртов больше нет (урок круга 23-2): падение winsound
+    печатает след в консоль дома — архитектор видит ступень, а не
+    угадывает её по тишине."""
+    monkeypatch.setattr(voice, "_play_wav_winsound", lambda data: False)
+    monkeypatch.setattr(voice, "_play_wav_portaudio", lambda data: True)
+    assert voice._play_wav(_wav_bytes()) is True
+    outp = capsys.readouterr().out
+    assert "PortAudio" in outp and "winsound" in outp
