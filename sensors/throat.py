@@ -37,6 +37,7 @@ API (localhost only):
 """
 from __future__ import annotations
 
+import array
 import io
 import json
 import sys
@@ -120,15 +121,29 @@ def load_model():
 
 def pcm_to_wav(samples, sample_rate: int) -> bytes:
     """float-сэмплы (−1..1) → WAV-байты (mono, 16-bit). Чистая функция:
-    якоря Ф123 собирают WAV ей же — не дублируем закон."""
-    import numpy as np
+    якоря Ф123 собирают WAV ей же — не дублируем закон.
+
+    Правка 23.1: numpy уволен — посылка ТЗ (раздел 7) бюджетирует
+    только torch и модель, скрытых зависимостей горло не носит.
+    Тензор отдаёт tolist() (C-скорость), список — родной iterable,
+    int16 собирает stdlib array: у станции два питона, и слуге всё
+    равно, в каком из них numpy живёт, а в каком нет."""
+    try:
+        vals = samples.tolist()          # torch-тензор → список float
+    except AttributeError:
+        vals = list(samples)             # список/генератор — тоже родня
+    ints = array.array(
+        "h",
+        (int(v * 32767.0) if -1.0 <= v <= 1.0 else
+         (32767 if v > 1.0 else -32767) for v in vals))
+    if sys.byteorder != "little":       # WAV — little-endian, для всех платформ
+        ints.byteswap()
     buf = io.BytesIO()
-    clipped = np.clip(samples, -1.0, 1.0)
     with wave.open(buf, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(sample_rate)
-        w.writeframes((clipped * 32767).astype("<i2").tobytes())
+        w.writeframes(ints.tobytes())
     return buf.getvalue()
 
 
@@ -161,7 +176,7 @@ def synth(text: str, speaker: str, rate: int = 0, volume: int = 100) -> tuple:
     if dur <= 0:
         return False, "модель вернула тишину — скажи архитектору", 0.0, 0.0
     gain = max(0, min(100, int(volume))) / 100.0
-    samples = audio.numpy() * gain
+    samples = audio * gain   # тензор остаётся тензором — numpy не нужен (23.1)
     return True, pcm_to_wav(samples, config.THROAT_SAMPLE_RATE), dur, \
         (wall / dur if dur else 0.0)
 
