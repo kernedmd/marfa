@@ -51,6 +51,16 @@ silero prosody x-slow…x-fast); «голос <бая/ксения/…>» — г
 «какой голос» — цепь целиком; MOUTH_LOCK ОДИН на оба рта — один
 голос в один момент остался законом.
 
+РОТ v2.1 (круг 23-2, день-14): дом получил ВТОРОЙ рот. Живой приём
+круга 23 вскрыл: в RDP-сеансе winsound (winmm) МОЛЧА отказывает —
+синтез есть (счётчик фраз слуги растёт), звука нет, цепь честно
+уходит в SAPI (Ирину слышно — значит, WASAPI жив, а winmm в
+туннельном сеансе нет). Лечение: winsound → PortAudio (sounddevice,
+тот же стек, что уши) → SAPI → честный отказ. Второй рот — БЕЗ NUMPY
+(закон правки 23.1: «почти наверняка есть — не закон»): RawOutputStream
++ байты, stdlib только. Оба рта держат MOUTH_LOCK; падение на вторую
+ступень печатается в консоль дома — молчаливых ртов больше нет.
+
 Честность: нет PowerShell (станция разработчика Linux) или в Windows
 нет ни одного голоса — орган отказывает ЧЕСТНО, с путём лечения;
 голоса кэшируются (TTL 300 с), перечисление не дёргается на каждый слог.
@@ -294,18 +304,63 @@ def _throat_alive() -> bool:
         return False
 
 
-def _play_wav(data: bytes) -> bool:
-    """Рот дома (Ф122): winsound (stdlib Windows) играет WAV-байты в
-    памяти. SND_SYNC — говорение держит MOUTH_LOCK до последнего
+def _play_wav_winsound(data: bytes) -> bool:
+    """Первый рот (winmm): winsound (stdlib Windows) играет WAV-байты
+    в памяти. SND_SYNC — говорение держит MOUTH_LOCK до последнего
     слова (один голос в один момент). Нет winsound (станция
-    разработки) — честный False: цепь уйдёт в SAPI/отказ, а байты не
-    пропадут — их слышат живые якоря (Ф123)."""
+    разработки) или winmm отказал — честный False: попробует второй
+    рот."""
     try:
         import winsound
         winsound.PlaySound(data, winsound.SND_MEMORY | winsound.SND_SYNC)
         return True
     except Exception:
         return False
+
+
+def _play_wav_portaudio(data: bytes) -> bool:
+    """Второй рот (круг 23-2): PortAudio/WASAPI — тот же стек, что уши
+    дома (sounddevice; колесо в requirements с круга ушей). Родился
+    из живого урока RDP: winmm в туннельном сеансе молчит, WASAPI —
+    несёт (Ирину же было слышно). Дисциплина SND_SYNC та же:
+    Pa_WriteStream блокирует до последнего слова — MOUTH_LOCK цел.
+    БЕЗ NUMPY (закон правки 23.1: parcel-бюджет — torch + модель;
+    «почти наверняка есть» — не закон): RawOutputStream ест байты,
+    документация sounddevice: «NumPy is not necessary for using
+    this». Сырые PCM-байты не конвертируются — слуга уже отдал
+    готовый int16-моно."""
+    try:
+        import struct
+        import sounddevice as _sd
+        if len(data) <= 44 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+            return False
+        rate = struct.unpack("<I", data[24:28])[0]
+        channels = struct.unpack("<h", data[22:24])[0]
+        bits = struct.unpack("<h", data[34:36])[0]
+        data_size = struct.unpack("<I", data[40:44])[0]
+        if rate <= 0 or channels < 1 or bits != 16 or data_size <= 0:
+            return False
+        raw = bytes(data[44:44 + data_size])   # только тело PCM
+        with _sd.RawOutputStream(samplerate=rate, channels=channels,
+                                 dtype="int16") as stream:
+            stream.write(raw)                  # блокирует до конца — SND_SYNC
+        return True
+    except Exception:
+        return False
+
+
+def _play_wav(data: bytes) -> bool:
+    """Рот дома (Ф122, v2.1): winsound → PortAudio → честный False —
+    цепь уйдёт в SAPI/отказ, а байты не пропадут: их слышат живые
+    якоря (Ф123). Падение на вторую ступень видно в консоли дома —
+    молчаливых ртов больше нет (урок круга 23-2)."""
+    if _play_wav_winsound(data):
+        return True
+    try:
+        print("[голос] winsound не заиграл — пробую рот PortAudio")
+    except Exception:
+        pass
+    return _play_wav_portaudio(data)
 
 
 def set_speaker(word: str) -> str:
@@ -468,7 +523,7 @@ def speak(text: str, limit: int = SAY_LIMIT) -> str:
         if not available():
             if throat_was_alive:
                 return ("горло сказало, но рот станции не заиграл "
-                        "(winsound) — скажи архитектору")
+                        "(winsound, PortAudio) — скажи архитектору")
             return ("говорить не могу: PowerShell не найден — орган "
                     "голоса живёт на станции (Windows); это песочница "
                     "разработчика")
