@@ -52,6 +52,25 @@ def _turn_text(t: dict) -> str:
     return v if isinstance(v, str) else ""
 
 
+# Ф160 «ГОЛОС СОЗДАТЕЛЯ» (круг 26): метка источника в истории для мозга.
+# Мост ушей пишет ходы голосом с meta.voice=True — рендер помечает их
+# «[голосом]», чтобы мозг ЗНАЛ, что было сказано вслух, а что печатью
+# (живой лог дня-15: «Я сказал это в микрофон?» — мозг цитировал
+# печатный вопрос как произнесённый). Мозг не видит meta — видит текст.
+_VOICE_MARK = "[голосом] "
+
+
+def _turn_view(t: dict) -> str:
+    """Текст хода глазами мозга: голосовые реплики Создателя — с
+    меткой источника. Ответы Марфы не помечаются: канал ответа не
+    меняет их смысла, а токены дороги."""
+    text = _turn_text(t)
+    if (t.get("role") == "user" and isinstance(t.get("meta"), dict)
+            and t.get("meta").get("voice")):
+        return _VOICE_MARK + text
+    return text
+
+
 def _first_sentence(text: str, max_chars: int = 100) -> str:
     """Первая законченная фраза — честная офлайн-выжимка (как Ф53).
 
@@ -102,6 +121,66 @@ class DialogStore:
                     if isinstance(t, dict) and t.get("role") in ("user", "assistant")]
         except (OSError, ValueError):
             return []
+
+    # ---------- Ф160 «ГОЛОС СОЗДАТЕЛЯ» (круг 26): одна история ----------
+
+    def newest_other_session(self, exclude: str) -> Optional[str]:
+        """Самая живая сессия, КРОМЕ exclude (по mtime файла). У Создателя
+        может быть несколько окон панели — голосу важна самая свежая."""
+        best: Optional[str] = None
+        best_mt = -1.0
+        try:
+            for p in self.dir.glob("session_*.json"):
+                sid = p.stem[len("session_"):]
+                if sid == exclude:
+                    continue
+                mt = p.stat().st_mtime
+                if mt > best_mt:
+                    best_mt, best = mt, sid
+        except OSError:
+            return None
+        return best
+
+    def unified_turns(self, session_id: str,
+                      merge_limit: int = 12) -> list[dict]:
+        """Ходы сессии + ходы ГОЛОСОМ (или наоборот) — один разговор.
+
+        Живой лог дня-15 вскрыл раскол мозга: ходы панели жили в своей
+        сессии, ходы моста ушей — в voice; каждый мозговой ход видел
+        ПОЛОВИНУ разговора. Эхо-сверка не видела соседнюю сессию, вопросы
+        «что я говорил в микрофон» уходили мозгу, которому нечего цитировать.
+        Теперь: панельная сессия получает хвост голосовой (и наоборот),
+        хронология — по штампам ходов, метки «[голосом]» ставит рендер.
+        Потолок merge_limit: голосовой хвост — приправа, не меню (бюджет
+        истории 1000 токенов — Ф53).
+        """
+        mine = self.turns(session_id)
+        try:
+            if session_id == config.VOICE_SESSION:
+                other = self.newest_other_session(exclude=config.VOICE_SESSION)
+            else:
+                other = config.VOICE_SESSION
+        except Exception:
+            other = None
+        extra = self.turns(other)[-merge_limit:] if other else []
+        if not extra:
+            return mine
+
+        def _ts(t: dict) -> float:
+            # год — от сегодняшнего (декабрьский след в январе переносится);
+            # битый штамп — 0.0: без штампа ход честно считается старым
+            try:
+                ts = dt.datetime.strptime(str(t.get("ts", "")), "%d.%m %H:%M")
+            except ValueError:
+                return 0.0
+            now = dt.datetime.now()
+            ts = ts.replace(year=now.year)
+            if ts > now + dt.timedelta(days=1):
+                ts = ts.replace(year=now.year - 1)
+            return ts.timestamp()
+
+        merged = sorted(mine + extra, key=_ts)
+        return merged
 
     def append(self, session_id: str, role: str, text: str,
                meta: Optional[dict] = None) -> dict:
@@ -253,15 +332,15 @@ class DialogStore:
         used = 0
         reserve = budget // 3
         for t in reversed(fresh):
-            need = config.token_estimate(_turn_text(t)) + 2
+            need = config.token_estimate(_turn_view(t)) + 2
             if tail and used + need > budget - reserve:
                 break
             if not tail and need > budget:
                 # крайний случай: даже новейший ход длиннее всего бюджета —
                 # честная выжимка фразы, не пустота и не обрубок посередине слова
                 return [{"role": t["role"],
-                         "content": _cap_words(_first_sentence(_turn_text(t)), budget)}]
-            tail.insert(0, {"role": t["role"], "content": _turn_text(t)})
+                         "content": _cap_words(_first_sentence(_turn_view(t)), budget)}]
+            tail.insert(0, {"role": t["role"], "content": _turn_view(t)})
             used += need
 
         # 2) прошлые дни + то из сегодня, что не влезло, — выжимкой.
@@ -274,7 +353,7 @@ class DialogStore:
         if older:
             lines = []
             for t in older[-12:]:                   # глубже 12 ходов не тянем
-                line = "- %s: %s" % (t["role"], _first_sentence(_turn_text(t)))
+                line = "- %s: %s" % (t["role"], _first_sentence(_turn_view(t)))
                 if config.token_estimate("\n".join(lines + [line])) > reserve:
                     break
                 lines.append(line)

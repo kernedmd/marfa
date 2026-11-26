@@ -471,11 +471,14 @@ def state_line() -> str:
 # Ответ дома: фраза → Agent.handle (тем же путём, что строка из чата)
 # ---------------------------------------------------------------
 
-def _agent_answer(text: str, history: Optional[list] = None):
+def _agent_answer(text: str, history: Optional[list] = None,
+                  voice: bool = True):
     """ШОВ ДЛЯ ТЕСТОВ: вызов агента дома. Ленивый импорт — служба ушей
-    не должна падать на старте из-за проблем импорта агента."""
+    не должна падать на старте из-за проблем импорта агента.
+    Ф160 (круг 26): voice=True — ход пришёл ГОЛОСОМ, рефлексы источника
+    знают правду об этом ходе (мост ушей — единственный голосовой вход)."""
     from core.agent import Agent
-    return Agent().handle(text, history=history)
+    return Agent().handle(text, history=history, voice=voice)
 
 
 def _has_wake_exact(text: str) -> bool:
@@ -531,12 +534,14 @@ def handle_phrase(pcm: bytes, sample_rate: int = 16000,
         if not _has_wake_exact(text):
             return voice_append({"event": "skip", "phrase": text,
                                  "why": "имени в фразе нет — не зов"})
-        # 3) ответ дома тем же путём, что строка из чата
+        # 3) ответ дома тем же путём, что строка из чата; история —
+        # ЕДИНАЯ (Ф160, круг 26): своя голосовая + хвост самой живой
+        # панельной — мозг видит один разговор, а не половину
         from core.dialog import DialogStore
         store = DialogStore()
         history = DialogStore.render_messages(
-            store.turns(config.VOICE_SESSION))
-        reply = _agent_answer(text, history=history)
+            store.unified_turns(config.VOICE_SESSION))
+        reply = _agent_answer(text, history=history, voice=True)
         secs_total = round(time.time() - t0, 1)
         meta = {"voice": True, "secs": secs_total, "src": reply.source}
         if isinstance(getattr(reply, "meta", None), dict):

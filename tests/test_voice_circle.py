@@ -394,7 +394,7 @@ def test_ear_bridge_speaks_voice_answers(home, monkeypatch):
 
     monkeypatch.setattr(bridge, "transcribe", fake_transcribe)
     monkeypatch.setattr(bridge, "_agent_answer",
-                        lambda t, history=None: _R())
+                        lambda t, history=None, voice=False: _R())
     monkeypatch.setattr(voice, "out_enabled", lambda: True)
     rec = bridge.handle_phrase(b"\x01" * 32000, 16000, had_voice=True)
     assert rec["event"] == "exchange"
