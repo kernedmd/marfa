@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-r"""core/repair.py — САМОЛЕЧЕНИЕ ДОМА v1 + Ф75 СВОБОДА ВНЕДРЯТЬ СЕБЯ (22.11).
+r"""core/repair.py — САМОЛЕЧЕНИЕ ДОМА v1+v2 + Ф75 СВОБОДА ВНЕДРЯТЬ СЕБЯ.
 
 Создатель: «надо идти дальше по строению дома, и давать Марфе самой
 себя лечить и доделывать, она достаточно умная модель... среди умных
@@ -19,12 +19,22 @@ r"""core/repair.py — САМОЛЕЧЕНИЕ ДОМА v1 + Ф75 СВОБОДА 
       → кодер пишет файл ЦЕЛИКОМ в одном блоке ```python
       → страж патча: только .py, лимит строк, AST-синтаксис,
         канарейки, «вернул без изменений» = брак
+      → Ф154: рядом рождается patch.diff + счётчики строк в meta —
+        «что меняет патч N» говорит дифф и AST, не пересказ LLM
       → патч ложится в data\patches\000N\ — ПЕСОЧНИЦА, не core\
       → кодер ложится, глаза возвращаются (доктором)
-      → Создатель: «примени патч N» (бэкап + запись) / «откати патч N»
-      → Ф75: «разреши внедрять себя» (один раз) — и Марфа сама:
-        «внедри патч N» = бэкап → запись → ДЫМ-ТЕСТ модуля →
-        красный? автоОткат, старый файл возвращается на место
+      → Создатель: «примени патч N» / Марфа: «внедри патч N» —
+        оба пути в ОДНОЙ броне (Ф155): бэкап → запись → тесты
+        модуля И привязанные тесты → красные? автоОткат
+
+САМОЛЕЧЕНИЕ v2 (круг 25, Ф154–Ф155):
+  - Ф154 «ДИФФ ПАТЧА» — каждый патч несёт unified diff и сводку
+    фактов (+N −M строк, имена функций/классов новые/задеты/ушли);
+    команды «что меняет патч N» и «покажи патч N»;
+  - Ф155 «БРОНЯ ПРИМЕНЕНИЯ» — «примени патч N» получает броню
+    «внедри патч N»: дым-тест расширен до привязанных тестов
+    (чей тест импортирует модуль — тот и задаёт поведение), красный
+    прогон = автоОткат для КОГО УГОДНО, кто трогает дом.
 
 Неприкосновенность (главный закон модуля): make_patch НИКОГДА не пишет
 вне data\patches\ — код дома меняет только Создатель своей командой
@@ -33,12 +43,13 @@ r"""core/repair.py — САМОЛЕЧЕНИЕ ДОМА v1 + Ф75 СВОБОДА 
 apply_patch (внедрить) с тем же конвейером.
 
 Швы для тестов (tests/test_repair.py подменяет): _ask_coder /
-ensure_server / release / _find_model / _smoke_test — реальный
-сервер и настоящий pytest не нужны.
+ensure_server / release / _find_model / _smoke_test / _run_pytest —
+реальный сервер и настоящий pytest не нужны.
 """
 from __future__ import annotations
 
 import datetime as dt
+import difflib
 import json
 import re
 import subprocess
@@ -297,9 +308,15 @@ def make_patch(path_str: str, requirement: str) -> str:
         d = _next_patch_dir()
         d.mkdir(parents=True, exist_ok=True)
         (d / p.name).write_text(code, encoding="utf-8")
+        # Ф154 «ДИФФ ПАТЧА»: дифф рождается ВМЕСТЕ с патчем — «что
+        # меняет патч N» отвечает фактами диффа и AST, а не пересказом
+        # требования (гейт §5: истину говорит код, не LLM)
+        diff_text = _build_diff(src, code, p.name)
+        _patch_diff_path(d).write_text(diff_text, encoding="utf-8")
+        add_n, rem_n = _diff_stats(diff_text)
         meta = {"target": str(p), "file_name": p.name,
                 "requirement": requirement, "new_file": not bool(src),
-                "applied": False,
+                "applied": False, "added": add_n, "removed": rem_n,
                 "ts": dt.datetime.now().isoformat(timespec="seconds")}
         (d / "meta.json").write_text(
             json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -327,6 +344,198 @@ def make_patch(path_str: str, requirement: str) -> str:
         return "\n".join(lines + ["ошибка кодера: %s" % e, release()])
 
 
+# ---------------------------------------------------------------
+# Ф154 «ДИФФ ПАТЧА» (круг 25, самолечение v2): патч без диффа —
+# чёрный ящик. Кодер пишет файл целиком, а Создатель видит ЧТО
+# изменилось: у каждого патча рождается patch.diff (unified, difflib —
+# без новых зависимостей) и человеческая сводка из фактов (строки,
+# имена функций/классов по AST — гейт §5: истину говорит код, не LLM).
+# ---------------------------------------------------------------
+
+def _build_diff(old_text: str, new_text: str, name: str) -> str:
+    """Unified diff «было → стало». Новый файл — весь в плюсах."""
+    d = list(difflib.unified_diff(
+        (old_text or "").splitlines(keepends=True),
+        (new_text or "").splitlines(keepends=True),
+        fromfile="было/" + name, tofile="стало/" + name))
+    if d and not d[-1].endswith("\n"):
+        d[-1] += "\n"
+    return "".join(d)
+
+
+def _diff_stats(diff_text: str) -> tuple:
+    """(+строк, −строк) по диффу. Строки заголовков не считаются."""
+    add = rem = 0
+    for line in diff_text.splitlines():
+        if line.startswith("+") and not line.startswith("+++"):
+            add += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            rem += 1
+    return add, rem
+
+
+def _ast_names(code: str) -> tuple:
+    """(функции, классы) по AST. Не-код — пустые множества, не ошибка."""
+    import ast
+    funcs: set = set()
+    classes: set = set()
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError:
+        return funcs, classes
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            funcs.add(node.name)
+        elif isinstance(node, ast.ClassDef):
+            classes.add(node.name)
+    return funcs, classes
+
+
+def _names_summary(old_code: str, new_code: str) -> str:
+    """Человеческая сводка изменений имён: новая/задета/ушла."""
+    of, oc = _ast_names(old_code)
+    nf, nc = _ast_names(new_code)
+    parts = []
+    f_new, f_gone, f_touch = (nf - of, of - nf, nf & of)
+    if f_new:
+        parts.append("функции: %s (новые)" % ", ".join(sorted(f_new)[:6]))
+    if f_touch:
+        parts.append("функции: %s (задеты)" % ", ".join(sorted(f_touch)[:6]))
+    if f_gone:
+        parts.append("функции: %s (ушли)" % ", ".join(sorted(f_gone)[:6]))
+    c_new, c_gone = nc - oc, oc - nc
+    if c_new:
+        parts.append("классы: %s (новые)" % ", ".join(sorted(c_new)[:4]))
+    if c_gone:
+        parts.append("классы: %s (ушли)" % ", ".join(sorted(c_gone)[:4]))
+    return "; ".join(parts) if parts else "имена не менялись"
+
+
+def _patch_diff_path(d: Path) -> Path:
+    return d / "patch.diff"
+
+
+def _old_source(d: Path, target: Path) -> str:
+    """Честное «было» для диффа: бэкап (патч применялся) → сегодняшний
+    файл цели (патч ждёт — именно против него писал его кодер) →
+    пустота (файл был новым)."""
+    backup = next(d.glob("backup_*"), None)
+    if backup is not None:
+        return backup.read_text(encoding="utf-8")
+    try:
+        if target.is_file():
+            return target.read_text(encoding="utf-8")
+    except OSError:
+        pass
+    return ""
+
+
+def patch_diff(n: int) -> str:
+    """«покажи патч N» — дифф целиком. Патч до v2 (без сохранённого
+    диффа) — честная сборка из того, что есть: бэкап (а если его нет —
+    пустота) против файла патча; эпоха названа, правда не выдумана."""
+    d = _patch_dir(n)
+    if d is None:
+        return "патча №%d нет — скажи «патчи», покажу список" % n
+    meta = _read_meta(d)
+    fname = str(meta.get("file_name") or "")
+    if not fname or not (d / fname).is_file():
+        return "патч №%d битый: файла патча нет в %s" % (n, d)
+    dp = _patch_diff_path(d)
+    if dp.is_file():
+        return dp.read_text(encoding="utf-8").strip() or "дифф пуст — файл не менялся"
+    target = guard.resolve_path(str(meta.get("target") or "?"))
+    old_src = _old_source(d, target)
+    fresh = _build_diff(old_src, (d / fname).read_text(encoding="utf-8"),
+                        fname)
+    head = ("дифф не сохранился (патч круга до диффов) — вот свежий: "
+            "файл патча против %s:\n" % fname)
+    return head + (fresh.strip() or "разницы нет")
+
+
+def patch_summary(n: int) -> str:
+    """«что меняет патч N» — человеческая сводка ИЗ ФАКТОВ: строки
+    +/−, имена функций/классов (новые/задеты/ушли), требование,
+    статус. Никаких мнений LLM — только дифф и AST (гейт §5)."""
+    d = _patch_dir(n)
+    if d is None:
+        return "патча №%d нет — скажи «патчи», покажу список" % n
+    meta = _read_meta(d)
+    fname = str(meta.get("file_name") or "")
+    if not fname or not (d / fname).is_file():
+        return "патч №%d битый: файла патча нет в %s" % (n, d)
+    new_code = (d / fname).read_text(encoding="utf-8")
+    dp = _patch_diff_path(d)
+    target = guard.resolve_path(str(meta.get("target") or "?"))
+    old_src = _old_source(d, target)
+    if dp.is_file():
+        diff_text = dp.read_text(encoding="utf-8")
+        epoch = ""
+    else:
+        diff_text = _build_diff(old_src, new_code, fname)
+        epoch = " (свежий: дифф v1-патча не сохранялся)"
+    add, rem = _diff_stats(diff_text)
+    names = _names_summary(old_src, new_code)
+    status = ("применён" if meta.get("applied") else "ждёт внедрения")
+    return ("патч №%s → %s\n+%d −%d строк%s; %s\nтребование: «%s»\n"
+            "статус: %s\nцеликом — «покажи патч %s»"
+            % (d.name, meta.get("target", "?"), add, rem, epoch, names,
+               (meta.get("requirement") or "?")[:90], status, d.name))
+
+
+# ---------------------------------------------------------------
+# Ф155 «БРОНЯ ПРИМЕНЕНИЯ» (круг 25, самолечение v2): броня — не для
+# одного пути, а для закона. «примени патч N» (рука Создателя) жил
+# без дым-теста — красный патч мог лечь в дом и встретиться с ним
+# только на батарее. Теперь ОБА пути (Создатель и сама Марфа)
+# проходят один конвейер: бэкап → запись → тесты модуля И
+# ПРИВЯЗАННЫЕ тесты (кто импортирует модуль — тот и задаёт его
+# поведение) → красные? автоОткат, старый файл возвращается.
+# ---------------------------------------------------------------
+
+def _related_tests(module_stem: str, limit: int = 3) -> list:
+    """Тест-файлы, импортирующие модуль — по строкам импортов.
+
+    «from core import voice», «from core.voice import speak»,
+    «from core import voice as v» — все считаются; «voices» — нет
+    (сравнение по словам, не подстрока — урок «жадных префиксов»).
+    Собственный тест модуля не дублируем — он и так в прогоне.
+    Потолок limit: батарея дома 1600+ тестов, дым-тест внедрения —
+    не батарея, а его честная тень.
+    """
+    tdir = config.HOME_DIR / "tests"
+    own = "test_%s.py" % module_stem
+    if not tdir.is_dir():
+        return []
+    out = []
+    for f in sorted(tdir.glob("test_*.py")):
+        if f.name == own or len(out) >= limit:
+            continue
+        try:
+            txt = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in txt.splitlines():
+            ls = line.strip()
+            if not (ls.startswith("from core") or ls.startswith("import core")):
+                continue
+            tokens = set(re.split(r"[^\w.]+", ls))
+            if module_stem in tokens or ("core." + module_stem) in tokens:
+                out.append(f.name)
+                break
+    return out[:limit]
+
+
+def _run_pytest(files: list, timeout: float) -> tuple:
+    """Прогон pytest по списку файлов: (код возврата, хвост вывода)."""
+    r = subprocess.run(
+        [sys.executable, "-m", "pytest", "-x", "-q"] + list(files),
+        cwd=str(config.HOME_DIR), capture_output=True, text=True,
+        timeout=timeout)
+    tail = "\n".join((r.stdout or "").splitlines()[-6:])
+    return r.returncode, tail
+
+
 def _patch_dir(n: int) -> Optional[Path]:
     d = config.PATCHES_DIR / ("%04d" % n)
     return d if d.is_dir() else None
@@ -338,6 +547,10 @@ def apply_patch(n: int) -> str:
     Бэкап старого файла ложится рядом с патчем; запись идёт через руки
     (страж: путь внутри дома + канарейки). Синтаксис перепроверяется —
     между написанием и применением файл мог быть закодирован заново.
+    Ф155 «БРОНЯ ПРИМЕНЕНИЯ» (круг 25): после записи — дым-тест модуля
+    и привязанных тестов; красный — автоОткат, старый файл на месте,
+    дом не знает о неудаче. Броня одна для всех: Создателю — как
+    Марфе (Ф75): дом не краснеет ни от чьей руки.
     """
     d = _patch_dir(n)
     if d is None:
@@ -352,6 +565,8 @@ def apply_patch(n: int) -> str:
         _check_patch(target, code)
     except ValueError as e:
         return "патч №%d не применяется: %s" % (n, e)
+    # эфир: применение с бронёй — долгое действие (тесты после патча)
+    progress.stage("применяю патч №%d: бэкап → запись → тесты…" % n)
     try:
         if target.is_file():
             (d / ("backup_" + target.name)).write_text(
@@ -359,15 +574,42 @@ def apply_patch(n: int) -> str:
         hands.write_file(target, code)
     except PermissionError as e:
         return "СТРАЖ не пустил: %s" % e
+    ok, report = _smoke_test(target)
+    if not ok:
+        # автоОткат: красные тесты возвращают старый файл на место —
+        # дом не остаётся с непроверенной правкой (закон Ф155)
+        backup = next(d.glob("backup_*"), None)
+        rolled = False
+        if backup is not None:
+            try:
+                hands.write_file(target, backup.read_text(encoding="utf-8"))
+                rolled = True
+            except Exception as e:
+                _lesson("применение-откат-не-удался", "%s: %s"
+                        % (target.name, e))
+        _log({"apply": n, "target": str(target), "ok": False,
+              "smoke": report[:400], "rolled_back": rolled})
+        _lesson("применение-откат",
+                "%s: тесты после патча красные, откат %s"
+                % (target.name, "состоялся" if rolled else "НЕ удался"))
+        return ("патч №%d НЕ ПРИМЕНЁН: тесты после патча красные — старый "
+                "файл %s. Вот что сказали тесты:\n%s\nСкажи «почини %s: "
+                "<что исправить>» — кодер перепишет, или расскажи "
+                "архитектору."
+                % (n, "я вернула на место" if rolled
+                   else "ВЕРНУТЬ НЕ УДАЛОСЬ — проверь руками!",
+                   report, target.name))
     meta["applied"] = True
     meta["applied_ts"] = dt.datetime.now().isoformat(timespec="seconds")
     (d / "meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
-    _log({"apply": n, "target": str(target), "ok": True})
+    _log({"apply": n, "target": str(target), "ok": True,
+          "smoke": report[:200]})
     _lesson("кодер-применение", "%s -> %s" % (n, target.name))
-    return ("патч №%d ПРИМЕНЁН: %s\nбэкап старого: %s\nпроверь дом: "
-            "«статус»; не понравится — «откати патч %d»"
-            % (n, target, d, n))
+    return ("патч №%d ПРИМЕНЁН: %s\nбэкап старого: %s\nтесты после "
+            "патча зелёные:\n%s\nпроверь дом: «статус»; не понравится — "
+            "«откати патч %d»"
+            % (n, target, d, report, n))
 
 
 def rollback_patch(n: int) -> str:
@@ -470,21 +712,23 @@ def forbid_self_write() -> str:
 def _smoke_test(target: Path) -> tuple:
     """Дым-тест после внедрения: (можно жить, честный отчёт).
 
-    Есть tests/test_<модуль>.py — гоняем его целиком (-x -q, стоп на
-    первом красном); нет — хотя бы компиляция. Это цена свободы: Марфа
-    не говорит «уже починила», пока её же тесты не позеленели.
+    Ф155 (круг 25): гоняем не только собственный тест модуля, но и
+    ПРИВЯЗАННЫЕ — тест-файлы, импортирующие модуль: чей тест импортирует,
+    тот и задаёт поведение. Есть хоть один тест — pytest (-x -q, стоп
+    на первом красном); тестов нет — хотя бы компиляция. Это цена
+    свободы: Марфа не говорит «уже починила», пока её же тесты не
+    позеленели — и Создателю тот же закон (броня — не для одного
+    пути, а для всех, кто трогает дом).
     """
     test_file = config.HOME_DIR / "tests" / ("test_%s.py" % target.stem)
+    related = _related_tests(target.stem)
+    files = ([test_file.name] if test_file.is_file() else []) + related
     try:
-        if test_file.is_file():
-            r = subprocess.run(
-                [sys.executable, "-m", "pytest", "-x", "-q", test_file.name],
-                cwd=str(config.HOME_DIR), capture_output=True, text=True,
-                timeout=config.SELF_WRITE_TEST_SEC)
-            tail = "\n".join((r.stdout or "").splitlines()[-6:])
-            return (r.returncode == 0,
+        if files:
+            rc, tail = _run_pytest(files, config.SELF_WRITE_TEST_SEC)
+            return (rc == 0,
                     ("pytest %s (код %d)\n%s"
-                     % (test_file.name, r.returncode, tail)).strip())
+                     % (" ".join(files), rc, tail)).strip())
         import py_compile
         py_compile.compile(str(target), doraise=True)
         return True, ("компиляция ОК (тестов модуля нет: tests/%s)"

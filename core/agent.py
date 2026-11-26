@@ -1933,6 +1933,21 @@ class Agent:
             from core import repair
             return Reply(repair.rollback_patch(int(m.group(1))),
                          "python", "patch_rollback")
+        # Ф154 «ДИФФ ПАТЧА» (круг 25): «что меняет патч N» — сводка
+        # фактов (строки, имена), «покажи патч N» — сам дифф. Порядок
+        # «точное над жадным»: оба маршрута стоят ДО «почини» и не
+        # пересекаются с «патчи»/«примени» — пробник калитки это
+        # держит (якорь круга 25)
+        m = re.match(r"^что меняет патч\s+(\d+)$", lowq)
+        if m:
+            from core import repair
+            return Reply(repair.patch_summary(int(m.group(1))),
+                         "python", "patch_summary")
+        m = re.match(r"^покажи патч\s+(\d+)$", lowq)
+        if m:
+            from core import repair
+            return Reply(repair.patch_diff(int(m.group(1))),
+                         "python", "patch_diff")
         # Ф75 «СВОБОДА ВНЕДРЯТЬ СЕБЯ» (директива Создателя 22.11: «дай
         # Марфе свободу, чтоб она могла уже сама писать и внедрять себя —
         # она умная модель, у неё прокачанные руки, она понимает, что

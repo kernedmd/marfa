@@ -7,13 +7,15 @@
 """
 from __future__ import annotations
 
+import queue as _queue
+import threading
 from pathlib import Path
 
 import datetime as dt
 import json
 import time
 
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request, stream_with_context
 
 from core import config, progress
 from core.agent import Agent
@@ -278,6 +280,57 @@ def panel():
     return PANEL_HTML
 
 
+def _turn_meta(reply, secs: float) -> dict:
+    """Штамп хода — один источник правды для /api/chat и стрима.
+
+    СКОРОСТЬ v1: сколько токенов напечатал мозг — в штамп и в память
+    диалога: «40,2 с · мозг · 84 ток». Аудит-2: и ПРОМПТ-токены
+    (ptok) — штамп «165,8 с · мозг · 273 ток · промпт 2100» отличает
+    долгий декод от долгого префикса без консоли.
+    """
+    tok = None
+    ptok = None
+    if isinstance(getattr(reply, "meta", None), dict):
+        try:
+            tok = int(reply.meta.get("tok")) or None
+        except (TypeError, ValueError):
+            tok = None
+        try:
+            ptok = int(reply.meta.get("ptok")) or None
+        except (TypeError, ValueError):
+            ptok = None
+    meta = {"secs": secs, "src": reply.source}
+    if tok:
+        meta["tok"] = tok
+    if ptok:
+        meta["ptok"] = ptok
+    return meta
+
+
+def _complete_turn(session: str, text: str, reply, secs: float) -> dict:
+    """Общий финал хода — закон один для обоих каналов панели:
+    штамп → память диалога → голос (асинхронно, закон эфира) →
+    готовый безопасный HTML (№12). Возвращает payload ответа."""
+    meta = _turn_meta(reply, secs)
+    DIALOGS.append(session, "user", text)          # ходы — после ответа:
+    DIALOGS.append(session, "assistant", reply.text,  # неудача не портит память
+                   meta=meta)
+    # Ф57 «говори вслух» (день-10): ответ озвучивается, если Создатель
+    # разрешил; голос живёт в потоке-демоне, чат НЕ ждёт звука
+    try:
+        from core import voice as _voice_mod
+        if _voice_mod.out_enabled():
+            _voice_mod.speak_async(reply.text)
+    except Exception:
+        pass
+    tok = meta.get("tok")
+    ptok = meta.get("ptok")
+    return {"reply": reply.text, "html": to_safe_html(reply.text),
+            "session": session, "secs": secs,
+            "source": reply.source, "tok": tok, "ptok": ptok,
+            "source_label": progress.source_label(reply.source)}
+
+
 @app.post("/api/chat")
 def api_chat():
     """№10/№11: разговор с сессией. Панель держит имя сессии в localStorage,
@@ -306,46 +359,91 @@ def api_chat():
         return jsonify({"reply": "Ошибка: " + str(e)}), 500
     secs = round(time.time() - t0, 1)
     progress.finish(secs=secs, source=reply.source)
-    # СКОРОСТЬ v1: сколько токенов напечатал мозг — в штамп и в память
-    # диалога: «40,2 с · мозг · 84 ток». Снова две минуты? По токенам
-    # сразу видно, кто съел время: декод (много ток) или промпт/ретрай.
-    # Аудит-2: и ПРОМПТ-токены тоже (метка ptok) — штамп «165,8 с ·
-    # мозг · 273 ток · промпт 2100» отличает долгий декод от долгого
-    # префикса без всякой консоли
-    tok = None
-    ptok = None
-    if isinstance(getattr(reply, "meta", None), dict):
-        try:
-            tok = int(reply.meta.get("tok")) or None
-        except (TypeError, ValueError):
-            tok = None
-        try:
-            ptok = int(reply.meta.get("ptok")) or None
-        except (TypeError, ValueError):
-            ptok = None
-    meta = {"secs": secs, "src": reply.source}
-    if tok:
-        meta["tok"] = tok
-    if ptok:
-        meta["ptok"] = ptok
-    DIALOGS.append(session, "user", text)          # ходы — после ответа:
-    DIALOGS.append(session, "assistant", reply.text,  # неудача не портит память
-                   meta=meta)
-    # Ф57 «говори вслух» (день-10): ответ озвучивается, если Создатель
-    # разрешил; голос живёт в потоке-демоне, чат НЕ ждёт звука, а вслух
-    # читаются первые REPLY_LIMIT символов — длинное остаётся глазам
-    # (закон эфира: голос не роняет дом и не держит ответ)
+    return jsonify(_complete_turn(session, text, reply, secs))
+
+
+# Ф156 «СТРИМ-КАНАЛ» (круг 25) — №15 роадмапа 30, последняя фишка:
+# буквы ответа печатаются живьём БЕЗ опроса. Мозг на железе 2016 года
+# декодирует ~6 ток/с — Создатель раньше ждал тишины до последнего
+# токена, теперь ответ рождается на глазах: стадия → черновик →
+# финал со штампом. Механика: ход крутится в потоке, события эфира
+# (подписчики Ф157) летят в очередь, генератор отдаёт их браузеру
+# кадрами SSE. Честность канала: старый /api/chat не тронут; ошибка
+# хода — событие error (не тишина); стрим оборвался — ход доживает,
+# ответ заберёт /api/dialog (панель так и делает — фоллбэк без
+# повторного хода).
+@app.post("/api/chat/stream")
+def api_chat_stream():
+    data = request.get_json(force=True, silent=True) or {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "empty"}), 400
     try:
-        from core import voice as _voice_mod
-        if _voice_mod.out_enabled():
-            _voice_mod.speak_async(reply.text)
-    except Exception:
-        pass
-    # №12: готовый безопасный HTML — панель не доверяет мозгу ни байтом
-    return jsonify({"reply": reply.text, "html": to_safe_html(reply.text),
-                    "session": session, "secs": secs,
-                    "source": reply.source, "tok": tok, "ptok": ptok,
-                    "source_label": progress.source_label(reply.source)})
+        session = _safe_session(str(data.get("session") or "default"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    history = DialogStore.render_messages(DIALOGS.turns(session))
+    events: "_queue.Queue" = _queue.Queue()
+    _DONE = object()
+
+    def _listener(kind: str, payload) -> None:
+        events.put((kind, payload))
+
+    def _worker() -> None:
+        try:
+            progress.begin(session)          # первое событие — стартовая стадия
+            t0 = time.time()
+            reply = Agent().handle(text, history=history)
+            secs = round(time.time() - t0, 1)
+            progress.finish(secs=secs, source=reply.source)
+            _listener("final", _complete_turn(session, text, reply, secs))
+        except Exception as e:
+            try:
+                progress.finish(source="")
+            except Exception:
+                pass
+            _listener("error", str(e))
+        finally:
+            progress.unsubscribe(_listener)
+            events.put(_DONE)
+
+    progress.subscribe(_listener)
+    th = threading.Thread(target=_worker, daemon=True,
+                          name="marfa-stream-turn")
+    th.start()
+    # страховка: ход с своим таймаутом (у мозга свой — BRAIN_TIMEOUT_SEC;
+    # здесь потолок выше, чтобы успел и медленный рефлекс с глазами)
+    hard_cap = max(360.0, 2 * getattr(config, "BRAIN_TIMEOUT_SEC", 300))
+
+    def _gen():
+        deadline = time.time() + hard_cap
+        while True:
+            try:
+                item = events.get(timeout=max(1.0, deadline - time.time()))
+            except _queue.Empty:
+                yield ("data: %s\n\n"
+                       % json.dumps({"type": "error",
+                                     "error": "стрим завис (%.0f с) — ход "
+                                     "доживает; ответ заберёт история "
+                                     "разговора" % hard_cap},
+                                    ensure_ascii=False))
+                return
+            if item is _DONE:
+                return
+            kind, payload = item
+            if kind == "final":
+                body = dict(payload)
+                body["type"] = "final"
+            elif kind == "error":
+                body = {"type": "error", "error": str(payload)}
+            else:
+                body = {"type": kind, "text": str(payload)}
+            yield "data: %s\n\n" % json.dumps(body, ensure_ascii=False)
+
+    return Response(stream_with_context(_gen()),
+                    mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache",
+                             "X-Accel-Buffering": "no"})
 
 
 @app.get("/api/progress")

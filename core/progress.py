@@ -47,8 +47,8 @@ from typing import Optional
 _lock = threading.Lock()
 
 # текущий ход: {"busy": bool, "sid": str, "stage": str, "preview": str,
-#               "t0": float, "stage_t0": float}
-_walk = {"busy": False, "sid": "", "stage": "", "preview": "",
+#               "draft": str, "t0": float, "stage_t0": float}
+_walk = {"busy": False, "sid": "", "stage": "", "preview": "", "draft": "",
          "t0": 0.0, "stage_t0": 0.0}
 
 # последний ЗАВЕРШЁННЫЙ ход — панель показывает его в «сейчас делает»
@@ -63,6 +63,45 @@ SOURCE_LABELS = {
 
 _START_STAGE = "приняла сообщение, думаю…"
 
+# Ф156 «СТРИМ-КАНАЛ» (круг 25, №15 роадмапа): подписчики эфира. Пока
+# ход живёт, каждое событие (стадия, черновик) улетает подписчикам —
+# стрим-канал панели отдаёт их браузеру без опроса. Закон эфира
+# работает и здесь: поломка подписчика глотается — стрим умер, а ход
+# живёт. Список под замком, вызовы — ВНЕ замка (подписчик имеет право
+# сам звать эфир, замок не должен зациклиться).
+_listeners: list = []
+
+
+def _notify(kind: str, payload) -> None:
+    """Разбудить подписчиков. Вне замка и всегда с бронёй."""
+    with _lock:
+        subs = list(_listeners)
+    for cb in subs:
+        try:
+            cb(kind, payload)
+        except Exception:
+            pass          # закон: подписчик не рвёт эфир
+
+
+def subscribe(cb) -> None:
+    """Подписаться на события хода (stage/preview). Повторно — один раз."""
+    try:
+        with _lock:
+            if cb not in _listeners:
+                _listeners.append(cb)
+    except Exception:
+        pass
+
+
+def unsubscribe(cb) -> None:
+    """Отписаться. Нет такого — тихо мимо (закон эфира)."""
+    try:
+        with _lock:
+            if cb in _listeners:
+                _listeners.remove(cb)
+    except Exception:
+        pass
+
 
 def source_label(source: str) -> str:
     """Кто отвечал — по-человечески. Незнакомый источник — как есть."""
@@ -73,7 +112,7 @@ def source_label(source: str) -> str:
 def reset() -> None:
     """Стереть эфир (тесты; живому дому не нужно — процесс новый)."""
     with _lock:
-        _walk.update(busy=False, sid="", stage="", preview="",
+        _walk.update(busy=False, sid="", stage="", preview="", draft="",
                      t0=0.0, stage_t0=0.0)
         _last.update(sid="", secs=0.0, source="", ts="")
 
@@ -83,8 +122,9 @@ def begin(sid: str = "") -> None:
     try:
         with _lock:
             _walk.update(busy=True, sid=str(sid or "")[:64],
-                         stage=_START_STAGE, preview="",
+                         stage=_START_STAGE, preview="", draft="",
                          t0=time.time(), stage_t0=time.time())
+        _notify("stage", _START_STAGE)
     except Exception:
         pass                       # закон: эфир не рвёт работу
 
@@ -96,6 +136,10 @@ def stage(text: str) -> None:
             if _walk["busy"]:
                 _walk["stage"] = str(text or "").strip()[:200] or _START_STAGE
                 _walk["stage_t0"] = time.time()
+                out = _walk["stage"]
+            else:
+                return
+        _notify("stage", out)
     except Exception:
         pass                       # закон: эфир не рвёт работу
 
@@ -103,14 +147,23 @@ def stage(text: str) -> None:
 def preview(text: str) -> None:
     """Живой черновик ответа — стрим мозга печатается в чат (СКОРОСТЬ v1).
 
-    Вне хода — тихо мимо. Хвост 400 символов: при 6 ток/с ответ растёт
-    медленно, а читать Создатель будет то, что печатается СЕЙЧАС;
-    три точки в начале — знак, что выше ещё текст."""
+    Вне хода — тихо мимо. Ф157 (круг 25): эфир хранит ДВА взгляда на
+    черновик — «preview» (хвост 400, как при СКОРОСТИ v1: при 6 ток/с
+    важно то, что печатается сейчас) и «draft» (полный растущий текст,
+    потолок 4000 — ответ 320 ток в него влезает целиком): стрим-канал
+    №15 отдаёт браузеру весь ответ, а не хвост, и длинный черновик
+    не обрезает начало без честного «…».
+    """
     try:
         s = str(text or "")
         with _lock:
             if _walk["busy"] and s.strip():
                 _walk["preview"] = ("…" + s[-400:]) if len(s) > 400 else s
+                _walk["draft"] = ("…" + s[-4000:]) if len(s) > 4000 else s
+                full = _walk["draft"]
+            else:
+                return
+        _notify("preview", full)
     except Exception:
         pass                       # закон: эфир не рвёт работу
 
@@ -125,10 +178,19 @@ def finish(secs: Optional[float] = None, source: str = "") -> None:
                 _last.update(sid=_walk["sid"], secs=round(max(0.0, took), 1),
                              source=source_label(source),
                              ts=time.strftime("%H:%M:%S"))
-            _walk.update(busy=False, sid="", stage="", preview="",
+            _walk.update(busy=False, sid="", stage="", preview="", draft="",
                          t0=0.0, stage_t0=0.0)
     except Exception:
         pass                       # закон: эфир не рвёт работу
+
+
+def draft() -> str:
+    """Полный черновик текущего хода (Ф157). Вне хода — пусто."""
+    try:
+        with _lock:
+            return _walk["draft"] if _walk["busy"] else ""
+    except Exception:
+        return ""
 
 
 def snapshot(sid: str = "") -> dict:
@@ -142,7 +204,7 @@ def snapshot(sid: str = "") -> dict:
             last = dict(_last)
             if not _walk["busy"]:
                 return {"busy": False, "sid": "", "stage": "", "preview": "",
-                        "elapsed": 0.0, "stage_secs": 0.0,
+                        "draft": "", "elapsed": 0.0, "stage_secs": 0.0,
                         "mine": False, "last": last}
             now = time.time()
             return {
@@ -150,6 +212,7 @@ def snapshot(sid: str = "") -> dict:
                 "sid": _walk["sid"],
                 "stage": _walk["stage"],
                 "preview": _walk["preview"],
+                "draft": _walk["draft"],
                 "elapsed": round(max(0.0, now - _walk["t0"]), 1),
                 "stage_secs": round(max(0.0, now - _walk["stage_t0"]), 1),
                 "mine": (not sid) or sid == _walk["sid"],
@@ -157,4 +220,5 @@ def snapshot(sid: str = "") -> dict:
             }
     except Exception:
         return {"busy": False, "sid": "", "stage": "", "preview": "",
-                "elapsed": 0.0, "stage_secs": 0.0, "mine": False, "last": {}}
+                "draft": "", "elapsed": 0.0, "stage_secs": 0.0,
+                "mine": False, "last": {}}
