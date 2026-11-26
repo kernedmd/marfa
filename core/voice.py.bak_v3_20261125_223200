@@ -1,0 +1,865 @@
+# -*- coding: utf-8 -*-
+"""core/voice.py — Ф56 «СЛУГА-ГОЛОС» (день-10): Марфа ЗАГОВАРИВАЕТ.
+
+ДОКТРИНА ОРГАНА. У дома есть уши (двухступенчатые: сторож имени +
+whisper-мост), но не было рта: Илья говорил вслух, а ответы читал
+глазами. День-10 закрывает круг — организм получает ГОЛОС.
+
+СУПЕР-РЕШЕНИЕ ДНЯ: дом не нанимает ни одной модели. В Windows уже
+живёт синтезатор речи (SAPI: System.Speech) с готовыми голосами
+(Irina/Mikhail для русского) — правило арсенала «модель входит в дом
+работой» соблюдено наоборот: работу выполняет уже купленное. Ноль
+VRAM, ноль RAM-весов, ноль загрузок; TTS-модель из чулана
+(model_212000.safetensors, ещё не опознана) остаётся спать, пока
+стандартный голос не покажется Создателю слабым — тогда вернёмся.
+
+ЗАКОН КАВЫЧЕК (урок дня-8, новое обличье): команды с кавычками убивали
+мозг на старте; здесь та же беда ждала в PowerShell — текст с апострофом
+или кавычкой рвал скрипт. Лечение радикальнее: скрипт едет в PowerShell
+через -EncodedCommand (base64 от UTF-16LE) — кавычкам ВООБЩЕ нет места
+в аргументах командной строки, а одинарные кавычки внутри скрипта
+удваиваются по закону самого PowerShell. Инъекция («скажи вслух';
+Remove-Item C:\\ -Recurse») невозможна по построению: чужой текст
+никогда не становится кодом.
+
+ЗАКОН ЭФИРА распространён на голос: речь НИКОГДА не рвёт работу дома —
+говорение живёт в потоке-демоне, любой крах глотается; чат не ждёт
+голоса (SAPI говорит дольше, чем печатается ответ).
+
+Один голос в один момент: пока Марфа говорит, новый «скажи вслух»
+честно просит подождать — как человек, а не два рупора сразу.
+
+Команды (мозг молчит — это рефлексы):
+- «скажи вслух <текст>» — произнести (Ф56); лимит SAY_LIMIT символов;
+- «говори вслух» / «молчи» — резолюция: озвучивать ли ответы (Ф57,
+  data\\voice_out.json — как моторика и живой язык, код файл не пишет);
+- «говори медленнее/быстрее/тише/громче/нормально» — интонация (Ф58,
+  data\\voice_settings.json; rate −5..5, громкость 0..100);
+- «проверь голос» — живой тест: голоса системы, пробная фраза (Ф59);
+- «прочитай вслух <экран/дневник/ответ/визитку>» — голос читает живые
+  органы (Ф64, круг 11).
+
+ГОЛОС v2 (круг 23, день-14, Ф121–Ф123): слуга-горло Silero v5_6 на
+порту 8084 — интонация вопроса и восклицания ЖИВАЯ (вердикт
+Создателя: «v5_6_ru, восклицание — норм»). ПРОРОЧЕСТВО Ф56
+ИСПОЛНИЛОСЬ: «TTS остаётся спать, пока стандартный голос не покажется
+Создателю слабым — тогда вернёмся» — вернулись по живой проверке,
+не в чулан (model_212000.safetensors спит дальше). ЦЕПЬ ЧЕСТНА
+(Ф122): silero → SAPI → честный отказ с путём лечения. «говори
+медленнее/быстрее» доезживает до обоих ртов (SAPI rate −5..5;
+silero prosody x-slow…x-fast); «голос <бая/ксения/…>» — голос горла;
+«какой голос» — цепь целиком; MOUTH_LOCK ОДИН на оба рта — один
+голос в один момент остался законом.
+
+РОТ v2.1 (круг 23-2, день-14): дом получил ВТОРОЙ рот. Живой приём
+круга 23 вскрыл: в RDP-сеансе winsound (winmm) МОЛЧА отказывает —
+синтез есть (счётчик фраз слуги растёт), звука нет, цепь честно
+уходит в SAPI (Ирину слышно — значит, WASAPI жив, а winmm в
+туннельном сеансе нет). Лечение: winsound → PortAudio (sounddevice,
+тот же стек, что уши) → SAPI → честный отказ. Второй рот — БЕЗ NUMPY
+(закон правки 23.1: «почти наверняка есть — не закон»): RawOutputStream
++ байты, stdlib только. Оба рта держат MOUTH_LOCK; падение на вторую
+ступень печатается в консоль дома — молчаливых ртов больше нет.
+
+Честность: нет PowerShell (станция разработчика Linux) или в Windows
+нет ни одного голоса — орган отказывает ЧЕСТНО, с путём лечения;
+голоса кэшируются (TTL 300 с), перечисление не дёргается на каждый слог.
+"""
+from __future__ import annotations
+
+import base64
+import json
+import shutil
+import subprocess
+import threading
+import time
+from pathlib import Path
+from typing import Optional
+
+from core import config
+
+# ---------------------------------------------------------------
+# Законы органа
+# ---------------------------------------------------------------
+SAY_LIMIT = 500          # «скажи вслух» — короткая фраза, не роман
+REPLY_LIMIT = 2000       # авто-озвучка ответов: длинное — глазами
+VOICES_TTL = 300.0       # голоса Windows не меняются каждый слог
+PS_TIMEOUT = 30          # перечисление голосов (первый Add-Type ленив)
+RATE_MIN, RATE_MAX = -5, 5     # закон интонации (Ф58)
+VOL_MIN, VOL_MAX = 0, 100
+
+_MOUTH_LOCK = threading.Lock()   # один голос в один момент
+_VOICES_CACHE: dict = {"ts": 0.0, "voices": [], "error": ""}
+
+
+# ---------------------------------------------------------------
+# Пути (лениво от DATA_DIR — закон песочницы conftest)
+# ---------------------------------------------------------------
+def _settings_path() -> Path:
+    return Path(config.DATA_DIR) / "voice_settings.json"
+
+
+def _out_path() -> Path:
+    return Path(config.DATA_DIR) / "voice_out.json"
+
+
+# ---------------------------------------------------------------
+# PowerShell-транспорт: EncodedCommand = кавычкам нет шанса
+# ---------------------------------------------------------------
+def available() -> bool:
+    """Есть ли чем говорить: PowerShell в системе (на станции — всегда,
+    это Windows-орган; песочница архитектора — честный сухой режим)."""
+    return shutil.which("powershell") is not None
+
+
+def _b64_script(script: str) -> str:
+    """Скрипт → base64(UTF-16LE): -EncodedCommand ждёт именно так.
+    В аргументах командной строки не остаётся НИ ОДНОЙ кавычки —
+    закон дня-8 («команда без кавычек») исполнен радикальнее."""
+    return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+
+
+def _ps_escape(text: str) -> str:
+    """Текст внутри одинарных кавычек PowerShell: ' удваивается —
+    единственный побег, которого требует сам PowerShell."""
+    return text.replace("'", "''")
+
+
+def _ps(script: str, timeout: float) -> tuple:
+    """Запустить PowerShell со скриптом. (код, вывод) — exceptions
+    наружу не идут: голос — не орган дыхания, отказ честен текстом."""
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive",
+             "-EncodedCommand", _b64_script(script)],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=timeout)
+        return r.returncode, (r.stdout or "") + (r.stderr or "")
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 1, "%s: %s" % (type(e).__name__, e)
+
+
+# ---------------------------------------------------------------
+# Голоса системы
+# ---------------------------------------------------------------
+def _voices_script() -> str:
+    return (
+        "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
+        "Add-Type -AssemblyName System.Speech; "
+        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+        "$s.GetInstalledVoices() | ForEach-Object { "
+        "$_.VoiceInfo.Name + '|' + $_.VoiceInfo.Culture }"
+    )
+
+
+def list_voices(refresh: bool = False) -> tuple:
+    """Голоса Windows: [(имя, культура), …] и ошибка. Кэш TTL 300 с.
+
+    Возвращает (voices, error) — не поднимает исключений: зеркало
+    дома (статус, «изучи себя») читает это на каждом ходе.
+    """
+    now = time.monotonic()
+    if (not refresh and _VOICES_CACHE["ts"]
+            and now - _VOICES_CACHE["ts"] < VOICES_TTL):
+        return _VOICES_CACHE["voices"], _VOICES_CACHE["error"]
+    voices: list = []
+    error = ""
+    if not available():
+        error = "PowerShell не найден — орган голоса живёт на станции (Windows)"
+    else:
+        code, out = _ps(_voices_script(), PS_TIMEOUT)
+        if code != 0:
+            error = "Windows не ответил про голоса: " + out.strip()[:200]
+        else:
+            for line in out.splitlines():
+                line = line.strip()
+                if not line or "|" not in line:
+                    continue
+                name, _, culture = line.partition("|")
+                name, culture = name.strip(), culture.strip()
+                if name:
+                    voices.append((name, culture))
+    _VOICES_CACHE.update(ts=now, voices=voices, error=error)
+    return voices, error
+
+
+def _pick_voice(voices: list) -> Optional[str]:
+    """Выбор голоса: русский — родной; нет русского — любой (скажет
+    честно, что с акцентом); выбирает и ПОМНИТ в настройках."""
+    settings = _load_settings()
+    remembered = settings.get("voice")
+    if remembered and any(n == remembered for n, _c in voices):
+        return remembered
+    for name, culture in voices:
+        if culture.lower().startswith("ru"):
+            settings["voice"] = name
+            _save_settings(settings)
+            return name
+    if voices:
+        settings["voice"] = voices[0][0]
+        _save_settings(settings)
+        return voices[0][0]
+    return None
+
+
+# ---------------------------------------------------------------
+# Настройки интонации (Ф58)
+# ---------------------------------------------------------------
+def _load_settings() -> dict:
+    """Настройки с бронёй: битый файл — честные значения по умолчанию
+    (закон H4/H5: кривой статус-файл не роняет орган)."""
+    base = {"voice": None, "rate": 0, "volume": 100,
+            "throat_speaker": "baya"}     # Ф122: голос горла (круг 23)
+    try:
+        raw = json.loads(_settings_path().read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            for key in ("voice", "rate", "volume", "throat_speaker"):
+                if key in raw:
+                    base[key] = raw[key]
+    except (OSError, ValueError):
+        pass
+    try:
+        base["rate"] = max(RATE_MIN, min(RATE_MAX, int(base["rate"])))
+        base["volume"] = max(VOL_MIN, min(VOL_MAX, int(base["volume"])))
+    except (TypeError, ValueError):
+        base["rate"], base["volume"] = 0, 100
+    if not isinstance(base["voice"], str):
+        base["voice"] = None
+    try:
+        from core import throat as _throat
+        if base["throat_speaker"] not in _throat.SPEAKERS:
+            base["throat_speaker"] = _throat.DEFAULT_SPEAKER
+    except Exception:
+        base["throat_speaker"] = "baya"
+    return base
+
+
+def _save_settings(settings: dict) -> bool:
+    try:
+        _settings_path().parent.mkdir(parents=True, exist_ok=True)
+        _settings_path().write_text(
+            json.dumps(settings, ensure_ascii=False, indent=2),
+            encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
+
+def tune(word: str) -> str:
+    """«говори медленнее/быстрее/тише/громче/нормально» — шаг интонации.
+
+    Шаг: темп ±1 (полный закон −5..5), громкость ±20 (0..100).
+    Граница достигнута — честный отказ с числами, не молчаливый стоп.
+    """
+    settings = _load_settings()
+    rate, vol = settings["rate"], settings["volume"]
+    if word == "медленнее":
+        if rate <= RATE_MIN:
+            return ("уже говорю медленнее всех: темп %d — дальше "
+                    "получится зановок" % rate)
+        rate -= 1
+    elif word == "быстрее":
+        if rate >= RATE_MAX:
+            return ("уже говорю быстрее всех: темп %d — отдельные "
+                    "слова начнут пропадать" % rate)
+        rate += 1
+    elif word == "тише":
+        if vol <= VOL_MIN:
+            return "тише некуда: громкость 0 — это шёпот листьев"
+        vol = max(VOL_MIN, vol - 20)
+    elif word == "громче":
+        if vol >= VOL_MAX:
+            return "громче некуда: громкость %d из %d" % (vol, VOL_MAX)
+        vol = min(VOL_MAX, vol + 20)
+    elif word in ("нормально", "обычно"):
+        rate, vol = 0, 100
+    else:
+        return "не знаю такой интонации: медленнее, быстрее, тише, громче, нормально"
+    settings["rate"], settings["volume"] = rate, vol
+    if not _save_settings(settings):
+        return "настройку не сохранила (файл не записался) — скажи архитектору"
+    return _settings_line(settings)
+
+
+def _settings_line(settings: dict) -> str:
+    """Настройки человеческим языком — для отчётов."""
+    pace = {0: "обычный темп"}.get(
+        settings["rate"],
+        "темп %+d" % settings["rate"])
+    return "интонация: %s, громкость %d из %d" % (
+        pace, settings["volume"], VOL_MAX)
+
+
+# ---------------------------------------------------------------
+# ГОЛОС v2 (круг 23, Ф121–Ф123): горло silero — первый рот
+# ---------------------------------------------------------------
+
+def _throat_alive() -> bool:
+    """Живо ли горло (Ф121). Орган в своей броне: любой крах проверки
+    — горло спит, цепь честно уйдёт в SAPI (закон эфира)."""
+    try:
+        from core import throat as _throat
+        return _throat.alive()
+    except Exception:
+        return False
+
+
+def _play_wav_winsound(data: bytes) -> bool:
+    """Первый рот (winmm): winsound (stdlib Windows) играет WAV-байты
+    в памяти. SND_SYNC — говорение держит MOUTH_LOCK до последнего
+    слова (один голос в один момент). Нет winsound (станция
+    разработки) или winmm отказал — честный False: попробует второй
+    рот."""
+    try:
+        import winsound
+        winsound.PlaySound(data, winsound.SND_MEMORY | winsound.SND_SYNC)
+        return True
+    except Exception:
+        return False
+
+
+def _play_wav_portaudio(data: bytes) -> bool:
+    """Второй рот (круг 23-2): PortAudio/WASAPI — тот же стек, что уши
+    дома (sounddevice; колесо в requirements с круга ушей). Родился
+    из живого урока RDP: winmm в туннельном сеансе молчит, WASAPI —
+    несёт (Ирину же было слышно). Дисциплина SND_SYNC та же:
+    Pa_WriteStream блокирует до последнего слова — MOUTH_LOCK цел.
+    БЕЗ NUMPY (закон правки 23.1: parcel-бюджет — torch + модель;
+    «почти наверняка есть» — не закон): RawOutputStream ест байты,
+    документация sounddevice: «NumPy is not necessary for using
+    this». Сырые PCM-байты не конвертируются — слуга уже отдал
+    готовый int16-моно."""
+    try:
+        import struct
+        import sounddevice as _sd
+        if len(data) <= 44 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+            return False
+        rate = struct.unpack("<I", data[24:28])[0]
+        channels = struct.unpack("<h", data[22:24])[0]
+        bits = struct.unpack("<h", data[34:36])[0]
+        data_size = struct.unpack("<I", data[40:44])[0]
+        if rate <= 0 or channels < 1 or bits != 16 or data_size <= 0:
+            return False
+        raw = bytes(data[44:44 + data_size])   # только тело PCM
+        with _sd.RawOutputStream(samplerate=rate, channels=channels,
+                                 dtype="int16") as stream:
+            stream.write(raw)                  # блокирует до конца — SND_SYNC
+        return True
+    except Exception:
+        return False
+
+
+def _play_wav(data: bytes) -> bool:
+    """Рот дома (Ф122, v2.1): winsound → PortAudio → честный False —
+    цепь уйдёт в SAPI/отказ, а байты не пропадут: их слышат живые
+    якоря (Ф123). Падение на вторую ступень видно в консоли дома —
+    молчаливых ртов больше нет (урок круга 23-2)."""
+    if _play_wav_winsound(data):
+        return True
+    try:
+        print("[голос] winsound не заиграл — пробую рот PortAudio")
+    except Exception:
+        pass
+    return _play_wav_portaudio(data)
+
+
+def set_speaker(word: str) -> str:
+    """«голос <имя>» / «смени голос <на имя>» (Ф122): смена голоса
+    ГОРЛА. Имя не голоса — честный список. Горло спит — голос всё
+    равно сменится (настройка в файле) и Марфа скажет об этом прямо:
+    новый голос услышит после пробуждения горла."""
+    from core import throat as _throat
+    sid = _throat.normalize_speaker(word)
+    if not sid:
+        return ("не знаю такого голоса. Горло умеет: %s — скажи «голос "
+                "бая» или «голос ксения»" % _throat.speakers_line())
+    settings = _load_settings()
+    settings["throat_speaker"] = sid
+    if not _save_settings(settings):
+        return "голос не сменила (файл не записался) — скажи архитектору"
+    ru = _throat.SPEAKERS[sid]
+    if _throat.alive():
+        return ("теперь я говорю голосом %s (silero). Скажи «скажи вслух "
+                "…» — услышишь" % ru)
+    return ("голос сменила на %s — но горло спит: сейчас говорит "
+            "запасной рот (SAPI). Разбуди: кнопка scripts\\95_Горло.bat "
+            "или «проверь голос»" % ru)
+
+
+def voice_report() -> str:
+    """«какой голос» (Ф122): честное состояние ЦЕПИ — какой рот
+    говорит, каким голосом, и что с темпом и громкостью."""
+    from core import throat as _throat
+    settings = _load_settings()
+    if _throat.alive():
+        h = _throat.health() or {}
+        speaker = settings.get("throat_speaker") or _throat.DEFAULT_SPEAKER
+        return ("говорю голосом %s — горло silero на порту %d (модель %s); "
+                "%s" % (_throat.SPEAKERS.get(speaker, speaker),
+                        config.PORT_THROAT, h.get("model", "?"),
+                        _settings_line(settings)))
+    voices, error = list_voices()
+    if not error and voices:
+        ru = [n for n, c in voices if c.lower().startswith("ru")]
+        whose = ru[0] if ru else "%s (не русский — с акцентом)" \
+            % voices[0][0]
+        return ("горло (silero) спит — говорит запасной рот: %s (SAPI "
+                "Windows); %s" % (whose, _settings_line(settings)))
+    return ("голоса нет: горло спит, SAPI не готов (%s). Разбуди горло: "
+            "кнопка scripts\\95_Горло.bat или «проверь голос»"
+            % (error or "в Windows нет ни одного голоса"))
+
+
+def voices_list() -> str:
+    """«какие голоса» (Ф122): весь дом — горло и запасной рот."""
+    from core import throat as _throat
+    parts = ["%s (%s)" % (ru, "женский" if sid in _throat.FEMALE
+                         else "мужской")
+             for sid, ru in _throat.SPEAKERS.items()]
+    out = "горло (silero): " + ", ".join(parts)
+    voices, error = list_voices()
+    if error or not voices:
+        out += "; запасной рот (SAPI): " + (error or "голосов нет")
+    else:
+        out += ("; запасной рот (SAPI): "
+                + ", ".join(n for n, _c in voices[:4]))
+    return out + ". Смена: «голос <имя>»"
+
+
+# ---------------------------------------------------------------
+# Резолюция «говори вслух» (Ф57): озвучивать ли ответы
+# ---------------------------------------------------------------
+def out_enabled() -> bool:
+    """Включена ли озвучка ответов. Файла нет — молчу (по умолчанию
+    текстом: голос — воля Создателя, как моторика и живой язык)."""
+    try:
+        raw = json.loads(_out_path().read_text(encoding="utf-8"))
+        return bool(raw.get("on")) if isinstance(raw, dict) else False
+    except (OSError, ValueError):
+        return False
+
+
+def set_out(on: bool) -> str:
+    """«говори вслух» / «молчи» — резолюция Создателя."""
+    try:
+        _out_path().parent.mkdir(parents=True, exist_ok=True)
+        _out_path().write_text(json.dumps(
+            {"on": bool(on), "ts": time.strftime("%Y-%m-%d %H:%M:%S")},
+            ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        return "резолюцию не записала (файл не создался) — скажи архитектору"
+    if on:
+        voices, error = list_voices()
+        if error:
+            return ("вслух — да, но голос пока не готов: %s. Скажи "
+                    "«проверь голос» — разберёмся" % error)
+        if not voices:
+            return ("вслух — да, но в Windows нет ни одного голоса: "
+                    "Параметры → Время и язык → Речь → Добавить голос "
+                    "(русский). Ответы останутся текстом, пока голос "
+                    "не появится")
+        return ("хорошо — отвечаю вслух (голос %s). Полный разговор "
+                "без рук: говори «Марфа, …» — услышу и отвечу голосом"
+                % _pick_voice(voices))
+    return "хорошо — молчу, отвечаю текстом"
+
+
+# ---------------------------------------------------------------
+# Говорение
+# ---------------------------------------------------------------
+def _speak_script(text: str, settings: dict, voice: Optional[str]) -> str:
+    """Скрипт произнесения: голос с выбором в броне (нет такого имени —
+    SAPI возьмёт системный), темп и громкость из настроек."""
+    select = ""
+    if voice:
+        select = "try { $s.SelectVoice('%s') } catch {};" % _ps_escape(voice)
+    return (
+        "Add-Type -AssemblyName System.Speech; "
+        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+        "%s $s.Rate = %d; $s.Volume = %d; "
+        "$s.Speak('%s'); exit 0"
+        % (select, settings["rate"], settings["volume"],
+           _ps_escape(text))
+    )
+
+
+def speak(text: str, limit: int = SAY_LIMIT) -> str:
+    """Произнести текст вслух — синхронно, с честным отчётом.
+
+    Возвращает человекочитаемый итог; исключений не поднимает (закон
+    эфира: голос не рвёт дом). Секрета не прячем в речь: текст — либо
+    слова Создателя, либо органы дома (страж не нужен — речь не живёт
+    в системе дольше звука, в отличие от буфера №18).
+    """
+    text = str(text or "").strip()
+    if not text:
+        return "нечего говорить — текст пустой"
+    if len(text) > limit:
+        return ("вслух — не больше %d символов, а тут %d: скажи "
+                "короче, или я прочитаю вслух по частям, если попрошу "
+                "«прочитай вслух»" % (limit, len(text)))
+    if not _MOUTH_LOCK.acquire(blocking=False):
+        return "ещё говорю предыдущее — подожди, доскажу"
+    try:
+        settings = _load_settings()
+        # ГОЛОС v2 (Ф122): первый рот — горло silero; спит или подавился —
+        # SAPI подхватывает (цепь честна; закон эфира: горло не рвёт голос)
+        throat_was_alive = _throat_alive()
+        if throat_was_alive:
+            try:
+                from core import throat as _throat
+                ok, data = _throat.synthesize(
+                    text,
+                    settings.get("throat_speaker") or "baya",
+                    settings["rate"], settings["volume"])
+                if ok and _play_wav(data):
+                    speaker = settings.get("throat_speaker") or "baya"
+                    return ("Сказала вслух — голосом %s (silero, %d "
+                            "символов)"
+                            % (_throat.SPEAKERS.get(speaker, speaker),
+                               len(text)))
+            except Exception:
+                pass          # горло подавилось — SAPI скажет, дом не молчит
+        if not available():
+            if throat_was_alive:
+                return ("горло сказало, но рот станции не заиграл "
+                        "(winsound, PortAudio) — скажи архитектору")
+            return ("говорить не могу: PowerShell не найден — орган "
+                    "голоса живёт на станции (Windows); это песочница "
+                    "разработчика")
+        voices, error = list_voices()
+        if error:
+            return "голос не готов: " + error
+        if not voices:
+            return ("говорить не могу: в Windows не установлен ни один "
+                    "голос — Параметры → Время и язык → Речь → Добавить "
+                    "голос (русский)")
+        voice = _pick_voice(voices)
+        # SAPI говорит ~15 симв/с; запас ×3 — длинная фраза не убита
+        # таймаутом на середине слова
+        timeout = 20.0 + len(text) / 5.0
+        code, out = _ps(_speak_script(text, settings, voice), timeout)
+        if code != 0:
+            return ("не смогла произнести — Windows отказал: %s "
+                    "(скажи «проверь голос»)" % out.strip()[:200])
+        return ("Сказала вслух — голосом %s (%d символов)"
+                % (voice, len(text)))
+    finally:
+        _MOUTH_LOCK.release()
+
+
+def speak_async(text: str, limit: int = REPLY_LIMIT) -> None:
+    """Произнести в потоке-демоне: чат НЕ ждёт голоса (SAPI говорит
+    дольше, чем печатается ответ). Любой крах глотается — закон эфира;
+    тишина вместо ответа — не поломка дома."""
+    def _worker() -> None:
+        try:
+            speak(text, limit=limit)
+        except Exception:
+            pass            # голос не роняет дом, даже если сам упал
+    t = threading.Thread(target=_worker, name="marfa-voice", daemon=True)
+    t.start()
+    return None
+
+
+def say(text: str) -> str:
+    """«скажи вслух <текст>» — рефлекс агента: предыпросмотр честен
+    (доступность и голоса — по кэшу), само произнесение асинхронно."""
+    text = str(text or "").strip()
+    if not text:
+        return "что сказать? скажи «скажи вслух <текст>»"
+    if len(text) > SAY_LIMIT:
+        return ("вслух — не больше %d символов, а тут %d; подскажи "
+                "короче" % (SAY_LIMIT, len(text)))
+    if not _throat_alive():          # горло живо — SAPI не спрашиваем
+        if not available():
+            return ("говорить не могу: PowerShell не найден — орган голоса "
+                    "живёт на станции (Windows)")
+        voices, error = list_voices()
+        if error or not voices:
+            return ("голос не готов: %s — скажи «проверь голос», разберёмся"
+                    % (error or "в Windows нет ни одного голоса"))
+    speak_async(text, limit=SAY_LIMIT)
+    preview = text if len(text) <= 60 else text[:57] + "…"
+    if _throat_alive():
+        return "произношу вслух (горло silero): «%s»" % preview
+    return ("произношу вслух ЗАПАСНЫМ РОТОМ Windows (Ирина, робот) — "
+            "горло silero спит: «%s»\n"
+            "Скажи «проверь горло» — покажу точную причину."
+            % preview)
+
+
+# ---------------------------------------------------------------
+# Диагноз и живой тест
+# ---------------------------------------------------------------
+def diagnosis() -> str:
+    """Честный диагноз голоса одной строкой — для «статус» и «изучи
+    себя» (по образцу ears_diagnosis: причина, а не отговорка).
+    v2 (круг 23): горло живо — говорит горло; спит — SAPI как прежде."""
+    if _throat_alive():
+        from core import throat as _throat
+        settings = _load_settings()
+        speaker = settings.get("throat_speaker") or "baya"
+        extra = "; отвечаю вслух" if out_enabled() else ""
+        return ("говорю голосом %s (горло silero, порт %d)%s"
+                % (_throat.SPEAKERS.get(speaker, speaker),
+                   config.PORT_THROAT, extra))
+    if not available():
+        return "говорить не могу — PowerShell не найден (станция разработчика?)"
+    voices, error = list_voices()
+    if error:
+        return "диагноз не собрался: " + error[:120]
+    if not voices:
+        return ("говорить не могу — в Windows нет голосов; Параметры → "
+                "Время и язык → Речь → Добавить голос (русский)")
+    ru = [n for n, c in voices if c.lower().startswith("ru")]
+    extra = "; отвечаю вслух" if out_enabled() else ""
+    if ru:
+        return "говорю голосом %s (русский)%s" % (ru[0], extra)
+    return ("голос есть (%s), но русского нет — речь будет с акцентом%s"
+            % (voices[0][0], extra))
+
+
+def selftest() -> str:
+    """«проверь голос» — живой тест ЦЕПИ (v2, круг 23): горло silero —
+    первым (проба идёт через speak — тот же путь, что живой голос,
+    урок дня-13: тест команды идёт путём пользователя), SAPI —
+    запасным; отчёт честен в любом состоянии — включая спящее горло
+    (с путём пробуждения, доктрина слуги по вызову)."""
+    if _throat_alive():
+        from core import throat as _throat
+        h = _throat.health() or {}
+        settings = _load_settings()
+        speaker = settings.get("throat_speaker") or "baya"
+        lines = ["ПРОВЕРКА ГОЛОСА:"]
+        lines.append("  · горло (silero): ЖИВО на порту %d — голос %s, "
+                     "модель %s"
+                     % (config.PORT_THROAT,
+                        _throat.SPEAKERS.get(speaker, speaker),
+                        h.get("model", "?")))
+        verdict = speak("Марфа на связи. Слышно меня?", limit=200)
+        lines.append("  · проба: " + verdict)
+        lines.append("  · сменить голос: «голос <имя>» (какие есть — "
+                     "«какие голоса»); темп: «говори медленнее/быстрее»")
+        lines.append("  · включить ответы голосом: «говори вслух» "
+                     "(выключить — «молчи»)")
+        return "\n".join(lines)
+    return (_selftest_sapi()
+            + "\n  · горло (silero): спит — разбудит кнопка "
+            "scripts\\95_Горло.bat или «проверь голос» после неё "
+            "(посылка — docs\\ТЗ_Голос_v2.md, раздел 7)")
+
+
+def _selftest_sapi() -> str:
+    """Прежний тест дня-10 (SAPI): голоса системы, пробная фраза,
+    честный отказ на станции разработчика."""
+    lines = ["ПРОВЕРКА ГОЛОСА:"]
+    if not available():
+        lines.append("  · PowerShell не найден — тест живёт на станции "
+                     "(Windows); здесь орган в сухом режиме")
+        return "\n".join(lines)
+    voices, error = list_voices(refresh=True)
+    if error:
+        lines.append("  · Windows не рассказал про голоса: " + error[:160])
+        lines.append("  · лечение: скажи архитектору, консоль покажет глубже")
+        return "\n".join(lines)
+    if not voices:
+        lines.append("  · в Windows не установлен ни один голос")
+        lines.append("  · лечение: Параметры → Время и язык → Речь → "
+                     "Добавить голос (русский) — потом «проверь голос» снова")
+        return "\n".join(lines)
+    for name, culture in voices[:6]:
+        marker = " (русский — родной)" if culture.lower().startswith("ru") \
+            else " (%s — с акцентом)" % culture
+        lines.append("  · голос: %s%s" % (name, marker))
+    settings = _load_settings()
+    lines.append("  · " + _settings_line(settings))
+    # пробная фраза — вслух, синхронно: тест и есть тест
+    verdict = speak("Марфа на связи. Слышно меня?", limit=200)
+    lines.append("  · проба: " + verdict)
+    lines.append("  · включить ответы голосом: «говори вслух» (выключить — "
+                 "«молчи»)")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------
+# Ф64 «прочитай вслух <что>» — голос читает живые органы дома
+# ---------------------------------------------------------------
+
+def _fit(text: str, limit: int) -> tuple:
+    """Уложить текст в лимит честно: рез по границе предложения,
+    а не по середине слова; сообщаем, что показали не всё."""
+    text = str(text or "").strip()
+    if len(text) <= limit:
+        return text, False
+    head = text[:limit]
+    # последнее честное место конца фразы (урок M6: точка в конце
+    # строки — тоже конец фразы); граница поиска — четверть лимита:
+    # слишком ранний конец лучше, чем слово пополам
+    for i in range(len(head) - 1, max(limit // 4, 10), -1):
+        if head[i] in ".!?…\n":
+            return head[:i + 1].rstrip(), True
+    return head.rstrip(), True
+
+
+def _last_reply_text() -> str:
+    """Последний ответ Марфы — свежайшая сессия по времени файла
+    (урок Ф55: свежесть решает штамп, не алфавит)."""
+    from core.dialog import DialogStore
+    store = DialogStore()
+    try:
+        files = sorted(store.dir.glob("session_*.json"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        return ""
+    for p in files[:5]:
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            turns = data.get("turns") if isinstance(data, dict) else None
+            for t in reversed(turns or []):
+                if (isinstance(t, dict) and t.get("role") == "assistant"
+                        and str(t.get("text") or "").strip()):
+                    return str(t["text"])
+        except (OSError, ValueError, TypeError):
+            continue
+    return ""
+
+
+def read_aloud(target: str) -> str:
+    """«прочитай вслух экран / дневник / последний ответ / визитку» —
+    мост кругов 10 и 11: органы кормят голос. Порядок честности:
+    сначала цель (дёшево), потом голос (незачем глазам читать экран
+    девять секунд, чтобы узнать, что рта нет — урок скорости дня-9),
+    потом органы — каждый в своей броне (закон №10 р3). Вслух —
+    первые REPLY_LIMIT символов, рез по предложениям."""
+    target = str(target or "").strip().lower().rstrip("?!. ")
+    if not target:
+        return ("что прочитать вслух? экран, дневник, последний ответ "
+                "или визитку — «прочитай вслух <что>»")
+    known = (target in ("экран", "экрана", "надписи", "надписи на экране",
+                        "что на экране", "текст на экране")
+             or target in ("дневник", "дневника", "мой дневник",
+                           "дневник за сегодня", "последний дневник")
+             or target in ("ответ", "последний ответ", "прошлый ответ",
+                           "что ты сказала", "свой ответ")
+             or target in ("визитку", "визитка", "обо мне",
+                           "что ты помнишь обо мне"))
+    if not known:
+        return ("не знаю, что это: прочитаю вслух экран, дневник, "
+                "последний ответ или визитку")
+    if not _throat_alive():          # горло живо — SAPI не спрашиваем
+        if not available():
+            return ("прочитать вслух не могу: PowerShell не найден — орган "
+                    "голоса живёт на станции (Windows)")
+        voices, error = list_voices()
+        if error or not voices:
+            return ("голос не готов: %s — скажи «проверь голос», разберёмся"
+                    % (error or "в Windows нет ни одного голоса"))
+    if target in ("экран", "экрана", "надписи", "надписи на экране",
+                  "что на экране", "текст на экране"):
+        from core import eyes as _eyes
+        lines, note = _eyes.read_texts_list()
+        if not lines:
+            return note or "глаза не прочитали ни одной надписи"
+        text, cut = _fit("\n".join(lines), REPLY_LIMIT)
+        label = "надписи экрана (%d)" % len(lines)
+    elif target in ("дневник", "дневника", "мой дневник",
+                    "дневник за сегодня", "последний дневник"):
+        from core.diary import Diary
+        d = Diary()
+        last = d.last_diary()
+        if not last:
+            return ("дневников ещё нет — скажи «подведи день», будет "
+                    "что читать вслух")
+        try:
+            raw = (d.diary_dir / (last + ".md")).read_text(encoding="utf-8")
+        except OSError as e:
+            return "дневник не открылся: %s" % e
+        text, cut = _fit(raw, REPLY_LIMIT)
+        label = "дневник за %s" % last
+    elif target in ("ответ", "последний ответ", "прошлый ответ",
+                    "что ты сказала", "свой ответ"):
+        raw = _last_reply_text()
+        if not raw:
+            return ("моих ответов в архиве диалога нет — скажи что-нибудь, "
+                    "потом попроси прочитать вслух")
+        text, cut = _fit(raw, REPLY_LIMIT)
+        label = "последний ответ"
+    else:
+        from core import personcard
+        text, cut = _fit(personcard.render(), REPLY_LIMIT)
+        label = "визитку Создателя"
+    speak_async(text, limit=REPLY_LIMIT)
+    tail = " (первые %d символов — длинное читай глазами)" % len(text) if cut \
+        else ""
+    return "читаю вслух %s%s" % (label, tail)
+
+
+# ---------------- ПАТЧ_ГОЛОС_V3 ----------------
+_LAST_MOUTH = {"mouth": "", "ts": 0.0}
+
+_speak_v2 = speak
+
+
+def speak(text: str, limit: int = SAY_LIMIT) -> str:
+    """Обёртка: запоминает, КАКОЙ рот говорил (факт для «какой рот»)."""
+    out = _speak_v2(text, limit=limit)
+    try:
+        if "(silero" in out:
+            _LAST_MOUTH.update(mouth="silero", ts=time.time())
+        elif out.startswith("Сказала вслух"):
+            _LAST_MOUTH.update(mouth="sapi", ts=time.time())
+    except Exception:
+        pass
+    return out
+
+
+def mouth_report() -> str:
+    m = _LAST_MOUTH.get("mouth")
+    if not m:
+        return "рот ещё не говорил — скажи «скажи вслух привет»"
+    when = time.strftime("%H:%M:%S", time.localtime(_LAST_MOUTH.get("ts") or 0))
+    if m == "silero":
+        return "последний раз (%s) говорило ГОРЛО silero — живой голос" % when
+    return ("последний раз (%s) говорил ЗАПАСНОЙ рот Windows SAPI (Ирина); "
+            "горло silero спит или не смогло — скажи «проверь горло»" % when)
+
+
+def throat_report() -> str:
+    """«проверь горло»: почему Ирина, а не Silero — по ступеням."""
+    root = Path(__file__).resolve().parents[1]
+    port = getattr(config, "PORT_THROAT", 8084)
+    lines = ["ПРОВЕРКА ГОРЛА (silero), порт %s:" % port]
+    model = root / "models" / "voice" / "v5_6_ru.pt"
+    lines.append("  · модель %s: %s" % (
+        model, "есть (%d МБ)" % (model.stat().st_size // 1048576)
+        if model.exists() else "НЕТ"))
+    try:
+        import torch
+        lines.append("  · torch: %s" % torch.__version__)
+    except Exception as e:
+        lines.append("  · torch: НЕТ — %s (Silero без него не загрузится)" % e)
+    try:
+        from core import throat as _t
+    except Exception as e:
+        lines.append("  · core/throat.py НЕ ИМПОРТИРУЕТСЯ: %s" % e)
+        lines.append("  · лечение: нужен слуга-горло (docs\\ТЗ_Голос_v2.md, §7)")
+        return "\n".join(lines)
+    try:
+        alive = _t.alive()
+    except Exception as e:
+        alive = False
+        lines.append("  · alive() упал: %s: %s" % (type(e).__name__, e))
+    lines.append("  · слуга: %s" % ("ЖИВ" if alive else "СПИТ"))
+    if alive:
+        try:
+            lines.append("  · health: %s" % (_t.health(),))
+        except Exception as e:
+            lines.append("  · health упал: %s" % e)
+    else:
+        bats = sorted((root / "scripts").glob("9*.bat"))
+        lines.append("  · кнопки: %s" % (", ".join(b.name for b in bats)
+                                         or "нет 9*.bat"))
+        lines.append("  · лечение: поднять слугу на %s с моделью v5_6_ru.pt"
+                     % port)
+    return "\n".join(lines)

@@ -71,6 +71,7 @@ import base64
 import json
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -503,7 +504,14 @@ def speak(text: str, limit: int = SAY_LIMIT) -> str:
     try:
         settings = _load_settings()
         # ГОЛОС v2 (Ф122): первый рот — горло silero; спит или подавился —
-        # SAPI подхватывает (цепь честна; закон эфира: горло не рвёт голос)
+        # SAPI подхватывает (цепь честна; закон эфира: горло не рвёт голос).
+        # ПРАВКА 25.11 «ТИХАЯ ИРИНА» (урок живого приёма): слуга синтезировал
+        # (счётчик фраз растёт), оба рта станции не заиграли (winmm молчит
+        # в RDP, sounddevice нет) — а чат получал «Сказала вслух — голосом
+        # Irina», будто всё в порядке. Дом не молчит (SAPI говорит — закон),
+        # но больше и не ВРЁТ: причина провала едет в ответе запасного рта
+        # и запоминается для «какой рот».
+        throat_note = ""
         throat_was_alive = _throat_alive()
         if throat_was_alive:
             try:
@@ -518,8 +526,14 @@ def speak(text: str, limit: int = SAY_LIMIT) -> str:
                             "символов)"
                             % (_throat.SPEAKERS.get(speaker, speaker),
                                len(text)))
+                if ok:
+                    throat_note = ("горло silero синтезировало, но оба рта "
+                                   "станции не заиграли (winsound, "
+                                   "PortAudio)")
+                else:
+                    throat_note = "слуга-горло отказал в синтезе"
             except Exception:
-                pass          # горло подавилось — SAPI скажет, дом не молчит
+                throat_note = "горло споткнулось на синтезе"
         if not available():
             if throat_was_alive:
                 return ("горло сказало, но рот станции не заиграл "
@@ -542,8 +556,13 @@ def speak(text: str, limit: int = SAY_LIMIT) -> str:
         if code != 0:
             return ("не смогла произнести — Windows отказал: %s "
                     "(скажи «проверь голос»)" % out.strip()[:200])
-        return ("Сказала вслух — голосом %s (%d символов)"
-                % (voice, len(text)))
+        # ПРАВКА «ТИХАЯ ИРИНА»: запасной рот говорит, но называет причину,
+        # почему не горло. Начало «Сказала вслух» сохранено — обёртка
+        # «какой рот» (ПАТЧ_V3) узнаёт свой рот по прежнему якорю.
+        note = (" — " + throat_note + "; скажи «проверь горло»") \
+            if throat_note else ""
+        return ("Сказала вслух ЗАПАСНЫМ ртом (SAPI, %s)%s (%d символов)"
+                % (voice, note, len(text)))
     finally:
         _MOUTH_LOCK.release()
 
@@ -581,7 +600,12 @@ def say(text: str) -> str:
                     % (error or "в Windows нет ни одного голоса"))
     speak_async(text, limit=SAY_LIMIT)
     preview = text if len(text) <= 60 else text[:57] + "…"
-    return "произношу вслух: «%s»" % preview
+    if _throat_alive():
+        return "произношу вслух (горло silero): «%s»" % preview
+    return ("произношу вслух ЗАПАСНЫМ РОТОМ Windows (Ирина, робот) — "
+            "горло silero спит: «%s»\n"
+            "Скажи «проверь горло» — покажу точную причину."
+            % preview)
 
 
 # ---------------------------------------------------------------
@@ -788,3 +812,166 @@ def read_aloud(target: str) -> str:
     tail = " (первые %d символов — длинное читай глазами)" % len(text) if cut \
         else ""
     return "читаю вслух %s%s" % (label, tail)
+
+
+# ---------------- ПАТЧ_ГОЛОС_V3 ----------------
+_LAST_MOUTH = {"mouth": "", "ts": 0.0, "note": ""}
+
+_speak_v2 = speak
+
+
+def speak(text: str, limit: int = SAY_LIMIT) -> str:
+    """Обёртка: запоминает, КАКОЙ рот говорил и ПОЧЕМУ запасной
+    (факт для «какой рот» — причина, а не «спит или не смогло»)."""
+    out = _speak_v2(text, limit=limit)
+    try:
+        if "(silero" in out:
+            _LAST_MOUTH.update(mouth="silero", ts=time.time(), note="")
+        elif out.startswith("Сказала вслух"):
+            # ПРАВКА: причина провала горла — из честного ответа speak
+            note = ""
+            if "оба рта" in out:
+                note = "горло синтезировало, но рты станции не заиграли"
+            elif "отказал в синтезе" in out:
+                note = "слуга-горло отказал в синтезе"
+            elif "споткнулось на синтезе" in out:
+                note = "горло споткнулось на синтезе"
+            _LAST_MOUTH.update(mouth="sapi", ts=time.time(), note=note)
+    except Exception:
+        pass
+    return out
+
+
+def mouth_report() -> str:
+    m = _LAST_MOUTH.get("mouth")
+    if not m:
+        return "рот ещё не говорил — скажи «скажи вслух привет»"
+    when = time.strftime("%H:%M:%S", time.localtime(_LAST_MOUTH.get("ts") or 0))
+    if m == "silero":
+        return "последний раз (%s) говорило ГОРЛО silero — живой голос" % when
+    why = _LAST_MOUTH.get("note")
+    return ("последний раз (%s) говорил ЗАПАСНОЙ рот Windows SAPI (Ирина)%s. "
+            "Скажи «проверь горло» — разложу по ступеням"
+            % (when, ": " + why if why else ""))
+
+
+def throat_report() -> str:
+    """«проверь горло»: почему Ирина, а не Silero — по ступеням.
+
+    ПРАВКА архитектора (25.11, вечер): РТЫ — первые подозреваемые.
+    Синтез делает ОТДЕЛЬНЫЙ процесс слуги (torch живёт там), а ЗВУК
+    вытаскивает панель: winsound (winmm молчит в RDP — урок 23-2) и
+    PortAudio/sounddevice. Слуга жив, а говорит Ирина — значит, роты.
+    torch оставлен в отчёте, но с честной подписью «нужен СЛУГЕ»:
+    раньше отчёт посылал чинить torch в панели, где он ни при чём.
+    """
+    root = Path(__file__).resolve().parents[1]
+    port = getattr(config, "PORT_THROAT", 8084)
+    lines = ["ПРОВЕРКА ГОРЛА (silero), порт %s:" % port]
+    try:
+        import winsound  # noqa: F401
+        lines.append("  · рот 1 (winsound/winmm): есть — в RDP-сеансе может "
+                     "молчать (урок 23-2)")
+    except Exception:
+        lines.append("  · рот 1 (winsound/winmm): НЕТ — норма вне Windows")
+    try:
+        import sounddevice  # noqa: F401
+        lines.append("  · рот 2 (PortAudio/sounddevice): есть")
+    except Exception as e:
+        lines.append("  · рот 2 (PortAudio/sounddevice): НЕТ — %s. "
+                     "Лечение: python -m pip install sounddevice" % e)
+    model = root / "models" / "voice" / "v5_6_ru.pt"
+    lines.append("  · модель %s: %s" % (
+        model, "есть (%d МБ)" % (model.stat().st_size // 1048576)
+        if model.exists() else "НЕТ"))
+    try:
+        import torch
+        lines.append("  · torch (нужен СЛУГЕ, не панели): %s" % torch.__version__)
+    except Exception as e:
+        lines.append("  · torch (нужен СЛУГЕ, не панели): НЕТ — %s" % e)
+    try:
+        from core import throat as _t
+    except Exception as e:
+        lines.append("  · core/throat.py НЕ ИМПОРТИРУЕТСЯ: %s" % e)
+        lines.append("  · лечение: нужен слуга-горло (docs\\ТЗ_Голос_v2.md, §7)")
+        return "\n".join(lines)
+    try:
+        alive = _t.alive()
+    except Exception as e:
+        alive = False
+        lines.append("  · alive() упал: %s: %s" % (type(e).__name__, e))
+    lines.append("  · слуга: %s" % ("ЖИВ" if alive else "СПИТ"))
+    if alive:
+        try:
+            lines.append("  · health: %s" % (_t.health(),))
+        except Exception as e:
+            lines.append("  · health упал: %s" % e)
+        lines.append("  · слуга ЖИВ, синтез идёт — если слышишь Ирину, "
+                     "виноваты РТЫ станции (см. выше). Скажи «скажи "
+                     "вслух привет», потом «какой рот» — покажу причину")
+    else:
+        bats = sorted((root / "scripts").glob("9*.bat"))
+        lines.append("  · кнопки: %s" % (", ".join(b.name for b in bats)
+                                         or "нет 9*.bat"))
+        lines.append("  · лечение: поднять слугу на %s с моделью v5_6_ru.pt"
+                     % port)
+    return "\n".join(lines)
+
+
+def wake_throat() -> str:
+    """«разбуди горло» — кнопка 95 [2] словами, без консоли."""
+    root = Path(__file__).resolve().parents[1]
+    model = root / "models" / "voice" / "v5_6_ru.pt"
+    if not model.exists():
+        return "модели нет: %s — положи v5_6_ru.pt (кнопка 95 [4])" % model
+    missing = []
+    for mod in ("requests", "sounddevice"):
+        try:
+            __import__(mod)
+        except Exception:
+            missing.append(mod)
+    if missing:
+        return ("не хватает модулей: %s. Поставь в ТОТ ЖЕ python, что крутит панель:\n"
+                "%s -m pip install %s"
+                % (", ".join(missing), sys.executable, " ".join(missing)))
+    try:
+        from core import throat as _t
+    except Exception as e:
+        return "горло не поднялось: core/throat не импортируется: %s" % e
+    # ПРАВКА: ensure_server может не существовать (слугу поднимает кнопка 95
+    # отдельным процессом) — честный отказ и путь лечения старым путём,
+    # а не AttributeError-загадка
+    if not hasattr(_t, "ensure_server"):
+        return ("слуга сам не поднимается изнутри панели (нет функции "
+                "ensure_server). Подними кнопкой scripts\\95_Горло.bat, "
+                "потом скажи «проверь горло» — подтвержу")
+    try:
+        ok, note = _t.ensure_server()
+    except Exception as e:
+        return "горло не поднялось: %s: %s — пришли это архитектору" % (type(e).__name__, e)
+    if ok:
+        return ("горло ЖИВО на порту %s. %s\n"
+                "Проба: «скажи вслух привет» — должен быть живой голос, не Ирина."
+                % (getattr(config, "PORT_THROAT", 8084), note))
+    return ("горло НЕ ОЖИЛО: %s\nПришли этот вывод; частая причина — загрузка "
+            "модели в torch 2.6 (weights_only)." % note)
+
+
+def lay_throat() -> str:
+    """«уложи горло» — слуга посылке не нужен, пусть спит.
+
+    ПРАВКА: lay_to_rest может не существовать — честный отказ
+    с путём лечения, а не «AttributeError» под бронёй.
+    """
+    try:
+        from core import throat as _t
+    except Exception as e:
+        return "горло не уложилось: core/throat не импортируется: %s" % e
+    if not hasattr(_t, "lay_to_rest"):
+        return ("уложить горло изнутри панели не могу (нет функции "
+                "lay_to_rest) — закрой окно слуги (кнопка 95) или "
+                "скажи архитектору, добавлю")
+    try:
+        return _t.lay_to_rest()
+    except Exception as e:
+        return "горло не уложилось: %s: %s" % (type(e).__name__, e)
