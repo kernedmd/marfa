@@ -267,19 +267,10 @@
             return box;
         }
 
-        async function send() {
-            const i = document.getElementById('inp');
-            const t = i.value.trim();
-            if(!t) return;
-            add('user', t);
-            i.value = '';
-            const box = thinkingBox();
-            const sentAt = Date.now();
-            const chatEl = document.getElementById('chat');
-            const tick = setInterval(() => {                     // секундомер — свой, не ждём сервера
-                const el = document.getElementById('think-secs');
-                if (el) el.textContent = fmtSecs((Date.now() - sentAt) / 1000) + ' с';
-            }, 500);
+        // Классический ход (Ф156 — фоллбэк): POST /api/chat + опрос эфира.
+        // Так чат жил до стрим-канала — и живёт дальше, если стрим не
+        // открылся (ход на сервере ещё НЕ начался — повторный ход честен).
+        async function classicTurn(t, box) {
             const poll = setInterval(() => {                      // живая стадия из эфира дома
                 fetch('/api/progress?session=' + encodeURIComponent(SID))
                     .then(r => r.json())
@@ -309,11 +300,111 @@
                 const d = await r.json();
                 add('ai', d.reply || 'Нет ответа', d.html);
                 addStamp(d.secs, d.source_label, d.tok, d.ptok);
+            } finally {
+                clearInterval(poll);
+            }
+        }
+
+        // Ф156-фоллбэк «ход доживает»: стрим оборвался ПОСЕРЕДИ хода —
+        // ход на сервере НЕ повторяем (иначе Марфа ответит дважды).
+        // Ждём эфир (busy=false), забираем ответ из истории разговора.
+        async function pickupTurn(t) {
+            const deadline = Date.now() + 6 * 60 * 1000;   // потолок — как у мозга
+            while (Date.now() < deadline) {
+                try {
+                    const p = await fetch('/api/progress?session=' + encodeURIComponent(SID)).then(r => r.json());
+                    if (!p.busy) break;
+                } catch (e) { /* эфир моргнул — ждём дальше */ }
+                await new Promise(res => setTimeout(res, 1500));
+            }
+            const d = await fetch('/api/dialog/' + encodeURIComponent(SID)).then(r => r.json());
+            const turns = d.turns || [];
+            const last = turns.length && turns[turns.length - 1];
+            if (last && last.role === 'assistant' && last.text) {
+                add('ai', last.text, last.html);
+                addStamp(last.secs, last.src_label, last.tok, last.ptok);
+            } else {
+                add('ai', 'Стрим оборвался, и ответ не доехал — повтори, пожалуйста, вопрос.');
+            }
+        }
+
+        async function send() {
+            const i = document.getElementById('inp');
+            const t = i.value.trim();
+            if(!t) return;
+            add('user', t);
+            i.value = '';
+            const box = thinkingBox();
+            const sentAt = Date.now();
+            const chatEl = document.getElementById('chat');
+            const tick = setInterval(() => {                     // секундомер — свой, не ждём сервера
+                const el = document.getElementById('think-secs');
+                if (el) el.textContent = fmtSecs((Date.now() - sentAt) / 1000) + ' с';
+            }, 500);
+            // Ф156 «СТРИМ-КАНАЛ» (№15 роадмапа 30): буквы ответа печатаются
+            // живьём БЕЗ опроса — стадия и черновик летят событиями SSE.
+            // Заголовки пришли и тип event-stream — ход УЖЕ живёт на
+            // сервере: рвётся связь посреди — НЕ дублируем ход, забираем
+            // ответ из истории (pickupTurn); не открылся вовсе (ход не
+            // начался) — классический путь (classicTurn).
+            let started = false;
+            try {
+                try {
+                    const r = await fetch('/api/chat/stream', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({text: t, session: SID})
+                    });
+                    const ct = r.headers.get('content-type') || '';
+                    if (!r.ok || ct.indexOf('event-stream') < 0 || !r.body || !r.body.getReader) {
+                        throw new Error('стрим не открыт');
+                    }
+                    started = true;                    // ход живёт на сервере
+                    const reader = r.body.getReader();
+                    const dec = new TextDecoder();
+                    let buf = '', done = false;
+                    while (!done) {
+                        const {value, done: ended} = await reader.read();
+                        if (ended) break;
+                        buf += dec.decode(value, {stream: true});
+                        let cut;
+                        while ((cut = buf.indexOf('\n\n')) >= 0) {
+                            const frame = buf.slice(0, cut);
+                            buf = buf.slice(cut + 2);
+                            const line = frame.split('\n').find(l => l.indexOf('data:') === 0);
+                            if (!line) continue;
+                            let d;
+                            try { d = JSON.parse(line.slice(5)); } catch (e) { continue; }
+                            if (d.type === 'stage') {
+                                const st = document.getElementById('think-stage');
+                                if (st) st.textContent = d.text || '';
+                            } else if (d.type === 'preview') {
+                                // Ф157: черновик — ПОЛНЫЙ растущий текст,
+                                // не хвост: ответ рождается целиком
+                                const pv = document.getElementById('think-preview');
+                                if (pv) {
+                                    pv.textContent = d.text || '';
+                                    document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
+                                }
+                            } else if (d.type === 'final') {
+                                done = true;
+                                add('ai', d.reply || 'Нет ответа', d.html);
+                                addStamp(d.secs, d.source_label, d.tok, d.ptok);
+                            } else if (d.type === 'error') {
+                                done = true;
+                                add('ai', 'Ошибка: ' + (d.error || 'ход не удался'));
+                            }
+                        }
+                    }
+                    if (!done) throw new Error('стрим оборвался до ответа');
+                } catch (e) {
+                    if (started) await pickupTurn(t);       // ход доживает — без дубля
+                    else await classicTurn(t, box);         // ход не начинался — классика
+                }
             } catch(e) {
                 add('ai', 'Ошибка: ' + e);
             } finally {
                 clearInterval(tick);
-                clearInterval(poll);
                 box.remove();
                 chatEl.scrollTop = chatEl.scrollHeight;
             }
