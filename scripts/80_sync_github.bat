@@ -63,9 +63,33 @@ exit /b %ERRORLEVEL%
 
 :run
 cd /d C:\Marfa
-title МАРФА — синхронизация дома с GitHub (одна кнопка, v3.8)
-rem ТЕЛО КНОПКИ 3.8
+title МАРФА — синхронизация дома с GitHub (одна кнопка, v3.9)
+rem ТЕЛО КНОПКИ 3.9
 rem ------------------------------------------------------------
+rem  v3.9 (27.11.2026, круг 28 «ГОЛОС УПАВШЕГО ШАГА»): кнопка
+rem  умерла молча. Живой лог 27.11: сразу после шапки — «ОСТАНОВКА
+rem  ПО ОШИБКЕ» без единого слова причины. Разбор: замер истории
+rem  (count-objects) не ответил в C:\Marfa — git не в PATH или
+rem  .git болен/отсутствует, findstr вернул ошибку 1, а проверка
+rem  «if errorlevel 1 goto :fail» ПОСЛЕ ИЗМЕРЕНИЯ убила петлю —
+rem  до :ensure_repo и до приёма bundle: петля не могла принять
+rem  даже собственное лекарство. Пять законов: Ф171 ГОЛОС
+rem  УПАВШЕГО — :fail называет шаг (переменная STEP) и печатает
+rem  живую диагностику (версия git, ответ count-objects без
+rem  подавления, наличие .git и .git_old); Ф172 ИЗМЕРЕНИЕ — НЕ
+rem  ПРИГОВОР — смерть блока 0b-0 осталась только у
+rem  surgery, сбой измерения — честное сообщение, петля едет дальше
+rem  (заодно возвращено обещание v3.0 «репозиторий создаётся сам
+rem  при первом запуске», случайно убитое v3.1: без .git смерть
+rem  шла РАНЬШЕ ensure_repo); Ф173 GIT ПРЕДСТАВЛЯЕТСЯ ПЕРВЫМ — нет
+rem  git в PATH — один честный отказ с лекарством (кнопка 05), не
+rem  каскад fatal; Ф174 ЧЕСТНЫЙ ОТВЕТНЫЙ BUNDLE — сборка ответного
+rem  bundle проверяется: не собрался — [x], финал не зовёт в чат
+rem  несуществующий файл; Ф175 КОММИТ ПОД КОНТРОЛЕМ — коммиты дома
+rem  (снимок и синхронизация) проверяются: не создался — честная
+rem  остановка, а не «Коммит создан» поверх провала. Протокол: v1.13,
+rem  разделы 2 и 8. Запускник (до :run) заморожен байт-точно — закон
+rem  круга 19 жив и здесь.
 rem  v3.8 (24.11.2026, круг 22 «ЗАМОК КОРНЯ»): закон v1.12 — приём
 rem  обновляет файлы, не процессы: панель и мозг живут в памяти со
 rem  старым кодом до перезапуска (живой урок дня-13: проверки круга
@@ -137,19 +161,32 @@ set "LOCKED=1"
 
 echo ============================================================
 echo  МАРФА — синхронизация Z440 ^<-^> GitHub ^<-^> Архитектор
-echo  Петля: docs\SYNC_PROTOCOL_v1.md (v1.12, разделы 2 и 8)
+echo  Петля: docs\SYNC_PROTOCOL_v1.md (v1.13, разделы 2 и 8)
 echo ============================================================
 
 :: ---------- 0b-0. Толщина истории: тяжёлым сборкам в git не место ----------
 set "SURGERY=0"
 set "GSIZE=0"
+set "STEP=0b-0: измерение толщины истории"
+echo [0b-0] Измеряю историю дома ^(git count-objects^) ...
 for /f "tokens=2" %%s in ('git count-objects -v 2^>nul ^| findstr /C:"size:"') do set /a GSIZE+=%%s
 for /f "tokens=2" %%s in ('git count-objects -v 2^>nul ^| findstr /C:"size-pack:"') do set /a GSIZE+=%%s
-if %GSIZE% GTR 102400 call :surgery
-if errorlevel 1 goto :fail
+if %GSIZE% GTR 0 (
+  echo     история дома: ~%GSIZE% КБ ^(порог хирургии 102400 КБ^)
+) else (
+  echo     [i] история не измерилась — git не ответил или репозиторий пуст.
+  echo         Не приговор: шаг [0b] ниже проверит git и репозиторий честно.
+)
+rem Ф172: измерение — не приговор; умирает только настоящая работа — surgery
+if %GSIZE% GTR 102400 (
+  call :surgery
+  if errorlevel 1 goto :fail
+)
 
 :: ---------- 0b. Репозиторий дома: создать при первом запуске ----------
+set "STEP=0b: репозиторий дома — git и .git"
 call :ensure_repo
+if errorlevel 1 goto :fail
 call :ensure_gitignore
 
 :: ---------- 0c. Инвентаризация размеров: что пойдёт в git ----------
@@ -164,16 +201,22 @@ if exist scripts\inventory_audit.py (
 )
 
 :: ---------- 0d. Первый коммит, если git только что родился ----------
+set "STEP=0d: первый коммит дома (снимок)"
 git rev-parse --verify -q HEAD >nul 2>&1
 if errorlevel 1 (
   git add -A
   git commit -q -m "дом: снимок до объединения с архитектором (первый запуск)"
+  if errorlevel 1 (
+    echo [x] первый коммит не создался — покажи архитектору вывод git выше
+    goto :fail
+  )
   echo [1] Создан первый коммит дома — текущее состояние без рантайма
 ) else (
   echo [1] Репозиторий дома жив — продолжаю
 )
 
 :: ---------- 2. GitHub: забрать свою историю ----------
+set "STEP=2: забор истории GitHub"
 echo [2] GitHub: забираю историю github.com/kernedmd/marfa ...
 if "%SURGERY%"=="1" (
   echo     история пересобрана — GitHub обновлю с заменой ^(push --force^) на шаге [6]
@@ -205,6 +248,7 @@ set "IMPORTED=0"
 if exist incoming\*.bundle (
   for /f "delims=" %%b in ('dir /b /o-d incoming\*.bundle') do (
     echo [3] Приём bundle архитектора: incoming\%%b
+    set "STEP=3: приём bundle incoming\%%b"
     call :import_bundle "incoming\%%b"
     if errorlevel 1 goto :fail
     set "IMPORTED=1"
@@ -253,6 +297,7 @@ if exist scripts\clean_home.py (
   )
   echo.
 ) else if "%IMPORTED%"=="1" (
+  set "STEP=3b: контроль приёма — scripts\clean_home.py не доехал"
   echo [x] Bundle принят, но код архитектора не доехал ^(scripts\clean_home.py нет^) —
   echo     слияние не состоялось. Сообщи архитектору и пришли вывод целиком.
   goto :fail
@@ -269,9 +314,14 @@ git add -A
 rem страховка от крупных файлов (>50 МБ)
 powershell -NoProfile -Command "git diff --cached --name-only | ForEach-Object { if ((Test-Path $_) -and ((Get-Item $_).Length -gt 50MB)) { git reset -q HEAD -- $_; Write-Host ('[!] Убран из коммита (крупнее 50 МБ): ' + $_) } }"
 
+set "STEP=5: коммит синхронизации дома"
 git diff --cached --quiet
 if errorlevel 1 (
   git commit -q -m "Синхронизация дома %date% %time%"
+  if errorlevel 1 (
+    echo [x] коммит синхронизации не создался — покажи архитектору вывод git выше
+    goto :fail
+  )
   echo [5] Коммит создан
 ) else (
   echo [5] Новых изменений нет
@@ -293,6 +343,7 @@ if errorlevel 1 (
 )
 
 :: ---------- 6. Свежий bundle для архитектора ----------
+set "STEP=7: сборка ответного bundle для архитектора"
 if not exist outgoing mkdir outgoing
 rem тяжёлые огрызки эпохи жирной истории кнопка убирает сама
 for %%f in (outgoing\*.bundle) do if %%~zf GTR 104857600 (
@@ -300,16 +351,28 @@ for %%f in (outgoing\*.bundle) do if %%~zf GTR 104857600 (
   del /q "outgoing\%%~nxf"
 )
 for /f %%t in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmm"') do set STAMP=%%t
-git bundle create "outgoing\marfa-%STAMP%.bundle" main >nul
-echo [7] Bundle готов: outgoing\marfa-%STAMP%.bundle
+set "BUNDLE_OK=1"
+git bundle create "outgoing\marfa-%STAMP%.bundle" main >nul 2>&1
+if errorlevel 1 (
+  set "BUNDLE_OK=0"
+  echo [7] [x] Ответный bundle НЕ собрался — петля доехала, но архитектору
+  echo     нечего отправить. Покажи архитектору это окно целиком.
+) else (
+  echo [7] Bundle готов: outgoing\marfa-%STAMP%.bundle
+)
 
 echo ============================================================
 echo  ГОТОВО. Последние коммиты:
 git log --oneline -3
 echo.
-echo  Положи outgoing\marfa-%STAMP%.bundle в чат архитектору —
-echo  он заберёт его на станцию, прогонит тесты и вернёт правки.
-echo  ^(_тяжёлые старые bundle из outgoing уже убраны автоматом_^)
+if "%BUNDLE_OK%"=="1" (
+  echo  Положи outgoing\marfa-%STAMP%.bundle в чат архитектору —
+  echo  он заберёт его на станцию, прогонит тесты и вернёт правки.
+  echo  ^(_тяжёлые старые bundle из outgoing уже убраны автоматом_^)
+) else (
+  echo  [x] Ответного bundle нет — см. [7] выше: покажи архитектору
+  echo      это окно целиком.
+)
 echo ============================================================
 if defined LOCKED del /q "%SYNC_LOCK%" >nul 2>&1
 if not defined MARFA_SYNC_AUTO pause
@@ -392,6 +455,16 @@ if errorlevel 1 git commit -q -m "локальные правки перед с�
 exit /b 0
 
 :ensure_repo
+rem Ф173 (круг 28): git представляется первым — если его нет в PATH,
+rem один честный отказ с лекарством, а не каскад fatal от каждого
+rem git-вызова по очереди (урок 27.11: молчаливая смерть кнопки)
+git --version >nul 2>&1
+if errorlevel 1 (
+  echo [x] git не найден в PATH — кнопка без него не живёт.
+  echo     Лечение: запусти scripts\05_install_git.bat ^(кнопка 05^),
+  echo     затем нажми эту кнопку снова.
+  exit /b 1
+)
 if not exist .git (
   echo [0] Git-репозитория дома нет — создаю, один раз:
   git init -b main
@@ -419,6 +492,15 @@ exit /b 0
 :fail
 echo ============================================================
 echo  ОСТАНОВКА ПО ОШИБКЕ. Протокол: docs\SYNC_PROTOCOL_v1.md
+if not defined STEP set "STEP=неизвестен — петля упала до первого шага"
+echo  Упал шаг: %STEP%
+echo.
+echo  Живая диагностика — пришли архитектору этот блок целиком:
+git --version 2>&1
+git count-objects -v 2>&1
+if exist .git (echo  .git: на месте) else (echo  .git: ПАПКИ НЕТ в %CD% — скажи архитектору)
+if exist .git_old echo  .git_old: ЕСТЬ — история уезжала в хирургию, не удаляй, скажи архитектору
+echo  CWD: %CD%
 echo ============================================================
 if defined LOCKED del /q "%SYNC_LOCK%" >nul 2>&1
 if not defined MARFA_SYNC_AUTO pause
