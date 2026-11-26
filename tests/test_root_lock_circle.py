@@ -52,6 +52,9 @@ PROTOCOL = ROOT / "docs" / "SYNC_PROTOCOL_v1.md"
 # а переход v3.7 -> v3.8 — факт истории (закон круга 19, образец
 # круга 21: KRUG20_BOOKS_COMMIT в test_quiet_loop_circle.py)
 KRUG21_BOOKS_COMMIT = "28162d0"
+# продление круга 28: книги круга-27 — последнее состояние тела v3.8
+# (рабочая копия уже несёт v3.9, и переход v3.8 -> v3.9 якорится ниже)
+KRUG27_BOOKS_COMMIT = "e3d80e0"
 
 
 @pytest.fixture()
@@ -242,19 +245,24 @@ def _text() -> str:
 def test_transition_v3_7_to_v3_8_by_fc_from_history():
     """ГЛАВНЫЙ ЯКОРЬ Ф120: переход v3.7 -> v3.8 по закону круга 19.
 
-    Старое тело (v3.7) — из истории (книги круга-21, последнее
-    состояние v3.7), новое — рабочая копия. fc /b эквивалент: байты
-    различаются -> errorlevel 1 -> смена ОБЪЯВЛЯЕТСЯ, петля доезжает
-    до ГОТОВО на старом теле (Ф109 жив). Замороженная зона (запускник)
-    идентична байт-в-байт (Ф110 жив).
+    Продление круга 28: оба тела — из истории (книги круга-21 —
+    последнее v3.7, книги круга-27 — последнее v3.8; рабочая копия
+    уже несёт v3.9 — свежий переход v3.8 -> v3.9 якорится в своём
+    тесте ниже). fc /b эквивалент: байты различаются -> errorlevel
+    1 -> смена ОБЪЯВЛЯЕТСЯ, петля доезжает до ГОТОВО на старом
+    теле (Ф109 жив). Замороженная зона (запускник) идентична
+    байт-в-байт (Ф110 жив).
     """
-    tree = _text()
     old = subprocess.run(
         ["git", "-C", str(ROOT), "show",
          KRUG21_BOOKS_COMMIT + ":scripts/80_sync_github.bat"],
         capture_output=True, text=True, encoding="utf-8").stdout.replace("\r\n", "\n")
+    tree = subprocess.run(
+        ["git", "-C", str(ROOT), "show",
+         KRUG27_BOOKS_COMMIT + ":scripts/80_sync_github.bat"],
+        capture_output=True, text=True, encoding="utf-8").stdout.replace("\r\n", "\n")
     assert "rem ТЕЛО КНОПКИ 3.7" in old, "история должна нести тело v3.7 (книги круга-21)"
-    assert "rem ТЕЛО КНОПКИ 3.8" in tree, "рабочая копия — тело v3.8"
+    assert "rem ТЕЛО КНОПКИ 3.8" in tree, "история должна нести тело v3.8 (книги круга-27)"
     assert old != tree, "тела обязаны различаться — иначе перехода нет"
 
     def frozen(s):
@@ -263,6 +271,32 @@ def test_transition_v3_7_to_v3_8_by_fc_from_history():
 
     assert frozen(old) == frozen(tree), \
         "замороженная зона менялась между v3.7 и v3.8 — закон Ф110 нарушен"
+
+
+def test_transition_v3_8_to_v3_9_by_fc_from_history():
+    """ГЛАВНЫЙ ЯКОРЬ Ф120 (продление круга 28): переход v3.8 -> v3.9.
+
+    Старое тело (v3.8) — из истории (книги круга-27, последнее
+    состояние v3.8), новое — рабочая копия. fc /b эквивалент: байты
+    различаются -> errorlevel 1 -> смена ОБЪЯВЛЯЕТСЯ, петля доезжает
+    до ГОТОВО на старом теле (Ф109 жив). Замороженная зона (запускник)
+    идентична байт-в-байт (Ф110 жив).
+    """
+    tree = _text()
+    old = subprocess.run(
+        ["git", "-C", str(ROOT), "show",
+         KRUG27_BOOKS_COMMIT + ":scripts/80_sync_github.bat"],
+        capture_output=True, text=True, encoding="utf-8").stdout.replace("\r\n", "\n")
+    assert "rem ТЕЛО КНОПКИ 3.8" in old, "история должна нести тело v3.8 (книги круга-27)"
+    assert "rem ТЕЛО КНОПКИ 3.9" in tree, "рабочая копия — тело v3.9"
+    assert old != tree, "тела обязаны различаться — иначе перехода нет"
+
+    def frozen(s):
+        end = s.index("\nexit /b %ERRORLEVEL%\n") + len("\nexit /b %ERRORLEVEL%\n")
+        return s[:end]
+
+    assert frozen(old) == frozen(tree), \
+        "замороженная зона менялась между v3.8 и v3.9 — закон Ф110 нарушен"
 
 
 def test_krug21_laws_survive_krug22():
@@ -278,21 +312,24 @@ def test_krug21_laws_survive_krug22():
 
 
 def test_ghost_and_freeze_survive_krug22():
-    """Призрак перезаписи спит и после v3.8: строк «rem BTN_VER» —
-    ровно одна (замороженная 3.5 шапки), живой маркер — ниже :run."""
+    """Призрак перезаписи спит и после v3.9 (продление круга 28):
+    строк «rem BTN_VER» — ровно одна (замороженная 3.5 шапки),
+    живой маркер — ниже :run."""
     t = _text()
     hits = [ln for ln in t.split("\n") if "rem BTN_VER" in ln]
     assert hits == ["rem BTN_VER 3.5"]
     assert t.index("rem BTN_VER 3.5") < t.index("\n:run")
-    assert t.index("rem ТЕЛО КНОПКИ 3.8") > t.index("\n:run")
+    assert t.index("rem ТЕЛО КНОПКИ 3.9") > t.index("\n:run")
 
 
-def test_protocol_names_v1_12_laws():
-    """Протокол v1.12 называет закон «приём обновляет файлы, не
-    процессы» и замок корня — книга не молчит (урок круга 17:
-    исключение без причины — забытость, с причиной — закон)."""
+def test_protocol_names_v1_13_laws():
+    """Протокол v1.13 называет закон «голос упавшего шага» и все
+    старые законы — книга не молчит (урок круга 17: исключение без
+    причины — забытость, с причиной — закон). Продление круга 28."""
     doc = PROTOCOL.read_text(encoding="utf-8")
-    assert "ПРОТОКОЛ СИНХРОНИЗАЦИИ v1.12" in doc
-    assert "обновляет файлы, не процессы" in doc
+    assert "ПРОТОКОЛ СИНХРОНИЗАЦИИ v1.13" in doc
+    assert "ГОЛОС УПАВШЕГО" in doc               # закон круга 28
+    assert "ИЗМЕРЕНИЕ — НЕ ПРИГОВОР" in doc       # Ф172 в книге
+    assert "обновляет файлы, не процессы" in doc  # закон круга 22 жив
     assert "замок" in doc.lower() or "замка" in doc.lower()
-    assert "v3.7 -> v3.8" in doc or "v3.7 → v3.8" in doc
+    assert "v3.8 -> v3.9" in doc or "v3.8 → v3.9" in doc

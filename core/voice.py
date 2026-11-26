@@ -865,7 +865,6 @@ def throat_report() -> str:
     torch оставлен в отчёте, но с честной подписью «нужен СЛУГЕ»:
     раньше отчёт посылал чинить torch в панели, где он ни при чём.
     """
-    root = Path(__file__).resolve().parents[1]
     port = getattr(config, "PORT_THROAT", 8084)
     lines = ["ПРОВЕРКА ГОРЛА (silero), порт %s:" % port]
     try:
@@ -880,12 +879,16 @@ def throat_report() -> str:
     except Exception as e:
         lines.append("  · рот 2 (PortAudio/sounddevice): НЕТ — %s. "
                      "Лечение: python -m pip install sounddevice" % e)
-    model = root / "models" / "voice" / "v5_6_ru.pt"
+    # Ф169: модель — из config (единый источник пути; тесты подменяют
+    # config, не файлы станции)
+    model = Path(config.THROAT_MODEL_FILE)
     lines.append("  · модель %s: %s" % (
         model, "есть (%d МБ)" % (model.stat().st_size // 1048576)
         if model.exists() else "НЕТ"))
+    torch_ok = False
     try:
         import torch
+        torch_ok = True
         lines.append("  · torch (нужен СЛУГЕ, не панели): %s" % torch.__version__)
     except Exception as e:
         lines.append("  · torch (нужен СЛУГЕ, не панели): НЕТ — %s" % e)
@@ -910,11 +913,28 @@ def throat_report() -> str:
                      "виноваты РТЫ станции (см. выше). Скажи «скажи "
                      "вслух привет», потом «какой рот» — покажу причину")
     else:
-        bats = sorted((root / "scripts").glob("9*.bat"))
+        bats = sorted((Path(config.HOME_DIR) / "scripts").glob("9*.bat"))
         lines.append("  · кнопки: %s" % (", ".join(b.name for b in bats)
                                          or "нет 9*.bat"))
-        lines.append("  · лечение: поднять слугу на %s с моделью v5_6_ru.pt"
-                     % port)
+        # Ф169 «ЛЕКАРСТВО СЛОВОМ» (круг 27, живой лог дня-16): строка
+        # «поднять слуга на 8084» звучала консолью — Создатель спросил
+        # «а ты сможешь себя починить?», и мозг унёсся патчить модель.
+        # Если модель и torch на месте — лечение называем СЛОВОМ дома,
+        # которое Марфа исполняет сама; не хватает посылки — честно
+        # говорим ЧЕГО именно не хватает (torch_ok — из проверки выше)
+        if model.exists() and torch_ok:
+            lines.append("  · лечение: скажи «разбуди горло» — подниму "
+                         "слугу сама (модель и torch на месте); или кнопка "
+                         "scripts\\95_Горло.bat, потом «скажи вслух привет»")
+        else:
+            lack = []
+            if not model.exists():
+                lack.append("модели v5_6_ru.pt")
+            if not torch_ok:
+                lack.append("torch (нужен слуге)")
+            lines.append("  · лечение: не хватает %s — посылка docs\\"
+                         "ТЗ_Голос_v2.md, раздел 7 (кнопка 95)"
+                         % " и ".join(lack))
     return "\n".join(lines)
 
 

@@ -110,9 +110,11 @@ def test_protocol_names_quiet_loop_law():
     включая разморозку («n» на вопросе — gc пропустит удаление).
     Продление круга 22: заголовок книги вырос до v1.12 (закон
     «приём обновляет файлы, не процессы»), законы круга 21 — в ней.
+    Продление круга 28: заголовок вырос до v1.13 (закон «голос
+    упавшего шага»), законы кругов 21 и 22 — в ней.
     """
     doc = PROTOCOL.read_text(encoding="utf-8")
-    assert "ПРОТОКОЛ СИНХРОНИЗАЦИИ v1.12" in doc
+    assert "ПРОТОКОЛ СИНХРОНИЗАЦИИ v1.13" in doc
     assert "ТИХИЙ GIT" in doc and "ОДНА ПЕТЛЯ" in doc
     assert "gc.auto 0" in doc
     assert "Should I try again" in doc
