@@ -723,6 +723,17 @@ def _smoke_test(target: Path) -> tuple:
     test_file = config.HOME_DIR / "tests" / ("test_%s.py" % target.stem)
     related = _related_tests(target.stem)
     files = ([test_file.name] if test_file.is_file() else []) + related
+    # Ф161 «МАСТЕРСКАЯ» (круг 26): патч в core\customtools\ проверяется
+    # золотым якорем мастерской — тестом, валидирующим КАЖДЫЙ
+    # инструмент-файл (форма, подъём, вызов). Красный якорь = откат:
+    # кривой инструмент не живёт в доме ни секунды
+    try:
+        if "customtools" in [p.lower() for p in target.parts]:
+            anchor = config.HOME_DIR / "tests" / "test_krug26_circle.py"
+            if anchor.is_file() and anchor.name not in files:
+                files.append(anchor.name)
+    except Exception:
+        pass
     try:
         if files:
             rc, tail = _run_pytest(files, config.SELF_WRITE_TEST_SEC)

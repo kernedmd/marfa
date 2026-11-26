@@ -288,9 +288,10 @@ def _patch_pipeline(monkeypatch, text=None, fail=False,
             return None, "слуга не поднялся"
         return text, "расшифровал"
 
-    def fake_agent(t, history=None):
+    def fake_agent(t, history=None, voice=False):
         asked["agent"] += 1
         asked["agent_text"] = t
+        asked["voice"] = voice
         return FakeReply(reply)
 
     monkeypatch.setattr(bridge, "transcribe", fake_transcribe)
@@ -306,6 +307,9 @@ def test_handle_phrase_full_exchange(home, monkeypatch):
     assert rec["answer"] == "Сейчас 15:34, воскресенье."
     assert rec["seq"] == 1 and rec["tok"] == 42
     assert asked["agent"] == 1
+    # Ф160 (круг 26): голосовой ход несёт дому свой ИСТОЧНИК — агент
+    # знает, что его позвали голосом (не печатью)
+    assert asked["voice"] is True
     # разговор голосом — своя сессия, переживает всё (№11)
     from core.dialog import DialogStore
     turns = DialogStore().turns(config.VOICE_SESSION)
@@ -359,8 +363,10 @@ def test_handle_phrase_whisper_failure_is_error_not_call(home, monkeypatch):
 
 
 def test_handle_phrase_agent_crash_keeps_hearing(home, monkeypatch):
-    """Крах агента — слух жив: ошибка в журнал, служба слушает дальше."""
-    def boom(t, history=None):
+    """Крах агента — слух жив: ошибка в журнал, служба слушает дальше.
+    Шов продлён честно (Ф160, круг 26): голосовой ход несёт voice=True —
+    сигнатура шва знает источник реплики."""
+    def boom(t, history=None, voice=False):
         raise RuntimeError("мозг уснул на ходу")
 
     monkeypatch.setattr(bridge, "transcribe",

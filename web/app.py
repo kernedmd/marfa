@@ -349,7 +349,7 @@ def api_chat():
         session = _safe_session(str(data.get("session") or "default"))
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    history = DialogStore.render_messages(DIALOGS.turns(session))
+    history = DialogStore.render_messages(DIALOGS.unified_turns(session))
     progress.begin(session)
     t0 = time.time()
     try:
@@ -382,7 +382,9 @@ def api_chat_stream():
         session = _safe_session(str(data.get("session") or "default"))
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    history = DialogStore.render_messages(DIALOGS.turns(session))
+    # Ф160 (круг 26): история хода — единая: своя сессия + хвост голосовой
+    # (мозг видит ОДИН разговор с метками «[голосом]», а не половину)
+    history = DialogStore.render_messages(DIALOGS.unified_turns(session))
     events: "_queue.Queue" = _queue.Queue()
     _DONE = object()
 
