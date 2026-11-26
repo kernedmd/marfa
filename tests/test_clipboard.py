@@ -147,12 +147,27 @@ def test_clipboard_no_module_honest(home, monkeypatch):
 def test_agent_clipboard_command(home, clip):
     a = _agent()
     for msg in ("в буфер привет", "запиши в буфер: привет",
-                "скопируй привет", "в буфер привет!"):
+                "скопируй привет"):
         r = a.handle(msg)
         assert r.tool_used == "clipboard", msg
         assert r.source == "python", msg
         assert a.brain.calls == 0, msg
     assert clip.copied == "привет"
+
+
+def test_agent_clipboard_keeps_punctuation(home, clip):
+    """ЯКОРЬ ПРОДЛЁН ЧЕСТНО (круг 24, правка «РАУНД 4 №20»): хвостовая
+    пунктуация у буфера — КОНТЕНТ, не шум. Старый закон («в буфер
+    привет!» → «привет») тихо портил данные: «скопируй пароль!!!»
+    клало «пароль». Буфер — перенос данных, а не вежливая фраза:
+    восклицательный знак доезжает до адресата."""
+    a = _agent()
+    r = a.handle("в буфер привет!")
+    assert r.tool_used == "clipboard"
+    assert clip.copied == "привет!"
+    r = a.handle("скопируй пароль!!!")
+    assert r.tool_used == "clipboard"
+    assert clip.copied == "пароль!!!"
 
 
 def test_agent_clipboard_guard_denial_is_text(home, clip):
