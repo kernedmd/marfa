@@ -120,6 +120,9 @@ def test_start_marfa_drive_skipped_when_alive(monkeypatch, tmp_path):
     monkeypatch.setattr(sm, "_alive", lambda port, path: True)
     monkeypatch.setattr(sm, "_ears_alive", lambda: True)
     monkeypatch.setattr(sm, "_drive_alive", lambda: True)
+    # круг 30: мост — шестой слуга; для фокуса этого якоря (стремление
+    # живо — не трогаем) он тоже жив, продление по ритуалу
+    monkeypatch.setattr(sm, "_bridge_alive", lambda: True)
     monkeypatch.setattr(sm, "_spawn", lambda cmd: spawned.append(cmd))
     sm.main(["--config", str(p)])
     assert spawned == []                       # все живы — никого не трогаем

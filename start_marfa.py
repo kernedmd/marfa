@@ -61,6 +61,8 @@ EARS_STATUS_FILE = HOME / "data" / "ears_status.json"  # пишет служба
 EARS_FRESH_SECS = 120        # сердцебиение свежее этого — ухо живо
 DRIVE_STATUS_FILE = HOME / "data" / "drive_status.json"  # служба стремления
 DRIVE_FRESH_SECS = 180      # 3 такта по 60 с — сердце стремления живо
+BRIDGE_STATUS_FILE = HOME / "data" / "voice" / "status.json"  # мост ушей
+BRIDGE_FRESH_SECS = 120     # тик моста 30 с — как у ушей, два тика запаса
 
 # (имя, порт, путь здоровья, поле конфига, сколько секунд ждать старта)
 # МОЗГ ЖДЁТ 120 с (день-8): 30B с mmap поднимается десятками секунд;
@@ -104,6 +106,11 @@ TEMPLATE = {
     ),
     "ears_cmd": "venv\\Scripts\\python.exe sensors\\ears.py --service",
     "drive_cmd": "venv\\Scripts\\python.exe -m core.drive --service",
+    # Ф182 (круг 30): мост ушей — шестой слуга; до него службу поднимали
+    # руками — и после каждого закрытого окна консоли слух фраз умирал
+    # незаметно (живой лог дня-17: «служба моста: сердцебиения нет» —
+    # дважды за один день, при живых ушах-стороже)
+    "bridge_cmd": "venv\\Scripts\\python.exe sensors\\ear_bridge.py --service",
 }
 
 
@@ -378,6 +385,19 @@ def _drive_alive() -> bool:
         return False
 
 
+def _bridge_alive() -> bool:
+    """Живость моста ушей (Ф182, круг 30): служба пишет сердце в
+    data\\voice\\status.json; свежее %d с — сторож имени + ловец фраз
+    + whisper по зову слушают. Файла/свежести нет — мост не поднят
+    (до круга 30 это молча значило «голосовые фразы не доходят»).""" % BRIDGE_FRESH_SECS
+    try:
+        rec = json.loads(BRIDGE_STATUS_FILE.read_text(encoding="utf-8"))
+        ts = dt.datetime.fromisoformat(rec["ts"])
+        return (dt.datetime.now() - ts).total_seconds() <= BRIDGE_FRESH_SECS
+    except (OSError, ValueError, KeyError):
+        return False
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="автозапуск дома Марфы")
     ap.add_argument("--config", default=str(CONFIG_FILE),
@@ -450,6 +470,23 @@ def main(argv=None) -> int:
         _spawn(drive_cmd)
         print("   тик раз в минуту; упавшая работа — урок, служба не сдаётся")
         started.append("стремление")
+
+    # -- мост ушей: шестой слуга (Ф182, круг 30) — вторая ступень слуха.
+    # Уши-сторож (ступень 1) дом поднимал с рождения; мост (ступень 2:
+    # ловец фраз + whisper по зову) до круга 30 ждал человеческой памяти:
+    # окно консоли закрылось — и голосовые фразы умирали молча при живых
+    # ушах (живой лог дня-17, дважды за день). Живость — по статус-файлу,
+    # как у ушей (не HTTP-слуга). Старые конфиги без bridge_cmd получают
+    # команду по умолчанию (апгрейд на лету — прецедент ears_cmd).
+    bridge_cmd = (cfg.get("bridge_cmd") or TEMPLATE["bridge_cmd"]).strip()
+    if _bridge_alive():
+        print("мост ушей: уже жив — ловит фразы, не трогаю")
+        skipped.append("мост ушей")
+    else:
+        print("мост ушей: поднимаю службу (сторож + фразы + whisper по зову)...")
+        _spawn(bridge_cmd)
+        print("   без микрофона и модели не умирает: статус и ожидание, как у ушей")
+        started.append("мост ушей")
 
     # -- прогрев мозга (Ф84): слуги подняты — пока Создатель открывает
     #    панель, дом в фоне платит префилл статики; первый вопрос не
