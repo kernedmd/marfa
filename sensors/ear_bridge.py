@@ -65,8 +65,15 @@ from sensors.ears import (  # noqa: E402
 )
 
 # что считаем «именем в расшифровке»: точное слово (whisper слышит лучше
-# сторожа, оглушения ему не прощаем — иначе «марка красивая» будила бы мозг)
-_WAKE_EXACT = ("марфа", "марфой", "марфу", "марфе", "марфы")
+# сторожа, оглушения ему не прощаем — иначе «марка красивая» будила бы мозг).
+# Ф181 «ЧУЖИЕ БУКВЫ» (круг 30, день-17: живой лог — «Марфа, который час?» →
+# голосом: «Marfa, which hour?» — имени в фразе нет — НЕ ЗОВ): whisper на
+# короткой русской фразе иногда решает, что язык английский, и пишет имя
+# ЛАТИНИЦЕЙ. Имя — это имя на любых буквах: латинская транслитерация
+# падежей входит в словарь; гейт остаётся строгим — «марка» не зов и на
+# кириллице, и латиницей (marke/marca в словаре нет).
+_WAKE_EXACT = ("марфа", "марфой", "марфу", "марфе", "марфы",
+               "marfa", "marfu", "marfy", "marfe", "marfoy", "marfoi")
 
 
 # ---------------------------------------------------------------
@@ -225,7 +232,12 @@ def _spawn_server(server: Path, model: Path) -> str:
     Минимальный набор флагов (не выдумываем): модель, адрес, порт и
     OpenAI-путь --inference-path — его понимают свежие сборки whisper.cpp.
     """
-    cmd = ('"%s" -m "%s" --host 127.0.0.1 --port %d --inference-path %s'
+    # Ф181: -l ru — язык фразы от дома, не гадание автоматики whisper
+    # (живой лог дня-17: русская фраза расшифровалась английской
+    # транслитерацией «Marfa, which hour?»). Сборка b4938 флаг знает
+    # (проверено по строкам бинарника: «-l LANG, --language LANG»).
+    cmd = ('"%s" -m "%s" -l ru --host 127.0.0.1 --port %d '
+           '--inference-path %s'
            % (server, model, config.PORT_WHISPER,
               config.WHISPER_TRANSCRIBE_PATH))
     subprocess.Popen(cmd, shell=True, cwd=str(config.HOME_DIR),
@@ -296,10 +308,14 @@ def _post_transcription(wav_bytes: bytes) -> str:
     {"text": "..."} — как у OpenAI, только локально.
     """
     import requests
+    # Ф181: language=ru в каждом запросе — подсказка без перезапуска слуги
+    # (живёт в поле формы, как у OpenAI; сервер без флага при старте тоже
+    # поймёт). Латиница имени лечится и здесь, и словарём _WAKE_EXACT.
     r = requests.post(
         config.WHISPER_URL + config.WHISPER_TRANSCRIBE_PATH,
         files={"file": ("phrase.wav", wav_bytes, "audio/wav")},
-        data={"model": "whisper-1", "response_format": "json"},
+        data={"model": "whisper-1", "response_format": "json",
+              "language": "ru"},
         timeout=config.WHISPER_TIMEOUT_SEC)
     if r.status_code == 404:
         raise RuntimeError("слуга не знает путь %s — нужен --inference-path "

@@ -65,8 +65,11 @@ def test_wait_timeout(monkeypatch):
 # ---------- main ----------
 
 def _run_main(monkeypatch, tmp_path, alive_ports, cfg_brain="",
-              ears_alive=False, drive_alive=False):
-    """main() с подменёнными швами; возвращает (код, вывод, список spawn)."""
+              ears_alive=False, drive_alive=False, bridge_alive=False):
+    """main() с подменёнными швами; возвращает (код, вывод, список spawn).
+    Круг 30: мост — шестой слуга; шов _bridge_alive подменяется как
+    уши и стремление (продление по ритуалу: старые якоря не ломаются,
+    их фокус — свои слуги)."""
     spawned, logged = [], []
     monkeypatch.setattr(sm, "_alive",
                         lambda port, path: port in alive_ports)
@@ -75,6 +78,7 @@ def _run_main(monkeypatch, tmp_path, alive_ports, cfg_brain="",
     monkeypatch.setattr(sm, "_log", lambda line: logged.append(line))
     monkeypatch.setattr(sm, "_ears_alive", lambda: ears_alive)
     monkeypatch.setattr(sm, "_drive_alive", lambda: drive_alive)
+    monkeypatch.setattr(sm, "_bridge_alive", lambda: bridge_alive)
     cfg = _cfg(tmp_path, brain=cfg_brain)
     import io
     import contextlib
@@ -87,19 +91,21 @@ def _run_main(monkeypatch, tmp_path, alive_ports, cfg_brain="",
 def test_main_all_alive(monkeypatch, tmp_path):
     rc, out, spawned, logged = _run_main(monkeypatch, tmp_path,
                                          {8082, 8083, 5001}, ears_alive=True,
-                                         drive_alive=True)
+                                         drive_alive=True, bridge_alive=True)
     assert rc == 0
     assert not spawned
-    assert out.count("уже жив") == 5          # мозг, глаза, панель, уши, стремление
+    # круг 30: «уже жив» — шесть (мост добавился к пятёрке)
+    assert out.count("уже жив") == 6
     assert "уши: уже жив" in out
     assert "стремление: уже жив" in out
+    assert "мост ушей: уже жив" in out
     assert logged and "уже жили" in logged[0]
 
 
 def test_main_starts_eyes_only(monkeypatch, tmp_path):
     """Мозг и панель живы, глаза и уши нет — поднимаются глаза и уши."""
     rc, out, spawned, _ = _run_main(monkeypatch, tmp_path, {8082, 5001},
-                                    drive_alive=True)
+                                    drive_alive=True, bridge_alive=True)
     assert rc == 0
     assert spawned == ["run eyes", "run ears"]
     assert "ожил" in out
@@ -107,7 +113,8 @@ def test_main_starts_eyes_only(monkeypatch, tmp_path):
 
 def test_main_starts_drive_too(monkeypatch, tmp_path):
     """Ничего нет — поднимаются и глаза, и уши, и стремление."""
-    rc, out, spawned, _ = _run_main(monkeypatch, tmp_path, set())
+    rc, out, spawned, _ = _run_main(monkeypatch, tmp_path, set(),
+                                     bridge_alive=True)
     assert rc == 0
     assert "run drive" not in spawned
     assert spawned[-1].endswith("core.drive --service")   # стремление пятым
@@ -116,7 +123,8 @@ def test_main_starts_drive_too(monkeypatch, tmp_path):
 def test_main_brain_without_cmd(monkeypatch, tmp_path):
     """Мозг не жив и команды нет — честная подсказка, дом не блокируется."""
     rc, out, spawned, _ = _run_main(monkeypatch, tmp_path, {8083, 5001},
-                                    cfg_brain="", ears_alive=True, drive_alive=True)
+                                    cfg_brain="", ears_alive=True, drive_alive=True,
+                                    bridge_alive=True)
     assert rc == 0
     assert not spawned                      # глаза, панель и уши уже живы
     assert "впиши" in out and "brain_cmd" in out
@@ -127,7 +135,8 @@ def test_main_brain_cmd_used(monkeypatch, tmp_path):
     """Мозг не жив, команда вписана — поднимается и ЖДЁТСЯ (день-8:
     старт без ожидания прятал смерть команды за «проверь позже»)."""
     rc, out, spawned, _ = _run_main(monkeypatch, tmp_path, {8083, 5001},
-                                    cfg_brain="run brain", ears_alive=True, drive_alive=True)
+                                    cfg_brain="run brain", ears_alive=True, drive_alive=True,
+                                    bridge_alive=True)
     assert rc == 0
     assert spawned == ["run brain"]
     assert "ожил" in out
@@ -198,6 +207,55 @@ def test_ears_alive_by_heartbeat(monkeypatch, tmp_path):
     assert sm._ears_alive() is False               # сердце замерло
     f.write_text("не json вовсе", encoding="utf-8")
     assert sm._ears_alive() is False               # мусор в файле — не живо
+
+
+# ---------- Ф182 «МОСТ — ШЕСТОЙ СЛУГА» (круг 30, день-17) ----------
+
+def test_main_starts_bridge_too(monkeypatch, tmp_path):
+    """Ничего нет — мост поднимается ШЕСТЫМ (после стремления):
+    до круга 30 службу поднимали руками из консоли — окно закрылось,
+    и голосовые фразы умирали молча при живых ушах (дважды за день-17).
+    """
+    rc, out, spawned, _ = _run_main(monkeypatch, tmp_path, set())
+    assert rc == 0
+    assert sm.TEMPLATE["bridge_cmd"] in spawned
+    assert spawned[-1] == sm.TEMPLATE["bridge_cmd"]     # шестым — последним
+    assert "мост ушей: поднимаю" in out
+
+
+def test_main_bridge_alive_skips_spawn(monkeypatch, tmp_path):
+    """Мост уже жив (сердце свежее) — второй экземпляр не поднимается:
+    два моста = два ловца фраз на одном микрофоне."""
+    rc, out, spawned, _ = _run_main(monkeypatch, tmp_path, {8082, 8083, 5001},
+                                    ears_alive=True, drive_alive=True,
+                                    bridge_alive=True)
+    assert rc == 0
+    assert sm.TEMPLATE["bridge_cmd"] not in spawned
+    assert "мост ушей: уже жив" in out
+
+
+def test_main_bridge_default_for_old_config(monkeypatch, tmp_path):
+    """Старый конфиг без bridge_cmd — мост всё равно поднимается
+    (апгрейд на лету, прецедент ears_cmd)."""
+    p = tmp_path / "start_marfa.json"
+    p.write_text(json.dumps({"brain_cmd": "", "eyes_cmd": "run eyes",
+                             "panel_cmd": "run panel"}, ensure_ascii=False),
+                 encoding="utf-8")
+    spawned, logged = [], []
+    monkeypatch.setattr(sm, "_alive", lambda port, path: True)
+    monkeypatch.setattr(sm, "_spawn", lambda cmd: spawned.append(cmd))
+    monkeypatch.setattr(sm, "_log", lambda line: logged.append(line))
+    monkeypatch.setattr(sm, "_ears_alive", lambda: False)
+    monkeypatch.setattr(sm, "_drive_alive", lambda: False)
+    monkeypatch.setattr(sm, "_bridge_alive", lambda: False)
+    import io
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = sm.main(["--config", str(p)])
+    assert rc == 0
+    assert sm.TEMPLATE["bridge_cmd"] in spawned    # команда по умолчанию
+    assert "мост ушей: поднимаю" in buf.getvalue()
 
 
 # ---------- Ф84 «ПРОГРЕВ МОЗГА» (день-12) ----------
