@@ -327,6 +327,182 @@ def selftest() -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------
+# v3 (27.11, круг 29 «УШИ НЕ ВРУТ», Ф176–Ф177): слух отвечает
+# ПРАВДОЙ и умеет слушать ПО СЛОВУ. Живой лог дня-16: «Да, ты уже
+# все же найчилсь слышать микрофон?» — «Да, я слышу микрофон.
+# Проверила — всё работает» — ВЫДУМКА (никакой проверки не было);
+# «Слушай микрофон 15 секунд» — «неизвестный инструмент: listen»
+# (мозг выдумал инструмент, дом не умел слушать по слову).
+# ---------------------------------------------------------------
+
+def _status_record() -> Optional[dict]:
+    """Живая запись статуса службы ушей (data\\ears_status.json) или None.
+
+    Путь читается ЛЕНИВО (закон песочницы conftest): тесты патчат
+    config.EARS_STATUS_FILE поверх автопесочницы — орган следует за
+    патчем, а не за значением на импорте.
+    """
+    try:
+        raw = json.loads(Path(config.EARS_STATUS_FILE).read_text(
+            encoding="utf-8"))
+        return raw if isinstance(raw, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _heart_age(rec: dict) -> Optional[float]:
+    """Сколько секунд назад билось сердце службы (None — не разобрать)."""
+    try:
+        ts = dt.datetime.fromisoformat(str(rec.get("ts", "")))
+        return (dt.datetime.now() - ts).total_seconds()
+    except ValueError:
+        return None
+
+
+def _service_alive(rec: Optional[dict]) -> bool:
+    """Живо ли ухо СЕЙЧАС: статус ok И сердце свежее (допуск 90 с,
+    -300 с — перевод часов). Больше никакой «веры» — только факты."""
+    if rec is None:
+        return False
+    age = _heart_age(rec)
+    return (str(rec.get("state", "")) == "ok"
+            and age is not None and -300.0 <= age <= 90.0)
+
+
+def hearing_answer() -> str:
+    r"""Ф176 «УШИ НЕ ВРУТ»: честный ответ о СЛУХЕ — из живого сердца
+    службы ушей, не из фантазии мозга.
+
+    Вопрос «ты меня слышишь?» — вопрос о ФАКТЕ, и отвечает орган из
+    первых рук: статус службы ушей (data\ears_status.json) — живое
+    сердце, причина, устройство. Уши (вход) и горло (выход) названы
+    РАЗНЫМИ органами: живой лог отвечал на вопрос о слухе отговоркой
+    про голос. Никаких «проверила — всё работает» без проверки (R11).
+    """
+    rec = _status_record()
+    if rec is None:
+        return ("Не знаю, слышу ли: служба ушей не пишет сердцебиение "
+                "(data\\ears_status.json нет) — она не запущена. Поднять: "
+                "Старт_Марфа.bat (пятый слуга) или «проверь уши» — осмотр "
+                "по ступеням. Это про УШИ (вход); голос — отдельный орган.")
+    age = _heart_age(rec)
+    state = str(rec.get("state", ""))
+    dev = str(rec.get("device", ""))
+    if _service_alive(rec):
+        tail = " (микрофон: %s)" % dev if dev else ""
+        return ("Да, слышу — проверила по живому сердцу службы ушей, не "
+                "по памяти: сторож имени слушает%s и слышит слово «Марфа». "
+                "Говори «Марфа, …» вслух. Если я не отвечаю на голос — "
+                "возможно, спит вторая ступень (whisper-мост): скажи "
+                "«проверь мост»." % tail)
+    if state == "ok":
+        return ("Не могу сказать «слышу»: сердце службы замерло (%s с "
+                "назад) — служба висит или умерла. Скажи «проверь уши» — "
+                "осмотр по ступеням с лечением."
+                % ("?" if age is None else int(age)))
+    # no_mic / no_model / no_sounddevice / прочее — причина по имени
+    reason = {
+        "no_mic": "микрофон не найден или занят",
+        "no_model": "модель ушей не найдена (кнопка 85_fix_ears)",
+        "no_sounddevice": "не поставлен sounddevice (pip install sounddevice)",
+    }.get(state, state or "неизвестное состояние")
+    err = str(rec.get("error", ""))[:120]
+    if err:
+        reason += ": %s" % err
+    return ("Нет, не слышу — %s. Проверила по живому статусу службы ушей, "
+            "это не догадка. Лечение: «проверь уши» — осмотр по ступеням. "
+            "Уши (вход) и горло (голос, выход) — разные органы: неслышащая "
+            "Марфа всё равно может говорить." % reason)
+
+
+def _heards_since(start: dt.datetime, limit: int = 8) -> list:
+    """Расслышанное службой ушей С МОМЕНТА start: полные фразы, без
+    обрывков и дублей.
+
+    Сторож пишет в журнал и ПРОМЕЖУТОЧНЫЕ результаты (частичные
+    распознавания растут приставкой: «при», «приве», «привет») —
+    фрагмент, целиком лежащий в другой фразе окна, поглощается ею:
+    Создатель читает фразы, а не их обрывки. Допуск -1 с: запись той
+    же секунды, что и старт, — услышанная нашим окном.
+    """
+    try:
+        raw = Path(config.EARS_LOG_FILE).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    texts: list = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict) or rec.get("sensor") != "ears":
+            continue
+        text = str(rec.get("text", "")).strip()
+        if not text:
+            continue
+        try:
+            ts = dt.datetime.fromisoformat(str(rec.get("ts", "")))
+        except ValueError:
+            continue
+        if ts >= start - dt.timedelta(seconds=1):
+            texts.append(text)
+    kept = []
+    for t in texts:
+        low = t.lower()
+        # обрывок, лежащий внутри ДРУГОЙ фразы окна, — мусор сторожа
+        if any(low != other.lower() and low in other.lower()
+               for other in texts):
+            continue
+        kept.append(t)
+    uniq: list = []
+    for t in kept:                       # подряд-дубли — одно слово дважды
+        if not uniq or uniq[-1].lower() != t.lower():
+            uniq.append(t)
+    return uniq[-limit:]
+
+
+def listen(seconds: float = 10.0, sleep=time.sleep) -> str:
+    r"""Ф177 «СЛУШАЙ МИКРОФОН <N СЕК>»: живое прослушивание БЕЗ второго
+    микрофона.
+
+    Служба ушей (сторож имени) слушает ВСЕГДА и пишет всё расслышанное
+    в logs\ears_log.jsonl — второе ухо в тот же микрофон не открываем
+    (делить устройство с самой собой — конфликт). Вместо этого ждём N
+    секунд, пока слушает служба, потом честно читаем из журнала всё,
+    что она расслышала за это окно. Тишина — тишина, выдумки нет.
+    Ухо мертво — честный отказ (Ф176), не тишина вместо диагноза.
+    Границы: 5–60 секунд (голая просьба — 10).
+    """
+    try:
+        seconds = float(seconds)
+    except (TypeError, ValueError):
+        seconds = 10.0
+    seconds = max(5.0, min(60.0, seconds))
+    rec = _status_record()
+    if not _service_alive(rec):
+        return (hearing_answer()
+                + " Пока ухо не живое — слушать нечего: сначала "
+                  "лечение, потом «слушай микрофон» снова.")
+    start = dt.datetime.now()
+    sleep(seconds)
+    heard = _heards_since(start)
+    if not heard:
+        return ("Слушала %d секунд — тишина: сторож имени ничего не "
+                "расслышал. Говори громче и в микрофон; зов «Марфа» он "
+                "слышит точно. Хочешь длинную фразу — скажи «Марфа, …»: "
+                "whisper-мост (вторая ступень) расшифрует её целиком."
+                % int(seconds))
+    lines = ["Слушала %d секунд, вот что расслышало ухо-сторож (короткие "
+             "фразы, слово в слово не гарантирую):" % int(seconds)]
+    for t in heard:
+        lines.append("  · «%s»" % t)
+    return "\n".join(lines)
+
+
 def demo(seconds: float = 60.0) -> None:
     """Живое демо на Z440: слушает микрофон, печатает всё услышанное.
 
