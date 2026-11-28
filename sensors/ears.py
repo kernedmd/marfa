@@ -70,15 +70,23 @@ def heard_wake(text: str,
                max_dist: int = config.EARS_WAKE_MAX_DIST) -> Optional[str]:
     """Есть ли в фразе слово-триггер? Возвращает ТОКЕН, который сработал.
 
-    Допуск max_dist=1: «марва», «марфу» (оглушения живой речи) — это Марфу
-    зовут. «март», «форма» (дистанция 2+) — мимо. «марка» (дистанция 1)
-    сработает ложноположительно — осознанный компромисс сторожа: лишний
-    запуск whisper на 3 секунды дешевле, чем проспать зов Создателя.
+    К9 аудита-5 (режим «формы + длинный хвост»): короткие слова (до
+    EARS_WAKE_SHORT_MAX_LEN букв) — только точные формы имени из
+    EARS_WAKE_SHORT_FORMS (падежи, оглушение «марв», ласковые). Прежний
+    общий Левенштейн 1 будил тяжёлый whisper от «марка» (ф→к) и «арфа»
+    (−м) — ложные пробуждения жгли ресурс Создателя. Слова длиннее —
+    с допуском max_dist=1 (живые искажения речи: «марфуся» → «марфусь»).
+    «март», «форма» (дистанция 2+) — мимо, как и раньше.
     """
+    short_cap = getattr(config, "EARS_WAKE_SHORT_MAX_LEN", 5)
+    forms = set(getattr(config, "EARS_WAKE_SHORT_FORMS", ()) or words)
     for token in normalize(text).split():
-        for wake in words:
-            if levenshtein(token, wake) <= max_dist:
-                return token
+        if token in forms:            # точная форма имени — зов на любой длине
+            return token
+        if len(token) > short_cap:    # длинное искажение — Левенштейн 1
+            for wake in words:
+                if levenshtein(token, wake) <= max_dist:
+                    return token
     return None
 
 

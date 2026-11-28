@@ -155,13 +155,15 @@ def test_f167_binary_zoo(home):
 
 
 def test_f167_big_file_readable_refusal(home):
-    """Файл больше 2 МБ чтения — читаемый диагноз («не по зубам»), не
-    «инструмент споткнулся» из живого лога дня-16."""
+    """Файл больше 2 МБ чтения — читаемый диагноз, не «инструмент
+    споткнулся» из живого лога дня-16. Круг 35 (В6): не-.py отказывается
+    ЕЩЁ РАНЬШЕ — сит-чеком до чтения («не .py» вместо «не по зубам»),
+    обе гарантии Ф167 держатся: диагноз словами, до кодера не доходит."""
     big_dir = Path(config.HOME_DIR) / "logs"
     big_dir.mkdir(parents=True, exist_ok=True)
     (big_dir / "huge.log").write_bytes(b"a" * (2 * 1024 * 1024 + 64))
     out = repair.make_patch("logs/huge.log", "сделай меньше")
-    assert "не по зубам" in out
+    assert ("не по зубам" in out) or ("не .py" in out)
     assert "споткнулся" not in out
 
 

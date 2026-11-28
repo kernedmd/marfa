@@ -68,13 +68,15 @@ def alive() -> bool:
 def _spawn(server: Path, model: Path) -> str:
     """Поднять слугу в своей консоли. Флаги без кавычек-мусора, значение
     простые: закон дня-8 (неизвестный флаг убивает сервер) не нарушен —
-    берём только флаги семейства llama-server."""
-    cmd = ('"%s" -m "%s" --embedding --pooling mean -ngl 0 -t %d '
-           '--host 127.0.0.1 --port %d'
-           % (server, model, EMBED_THREADS, config.PORT_EMBEDDER))
-    subprocess.Popen(cmd, shell=True, cwd=str(config.HOME_DIR),
+    берём только флаги семейства llama-server. Круг 35 (класс В13 аудита-6
+    у кодера): БЕЗ shell=True и %интерполяции — список аргументов: имя
+    модели/сервера с мусором больше не исполняет команду при подъёме."""
+    cmd = [str(server), "-m", str(model), "--embedding", "--pooling", "mean",
+           "-ngl", "0", "-t", str(EMBED_THREADS),
+           "--host", "127.0.0.1", "--port", str(config.PORT_EMBEDDER)]
+    subprocess.Popen(cmd, cwd=str(config.HOME_DIR),
                      creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
-    return cmd
+    return " ".join(cmd)
 
 
 def ensure_server(wait_secs: Optional[float] = None) -> tuple:

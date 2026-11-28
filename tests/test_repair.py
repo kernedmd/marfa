@@ -227,11 +227,36 @@ def test_apply_missing_patch_honest(home):
 def test_apply_rechecks_syntax(home, monkeypatch):
     target = _make_patch_0001(home, monkeypatch)
     # файл патча испортили ПОСЛЕ написания — применение обязано отказаться
+    # (круг 35, К4: сперва sha256 ловит подмену содержимого, а мета без
+    # подписи — старые патчи — доходит до синтакс-чека)
     (home / "data" / "patches" / "0001" / "calc.py").write_text(
         "def broken(:\n", encoding="utf-8")
     out = repair.apply_patch(1)
-    assert "не применяется" in out
+    assert ("ИЗМЕНЁН после создания" in out) or ("не применяется" in out)
     assert target.read_text(encoding="utf-8") == "OLD = 1\n"
+
+
+def test_apply_old_meta_without_sha_still_checked(home, monkeypatch):
+    # мета без sha256 (патчи до круга 35) — синтакс-чек живёт
+    _make_patch_0001(home, monkeypatch)
+    d = home / "data" / "patches" / "0001"
+    meta = repair._read_meta(d)
+    meta.pop("sha256", None)
+    repair._write_meta(d, meta)
+    (d / "calc.py").write_text("def broken(:\n", encoding="utf-8")
+    out = repair.apply_patch(1)
+    assert "не применяется" in out
+
+
+def test_apply_repeats_refused(home, monkeypatch):
+    # К8: повторное применение не затирает бэкап уже-пропатченным файлом
+    target = _make_patch_0001(home, monkeypatch)
+    first = repair.apply_patch(1)
+    assert "ПРИМЕНЁН" in first
+    second = repair.apply_patch(1)
+    assert "уже применён" in second
+    # цель не перезаписана повторным применением (бэкап не тронут)
+    assert target.read_text(encoding="utf-8") == "NEW = 2\n"
 
 
 def test_rollback_new_file_no_backup_honest(home, monkeypatch):
@@ -240,7 +265,23 @@ def test_rollback_new_file_no_backup_honest(home, monkeypatch):
                         "```python\n" + GOOD_CODE + "```")
     repair.make_patch("scripts/fresh.py", "новый файл")
     out = repair.rollback_patch(1)
-    assert "бэкапа нет" in out
+    # круг 35 (В10): неприменённый патч откатывать нечего — цель живёт
+    # новыми правками
+    assert "не применён" in out
+
+
+def test_rollback_new_file_after_apply_unlinks(home, monkeypatch):
+    # К5 симметрия: новый файл, применённый и откаченный, исчезает —
+    # не «удали руками» (симметрия автоОтката apply_patch)
+    monkeypatch.setattr(repair, "_ask_coder",
+                        lambda prompt, max_tokens=None:
+                        "```python\n" + GOOD_CODE + "```")
+    monkeypatch.setattr(repair, "_smoke_test", lambda t: (True, "pytest ок"))
+    repair.make_patch("scripts/fresh.py", "новый файл")
+    assert "ПРИМЕНЁН" in repair.apply_patch(1)
+    out = repair.rollback_patch(1)
+    assert "убран" in out
+    assert not (home / "scripts" / "fresh.py").is_file()
 
 
 def test_list_patches_statuses(home, monkeypatch):

@@ -16,19 +16,42 @@ from pathlib import Path
 # ДОМ (ТЗ 2.3): всё живёт только внутри C:\Marfa.
 # Переопределение для разработки/тестов вне Z440: переменная MARFA_HOME.
 # ---------------------------------------------------------------
+# К1 аудита-5 (день-18): граница безопасности задаётся судом, не слепком env.
+# Любое значение MARFA_HOME принималось молча: C:\ — и страж считал Windows
+# «внутри дома» (allow на системные файлы), относительный путь — дом рождался
+# где попало. Теперь: абсолютный (или от ~), НЕ корень диска, НЕ системная
+# папка. Суд падает на импорте — дом не стартует с разбитой границей.
+_SYSTEM_HOME_MARKERS = ("windows", "system32", "program files", "appdata",
+                        "usr", "etc", "bin")
+
+
 def _resolve_home(raw: str) -> Path:
-    """N4 аудита: ОТНОСИТЕЛЬНЫЙ MARFA_HOME резолвится от домашнего каталога
-    пользователя, а не от cwd — запуск дома из другой папки не должен
-    переезжать дом (Path.resolve() молча клеил его к текущему каталогу)."""
+    """Суд границы дома. N4 аудита: относительный MARFA_HOME резолвится от
+    домашнего каталога пользователя, а не от cwd. К1 аудита-5: корень диска
+    и системные папки запрещены — страж не признаёт Windows домом.
+    Маркеры сверяются с КОМПОНЕНТАМИ пути (part), не подстрокой: иначе
+    "/home/etc_user" получал бы ложный суд за "/etc"."""
     p = Path(raw).expanduser()
     if not p.is_absolute():
         p = Path.home() / p
-    return p.resolve()
+    p = p.resolve()
+    if len(p.parts) <= 1:
+        raise RuntimeError(
+            "MARFA_HOME — корень диска запрещён: дом живёт в папке, а не на "
+            "диске (К1 аудита-5: иначе страж считает весь диск «внутри дома»)")
+    if any(part.lower() in _SYSTEM_HOME_MARKERS for part in p.parts):
+        raise RuntimeError(
+            "MARFA_HOME внутри системной папки — граница дома не бывает "
+            "чужой (К1 аудита-5)")
+    return p
 
 
+# К4 аудита-5: dev-дом больше не в /tmp (world-writable: другой локальный
+# пользователь успевает создать каталог/симлинк — данные дома в чужой песочнице).
+# Рожаем его в ~ (обычно 700/755 с владельцем пользователя).
 HOME_DIR: Path = _resolve_home(os.environ.get("MARFA_HOME") or (
     r"C:\Marfa" if sys.platform == "win32"
-    else os.path.join(tempfile.gettempdir(), "marfa_dev")))
+    else os.path.join(str(Path.home()), "marfa_dev")))
 
 CORE_DIR = HOME_DIR / "core"
 DATA_DIR = HOME_DIR / "data"
@@ -49,6 +72,10 @@ MONITOR_LOG_FILE = LOGS_DIR / "monitor_log.jsonl"        # Ф97: история 
 # ---------------------------------------------------------------
 # 0.1 БЮДЖЕТ RAM (64 ГБ, план 44 ГБ) — ЗАКОН.
 # ---------------------------------------------------------------
+# С8 аудита-5: 64 — ПЛАН-константа Z440 (бюджеты 0.1 размечены от неё);
+# фактический объём для процентов монитор берёт из ОС (psutil), не отсюда.
+# С8 аудита-5: 64 — ПЛАН-константа Z440 (бюджеты 0.1 размечены от неё);
+# фактический объём для процентов монитор берёт из ОС (psutil), не отсюда.
 RAM_TOTAL_GB = 64
 RAM_BUDGET_GB = 44
 RAM_PLAN_GB = {
@@ -123,9 +150,23 @@ RAG_MEMORY_CAP_TOKENS = 150
 # ---------------------------------------------------------------
 BRAIN_THINKING = False
 
-# Грубая оценка токенов офлайн (без tokenizer'а): усреднённо ~3 символа/токен
-# для смеси русского и кода. Точная цифра приходит из usage ответа llama-server.
-CHARS_PER_TOKEN_EST = 3
+# Грубая оценка токенов офлайн (без tokenizer'а). К5 аудита-5: 3 симв/ток
+# для русского — самообман (реально ~2-2.5): закон «промпт+история+ген ≤ 8192»
+# проходил по оценке, а настоящий токенизатор давал больше — context shift
+# снова резал ЯДРО. Оценка обязана быть КОНСЕРВАТИВНОЙ (завышать токены),
+# не честной: лишняя обрезка истории — дешевле внезапного обреза системы.
+# Точная цифра приходит из usage ответа llama-server.
+CHARS_PER_TOKEN_EST = 2
+
+# К6 аудита-5: token_estimate меряет текст, но не служебные токены чат-шаблона
+# (роль-маркеры, BOS/EOS — ~4-6 ток на сообщение + шапка). История из N сообщений
+# несёт N×5 сверх текста. Дом закладывает фиксированный запас в закон контекста.
+CHAT_OVERHEAD_TOKENS = 200
+if (PROMPT_BUDGET_TOKENS + HISTORY_BUDGET_TOKENS + GENERATION_BUDGET_TOKENS
+        + CHAT_OVERHEAD_TOKENS > CONTEXT_TOKENS):
+    raise RuntimeError(
+        "промпт + история + генерация + служебный оверхед шаблона <= 8192 — "
+        "закон контекста 0.3 (К6 аудита-5)")
 
 # ---------------------------------------------------------------
 # УШИ (Г-уши, Этап 1): сторож имени — vosk small, всегда на CPU.
@@ -134,7 +175,22 @@ CHARS_PER_TOKEN_EST = 3
 # ---------------------------------------------------------------
 EARS_MODEL_DIR = MODELS_DIR / "vosk-model-small-ru-0.22"
 EARS_WAKE_WORDS = ("марфа",)   # точные слова-триггеры
-EARS_WAKE_MAX_DIST = 1         # допуск Левенштейна: «марва», «марфу»...
+EARS_WAKE_MAX_DIST = 1         # допуск Левенштейна для ДЛИННЫХ искажений
+# К9 аудита-5: dist=1 по всему слову ловил «марка» (ф→к) и «арфа» (−м) —
+# телевизор будил тяжёлый whisper на CPU. Режим «формы + длинный хвост»:
+# короткие слова (до 5 букв) принимаются ТОЛЬКО точными формами имени
+# (падежи, оглушение «марв», ласковые) — «марка»/«арфа» отсечены;
+# слова длиннее 5 букв — с допуском Левенштейна 1 (живые искажения).
+EARS_WAKE_SHORT_MAX_LEN = 5
+EARS_WAKE_SHORT_FORMS = (
+    "марфа", "марфу", "марфе", "марфой", "марфом", "марве",
+    "марф", "марв", "марва", "марву", "марвы",
+    "марфуша", "марфушу", "марфушке", "марфушкой", "марфушечка",
+    "марфенька", "марфеньку", "марфуся", "марфусь",
+    # латиница (whisper пишет имя латиницей — круг 30, живая фраза
+    # «Marfa, which hour?»): как в bridge._WAKE_EXACT
+    "marfa", "marfu", "marfy", "marfe", "marfoy", "marfoi", "marv",
+)
 EARS_SAMPLE_RATE = 16000       # моно int16 — родной формат vosk
 EARS_LOG_FILE = LOGS_DIR / "ears_log.jsonl"   # правило 6.6: логи — истина
 EARS_STATUS_FILE = DATA_DIR / "ears_status.json"  # служба ушей: сердцебиение
@@ -151,6 +207,8 @@ PORT_EYES = 8083           # llama-server (Qwen2.5-VL, CUDA) — сенсор з
 PORT_THROAT = 8084         # sensors/throat.py — Silero v5_6, СЛУГА ПО ВЫЗОВУ
 PORT_WEB = 5001            # локальная панель Марфы
 PORT_FORBIDDEN = 5000      # занят чем-то важным — не используем
+# С6 аудита-5: суд портов живёт В КОНЦЕ файла — после определения всех
+# портов дома (суд раньше определения = NameError).
 BRAIN_URL = os.environ.get("MARFA_BRAIN_URL") or f"http://127.0.0.1:{PORT_BRAIN}"
 
 # ---------------------------------------------------------------
@@ -171,7 +229,30 @@ BRAIN_TIMEOUT_SEC = 300
 # а не роняет ход первым же «нет ответа». Таймаут НЕ переждать —
 # это медленное думание, отдельная болезнь.
 BRAIN_CONNECT_RETRIES = 3        # попыток дозвона до неответившего сервера
-BRAIN_CONNECT_BACKOFF_SEC = 15   # пауза между попытками (сумма ~30-45 с)
+# Н3 аудита-5: факт дозвона — 3 попытки = 2 паузы = 30 с (brain._urlopen:
+# пауза после 1-й и 2-й неудачи, третья — приговор). Комментарий «30-45» врал.
+BRAIN_CONNECT_BACKOFF_SEC = 15   # пауза между попытками (сумма = 30 с ровно)
+
+# К2 аудита-5: доктрина «наружу ничего без решения» соблюдается и адресами:
+# мозг и горло живут ТОЛЬКО на loopback. MARFA_BRAIN_URL/MARFA_THROAT_URL —
+# env-переменные, но http://evil.com в них теперь валит импорт, а не уезжает
+# с доктриной и памятью наружу (CODER_URL/EMBEDDER_URL константны — там суд
+# не нужен).
+def _loopback_url(env_value: str, what: str) -> str:
+    from urllib.parse import urlparse
+    host = (urlparse(env_value).hostname or "").lower()
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        raise RuntimeError(
+            "%s: %s — мозг и горло живут только внутри дома (loopback). "
+            "Наружу ничего без решения Создателя (К2 аудита-5)"
+            % (what, env_value))
+    return env_value
+
+
+BRAIN_URL = (os.environ.get("MARFA_BRAIN_URL")
+             or f"http://127.0.0.1:{PORT_BRAIN}")
+if os.environ.get("MARFA_BRAIN_URL"):
+    _loopback_url(BRAIN_URL, "MARFA_BRAIN_URL")
 DEFAULT_QUANT = "Q4_K_M"
 MODEL_QUANTS_GB = {
     "Q4_K_M": 18.63,   # по умолчанию: 8-16 ток/с на DDR4
@@ -355,7 +436,11 @@ LESSONS_CORE_IDS = ("R0", "R1", "R2", "R4", "R5", "R7", "R11", "R12", "R13")
 # стоят токенов; правило — не трактат). 9 коротких правил ≈ 400 ток;
 # 450 — запас, чтобы блок не резался. Сверх потолка — ЦЕЛЫЕ правила
 # с конца, никогда не разрезаем правило (закон L2 генома).
-LESSONS_PROMPT_CAP_TOKENS = 450
+# С9 аудита-5: оценка стала консервативной (2 симв/ток) — фактический вес
+# девятки в формате промпта 450 ток (замер 28.11, journal/lessons.json):
+# потолок 500 вмещает все 9 целиком с запасом. «Не разрезаем правило»
+# проверено на живом файле, не на глазу.
+LESSONS_PROMPT_CAP_TOKENS = 500
 
 # Ф-СЕРИЯ «ТРИДЦАТЬ ФИШЕК ОТ СЕБЯ» (23.11, день-8): Создатель сказал
 # «не забудь добавить 30 фишек от себя» — продолжение революции Ф1-Ф10.
@@ -443,11 +528,17 @@ EMBEDDER_TIMEOUT_SEC = 60          # один запрос векторов (CPU
 # за 0.6 с), рот (winsound, stdlib Windows) остаётся в теле дома.
 # СЛУГА ПО ВЫЗОВУ по образцу эмбеддера и whisper: кнопка 95, порт 8084.
 THROAT_MODEL_FILE = MODELS_DIR / "voice" / "v5_6_ru.pt"  # посылка USB
-THROAT_THREADS = 4                # 8 ядер: мозг не должен голодать
+# С1 аудита-5: тред-бюджет дома = 8 ядер. Мозг 6 + ЛЮБОЙ слуга 2 = 8.
+# Было 4+4+8(мозг из .bat) = 16 потоков на 8 ядрах — жалоба «медленно»
+# была зашита в конфиг. Число мозга берёт scripts/start_llama_server.
+BRAIN_THREADS = 6                 # мозг — главный едок ядер
+THROAT_THREADS = 2                # RTF ~0.03 даже на 2 потоках (докстринг выше)
 THROAT_SAMPLE_RATE = 48000        # живой максимум модели (8/24/48 кГц)
 THROAT_STATUS_FILE = DATA_DIR / "throat_status.json"     # сердцебиение
 THROAT_URL = (os.environ.get("MARFA_THROAT_URL")
               or f"http://127.0.0.1:{PORT_THROAT}")
+if os.environ.get("MARFA_THROAT_URL"):
+    _loopback_url(THROAT_URL, "MARFA_THROAT_URL")
 THROAT_TIMEOUT_SEC = 30           # синтез быстр; запас на первый warmup
 THROAT_START_WAIT_SECS = 60       # torch.package грузится 2-3 с + запас
 
@@ -474,8 +565,19 @@ WHISPER_URL = f"http://127.0.0.1:{PORT_WHISPER}"
 WHISPER_TRANSCRIBE_PATH = "/v1/audio/transcriptions"  # OpenAI-совместимый путь
 WHISPER_TIMEOUT_SEC = 60       # расшифровка одной фразы (turbo на CPU — секунды)
 WHISPER_START_WAIT_SECS = 90   # подъём слуги с NVMe (1.6 ГБ — десятки секунд)
-WHISPER_THREADS = 4            # мозг на 8 ядрах не должен голодать
+WHISPER_THREADS = 2            # С1: слуга не съедает ядро мозга
 WHISPER_KEEPALIVE_SEC = 300    # после фразы слуга живёт 5 минут (разговор — это очередь фраз)
+
+# С6 аудита-5: «закон без суда» = закон на честном слове. RAM и контекст
+# в доме проверяются raise — порт теперь тоже: продублированный порт или
+# правка PORT_WEB=5000 валит импорт, а не тихо ломает дом (правило 6.4).
+_ALL_PORTS = (PORT_BRAIN, PORT_EYES, PORT_THROAT, PORT_WEB, PORT_CODER,
+              PORT_EMBEDDER, PORT_WHISPER)
+if len(set(_ALL_PORTS)) != len(_ALL_PORTS) or PORT_FORBIDDEN in _ALL_PORTS:
+    raise RuntimeError(
+        "порт занят или продублирован — правило 6.4: порт 5000 не трогаем, "
+        "порты дома не пересекаются (С6 аудита-5)")
+
 VOICE_DIR = DATA_DIR / "voice"                  # орган голосового хода
 VOICE_LOG_FILE = VOICE_DIR / "voice_log.jsonl"  # один обмен = одна строка (правило 6.6)
 VOICE_STATUS_FILE = VOICE_DIR / "status.json"   # сердцебиение моста (как ears_status)
@@ -493,7 +595,11 @@ PHRASE_SILENCE_RMS = 300       # порог тишины int16 (калибруе
 # ---------------------------------------------------------------
 # Fallback GigaChat (ТЗ 3.2): включается только когда 30B упала
 # ---------------------------------------------------------------
-FALLBACK_ENABLED = os.environ.get("MARFA_FALLBACK", "0") == "1"
+# К3 аудита-5: МЁРТВАЯ ФИЧА ТЗ 3.2 — кода вызова нет ни в агенте, ни в
+# мозге (grep по дому: только docs/), URL и кредов нет. env-флаг убран:
+# сеть наружу не включается переменной окружения — только резолюцией
+# Создателя + реализацией (доктрина: наружу ничего без решения).
+FALLBACK_ENABLED = False
 
 
 def ensure_dirs() -> None:
@@ -502,8 +608,12 @@ def ensure_dirs() -> None:
     Круг 20: journal\ входит в каркас — урок дня-13 (WinError 3 на
     отсутствующей папке) пришит законом: орган рождается вместе с домом.
     """
+    # С2 аудита-5: орган рождается вместе с домом — ВСЕ подпапки, не 6.
+    # Урок дня-13 (WinError 3) жил и в diary/, и в vectors/, и в voice/.
     for d in (DATA_DIR, LOGS_DIR, MODELS_DIR, DOWNLOADS_DIR,
-              INSTALL_STATE_DIR, JOURNAL_DIR):
+              INSTALL_STATE_DIR, JOURNAL_DIR, PATCHES_DIR, DIARY_DIR,
+              EVOLUTION_DIR, VECTORS_DIR, EXPORTS_DIR, VOICE_DIR,
+              SCREENSHOTS_DIR, MODELS_DIR / "voice"):
         d.mkdir(parents=True, exist_ok=True)
 
 

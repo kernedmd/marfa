@@ -12,7 +12,7 @@ DATA_DIR, прочитал ответ, сохранённый ЧУЖИМ тес�
 """
 import pytest
 
-from core import config
+from core import config, repair
 
 
 @pytest.fixture(autouse=True)
@@ -28,3 +28,25 @@ def _sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DATA_DIR", data)
     monkeypatch.setattr(config, "LOGS_DIR", logs)
     monkeypatch.setattr(config, "BRAIN_LOG_FILE", logs / "brain_log.jsonl")
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    """Изолированный дом (круг 35: общий для всех круговых якорей):
+    ремонт не трогает файлы станции, слуга «на посту» по шву."""
+    monkeypatch.setattr(config, "HOME_DIR", tmp_path)
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(config, "LOGS_DIR", tmp_path / "logs")
+    monkeypatch.setattr(config, "MODELS_DIR", tmp_path / "models")
+    monkeypatch.setattr(config, "PATCHES_DIR", tmp_path / "data" / "patches")
+    monkeypatch.setattr(config, "REPAIR_LOG_FILE",
+                        tmp_path / "logs" / "repair_log.jsonl")
+    monkeypatch.setattr(config, "GUARD_LOG_FILE",
+                        tmp_path / "logs" / "guard_log.jsonl")
+    monkeypatch.setattr(config, "CANARIES_FILE",
+                        tmp_path / "data" / "canaries.json")
+    # слуга всегда «на посту» — реальный сервер не нужен
+    monkeypatch.setattr(repair, "ensure_server",
+                        lambda wait_secs=None: (True, "кодер на посту (шов)"))
+    monkeypatch.setattr(repair, "release", lambda: "кодер лёг (шов)")
+    return tmp_path
