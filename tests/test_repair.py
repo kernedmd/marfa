@@ -408,3 +408,89 @@ def test_agent_apply_patch_tool_finds_number(home, monkeypatch):
         assert "ВНЕДРЁН 2" in r.text, args
     r = a._act({"tool": "apply_patch", "args": {"text": "какой патч?"}})
     assert "спроси Создателя" in r.text
+
+
+# ---------- день-18: броня Ф155 встретила живую станцию ----------
+
+def test_smoke_finds_tests_by_real_path(home, monkeypatch):
+    r"""УРОК ЖИВОГО ЛОГА (день-18): станция ответила «pytest
+    test_krug26_circle.py (код 4) no tests ran» — броня звала тесты
+    ГОЛЫМ именем из корня дома, где их нет. Теперь путь tests\<имя>:
+    живой pytest-прогон НАХОДИТ и ГОНЯЕТ тест (зелёный случай —
+    патч применяется по-настоящему, не по компиляции)."""
+    target = _make_patch_0001(home, monkeypatch)
+    tdir = home / "tests"
+    tdir.mkdir(parents=True)
+    (tdir / "test_calc.py").write_text(
+        "import sys\nfrom pathlib import Path\n"
+        "sys.path.insert(0, str(Path(__file__).resolve().parents[1]))\n"
+        "from scripts import calc\n\n"
+        "def test_calc_patched():\n    assert calc.NEW == 2\n",
+        encoding="utf-8")
+    out = repair.apply_patch(1)
+    assert "ПРИМЕНЁН" in out
+    assert "код 4" not in out and "no tests ran" not in out
+    assert "1 passed" in out                  # тест реально гонялся
+    assert target.read_text(encoding="utf-8") == "NEW = 2\n"
+
+
+def test_apply_red_rolls_back_new_file_by_deletion(home, monkeypatch):
+    r"""День-18, корень №2: «старый файл ВЕРНУТЬ НЕ УДАЛОСЬ — проверь
+    руками!» на НОВОМ файле — бэкапа нет вовсе, а честный откат нового
+    файла = вернуть отсутствие (удалить). Красный тест → файл убран,
+    совет — исполнимым путём с подпапкой (Ф184/Ф187: совет дома —
+    тоже команда, страж R1 голые имена не пускает)."""
+    monkeypatch.setattr(repair, "_ask_coder",
+                        lambda prompt, max_tokens=None:
+                        "```python\nX = 1\n```")
+    repair.make_patch("scripts/fresh.py", "новый файл")
+    tdir = home / "tests"
+    tdir.mkdir(parents=True)
+    (tdir / "test_fresh.py").write_text(
+        "def test_red():\n    assert False, 'красный по заказу'\n",
+        encoding="utf-8")
+    out = repair.apply_patch(1)
+    assert "НЕ ПРИМЕНЁН" in out
+    assert "no tests ran" not in out          # тесты дошли до pytest
+    assert "1 failed" in out
+    assert "ВЕРНУТЬ НЕ УДАЛОСЬ" not in out
+    assert "я его убрала" in out
+    assert not (home / "scripts" / "fresh.py").exists(), \
+        "новый файл убран — дом как до патча"
+    assert "почини scripts/fresh.py" in out   # совет исполним: с подпапкой
+
+
+def test_agent_fix_bare_name_honest_guard(home):
+    r"""День-18, корень №3: совет дома «почини sozday_instrument.py»
+    (ГОЛОЕ имя) был неисполним — страж R1 поднимал PermissionError
+    ДО обработки, быстрый трек рвался изнутри, ход молча падал в
+    мозг («Я позвала кодера, но не назвала ему файл»). Теперь: диагноз
+    стража Создателю + исполнимая форма, мозг молчит."""
+    a = agent.Agent(brain=FakeBrain(), memory=FakeMemory())
+    r = a.handle("почини sozday_instrument.py: исправь подсказку")
+    assert r.tool_used == "repair"
+    assert a.brain.calls == 0
+    assert "СТРАЖ" in r.text and "подпапкой" in r.text
+
+
+def test_agent_fix_template_requirement_refused(home):
+    r"""Ф187: Создатель повторил совет дома дословно — «почини …:
+    <что исправить>» с заглушкой в угловых скобках. Шаблон — не
+    требование: честный отказ с живым примером (быстрая ветка И
+    мозговой code_patch — один закон)."""
+    a = agent.Agent(brain=FakeBrain(), memory=FakeMemory())
+    r = a.handle("почини core/customtools/sozday_instrument.py: "
+                 "<что исправить>")
+    assert r.tool_used == "repair"
+    assert a.brain.calls == 0
+    assert "шаблон" in r.text.lower()
+    assert "sozday_instrument" in r.text      # путь назван — можно проще
+    r2 = a._act({"tool": "code_patch",
+                 "args": {"path": "scripts/x.py",
+                          "requirement": "<что сделать>"}})
+    assert "шаблон" in r2.text.lower()
+    # мозг с голым именем — исполнимая подсказка, не голый отказ
+    r3 = a._act({"tool": "code_patch",
+                 "args": {"path": "hello.py",
+                          "requirement": "поправь приветствие"}})
+    assert "СТРАЖ" in r3.text and "подпапкой" in r3.text

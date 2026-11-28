@@ -554,6 +554,23 @@ def patch_summary(n: int) -> str:
 # поведение) → красные? автоОткат, старый файл возвращается.
 # ---------------------------------------------------------------
 
+def _typed_path(target: Path) -> str:
+    """Путь, который Создатель может НАПЕЧАТАТЬ и пройти стража.
+
+    УРОК ЖИВОГО ЛОГА (день-18, 28.11): совет дома «почини %s» с ГОЛЫМ
+    именем файла (target.name) был неисполним — страж R1 запрещает
+    корень дома («путь рук должен содержать подпапку»), PermissionError
+    рвал быстрый трек изнутри, ход молча падал в мозг. Совет дома —
+    тоже команда (Ф184): в совете живёт путь с подпапкой, прямой
+    слэш — и в печати, и в страже.
+    """
+    try:
+        return (target.resolve()
+                .relative_to(Path(config.HOME_DIR).resolve()).as_posix())
+    except (ValueError, OSError):
+        return target.name
+
+
 def _related_tests(module_stem: str, limit: int = 3) -> list:
     """Тест-файлы, импортирующие модуль — по строкам импортов.
 
@@ -637,8 +654,12 @@ def apply_patch(n: int) -> str:
         return "СТРАЖ не пустил: %s" % e
     ok, report = _smoke_test(target)
     if not ok:
-        # автоОткат: красные тесты возвращают старый файл на место —
-        # дом не остаётся с непроверенной правкой (закон Ф155)
+        # автоОткат: не позеленевшие тесты возвращают дом к прежнему
+        # состоянию — дом не остаётся с непроверенной правкой (Ф155).
+        # День-18: бэкап пишется ТОЛЬКО когда файл существовал — бэкапа
+        # нет ⟺ патч создавал НОВЫЙ файл, и честный откат = вернуть
+        # отсутствие (убрать файл), а не «ВЕРНУТЬ НЕ УДАЛОСЬ — проверь
+        # руками!» (станция так и осталась с непроверенным файлом).
         backup = next(d.glob("backup_*"), None)
         rolled = False
         if backup is not None:
@@ -648,18 +669,29 @@ def apply_patch(n: int) -> str:
             except Exception as e:
                 _lesson("применение-откат-не-удался", "%s: %s"
                         % (target.name, e))
+        else:
+            try:
+                if target.is_file():
+                    target.unlink()
+                rolled = True
+            except OSError as e:
+                _lesson("применение-откат-не-удался", "%s: %s"
+                        % (target.name, e))
         _log({"apply": n, "target": str(target), "ok": False,
               "smoke": report[:400], "rolled_back": rolled})
         _lesson("применение-откат",
-                "%s: тесты после патча красные, откат %s"
+                "%s: тесты после патча не позеленели, откат %s"
                 % (target.name, "состоялся" if rolled else "НЕ удался"))
-        return ("патч №%d НЕ ПРИМЕНЁН: тесты после патча красные — старый "
-                "файл %s. Вот что сказали тесты:\n%s\nСкажи «почини %s: "
+        return ("патч №%d НЕ ПРИМЕНЁН: тесты после патча не позеленели — "
+                "%s. Вот что сказали тесты:\n%s\nСкажи «почини %s: "
                 "<что исправить>» — кодер перепишет, или расскажи "
                 "архитектору."
-                % (n, "я вернула на место" if rolled
+                % (n,
+                   ("старый файл я вернула на место" if backup is not None
+                    else "нового файла не было — я его убрала, дом как "
+                    "до патча") if rolled
                    else "ВЕРНУТЬ НЕ УДАЛОСЬ — проверь руками!",
-                   report, target.name))
+                   report, _typed_path(target)))
     meta["applied"] = True
     meta["applied_ts"] = dt.datetime.now().isoformat(timespec="seconds")
     (d / "meta.json").write_text(
@@ -783,7 +815,14 @@ def _smoke_test(target: Path) -> tuple:
     """
     test_file = config.HOME_DIR / "tests" / ("test_%s.py" % target.stem)
     related = _related_tests(target.stem)
-    files = ([test_file.name] if test_file.is_file() else []) + related
+    # УРОК ЖИВОГО ЛОГА (день-18): станция ответила «pytest test_krug26_circle.py
+    # (код 4) no tests ran» — броня звала тесты ГОЛЫМ именем, а pytest
+    # бежит из корня дома, где тестов нет (они в tests\). Код 4 — не
+    # «красные тесты», а «файл не найден»: броня валила патч молча,
+    # не запустив ни одного теста. Путь — tests\<имя>, как их видит
+    # pytest из корня дома.
+    files = ([str(Path("tests") / test_file.name)] if test_file.is_file()
+             else []) + [str(Path("tests") / n) for n in related]
     # Ф161 «МАСТЕРСКАЯ» (круг 26): патч в core\customtools\ проверяется
     # золотым якорем мастерской — тестом, валидирующим КАЖДЫЙ
     # инструмент-файл (форма, подъём, вызов). Красный якорь = откат:
@@ -791,8 +830,9 @@ def _smoke_test(target: Path) -> tuple:
     try:
         if "customtools" in [p.lower() for p in target.parts]:
             anchor = config.HOME_DIR / "tests" / "test_krug26_circle.py"
-            if anchor.is_file() and anchor.name not in files:
-                files.append(anchor.name)
+            if anchor.is_file() and str(Path("tests") / anchor.name) \
+                    not in files:
+                files.append(str(Path("tests") / anchor.name))
     except Exception:
         pass
     try:
@@ -855,7 +895,9 @@ def self_apply(n: int) -> str:
         return "запись не удалась: %s — дом не тронут" % e
     ok, report = _smoke_test(target)
     if not ok:
-        # автоОткат: красный дым-тест возвращает старый файл на место
+        # автоОткат: не позеленевший дым-тест возвращает дом к прежнему
+        # состоянию. День-18: НОВЫЙ файл (бэкапа нет) — откат = удалить,
+        # вернуть отсутствие (зеркало apply_patch, броня одна для всех)
         backup = next(d.glob("backup_*"), None)
         rolled = False
         if backup is not None:
@@ -865,17 +907,28 @@ def self_apply(n: int) -> str:
             except Exception as e:
                 _lesson("самовнедрение-откат-не-удался", "%s: %s"
                         % (target.name, e))
+        else:
+            try:
+                if target.is_file():
+                    target.unlink()
+                rolled = True
+            except OSError as e:
+                _lesson("самовнедрение-откат-не-удался", "%s: %s"
+                        % (target.name, e))
         _log({"self_apply": n, "target": str(target), "ok": False,
               "smoke": report[:400], "rolled_back": rolled})
         _lesson("самовнедрение-откат",
-                "%s: дым-тест красный, откат %s"
+                "%s: дым-тест не позеленел, откат %s"
                 % (target.name, "состоялся" if rolled else "НЕ удался"))
-        return ("патч №%d НЕ ВНЕДРЁН: дым-тест красный — старый файл "
+        return ("патч №%d НЕ ВНЕДРЁН: дым-тест не позеленел — "
                 "%s. Вот что сказал тест:\n%s\nСкажи «почини %s: <что "
                 "исправить>» — кодер перепишет, или расскажи архитектору."
-                % (n, "я вернула на место" if rolled
+                % (n,
+                   ("старый файл я вернула на место" if backup is not None
+                    else "нового файла не было — я его убрала, дом как "
+                    "до патча") if rolled
                    else "ВЕРНУТЬ НЕ УДАЛОСЬ — проверь руками!",
-                   report, target.name))
+                   report, _typed_path(target)))
     meta["applied"] = True
     meta["applied_ts"] = dt.datetime.now().isoformat(timespec="seconds")
     meta["self_applied"] = True
