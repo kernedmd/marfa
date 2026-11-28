@@ -265,7 +265,11 @@ def test_f155_apply_red_rolls_back(home, monkeypatch):
 
 
 def test_f155_smoke_runs_own_and_related(home, monkeypatch):
-    """Дым-тест v2: свой тест + привязанные в ОДНОМ прогоне."""
+    r"""Дым-тест v2: свой тест + привязанные в ОДНОМ прогоне.
+
+    День-18 (продление якоря): путь тестов — tests\<имя>, не голое
+    имя: станция словила «код 4, no tests ran» — pytest бежит из
+    корня дома, где тестов нет."""
     tdir = home / "tests"
     tdir.mkdir(parents=True)
     (tdir / "test_calc.py").write_text("def test_x():\n    pass\n",
@@ -281,8 +285,8 @@ def test_f155_smoke_runs_own_and_related(home, monkeypatch):
     monkeypatch.setattr(repair, "_run_pytest", fake_run)
     ok, report = repair._smoke_test(home / "core" / "calc.py")
     assert ok is True
-    assert seen["files"] == ["test_calc.py", "test_user.py"]
-    assert "test_calc.py test_user.py" in report
+    assert seen["files"] == ["tests/test_calc.py", "tests/test_user.py"]
+    assert "tests/test_calc.py tests/test_user.py" in report
 
 
 def test_f155_smoke_no_tests_compiles(home):
@@ -315,8 +319,8 @@ def test_f155_self_apply_gets_related_too(home, monkeypatch):
     monkeypatch.setattr(repair, "_run_pytest", fake_run)
     out = repair.self_apply(1)
     assert "НЕ ВНЕДРЁН" in out
-    assert seen["files"] == ["test_user.py"]   # своего теста нет —
-    # привязанный один; красный — откат
+    assert seen["files"] == ["tests/test_user.py"]   # своего теста нет —
+    # привязанный один (tests\<имя> — день-18); красный — откат
     assert target.read_text(encoding="utf-8") == "OLD = 1\n"
 
 

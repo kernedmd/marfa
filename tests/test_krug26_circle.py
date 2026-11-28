@@ -289,6 +289,29 @@ def test_f161_empty_order_hint(home):
     assert a.brain.calls == 0
 
 
+def test_f187_template_order_refused(home, monkeypatch):
+    r"""Ф187 «ШАБЛОН — НЕ ТРЕБОВАНИЕ» (день-18): Создатель повторяет
+    советы дома ДОСЛОВНО, с заглушками в угловых скобках — и мастерская
+    написала инструмент-заглушку sozday_instrument с требованием из
+    текста совета (живой лог: «создай инструмент создай инструмент:
+    <что делает>…»). Заглушка — не заказ: честный отказ, патч не
+    поднимается; живое имя и живое дело — конвейер как был."""
+    a = _agent()
+    r = a.handle("создай инструмент translate: <что делает>")
+    assert r.tool_used == "tool_forge"
+    assert a.brain.calls == 0
+    assert "шаблон" in r.text.lower()
+    assert "патчей пока нет" in repair.list_patches()
+    # живой заказ (имя и дело без скобок) — конвейер работает как был
+    monkeypatch.setattr(repair, "_ask_coder",
+                        lambda prompt, max_tokens=None:
+                        "```python\nX = 1\n```")
+    r2 = a.handle("создай инструмент riminder: напоминает коротко")
+    assert r2.tool_used == "tool_forge"
+    assert "шаблон" not in r2.text.lower()
+    assert repair.list_patches() != "патчей пока нет"
+
+
 def test_f161_tool_lives_after_apply(home, monkeypatch):
     """Применённый патч = живой инструмент: диспетчер зовёт его как
     встроенный, меню ошибки несёт его имя, промпт — строку мастерской."""
