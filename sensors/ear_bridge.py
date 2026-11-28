@@ -293,11 +293,17 @@ def maybe_release() -> str:
         return ""
     if time.time() - _last_used < config.WHISPER_KEEPALIVE_SEC:
         return ""
-    from core.vram import stop_llama
+    from core.vram import lay_down
     for name in _SERVER_NAMES:
-        if stop_llama(config.PORT_WHISPER, server_name=name):
+        res = lay_down(config.PORT_WHISPER, server_name=name)
+        if res.ok:
             return ("whisper-слуга лёг (тишина %d с)"
                     % config.WHISPER_KEEPALIVE_SEC)
+        if res.status in ("could-not", "no-psutil", "busy"):
+            # keepalive течёт, если молчать: следующее сердцебиение
+            # снова попробует, но Создатель должен видеть правду
+            return ("whisper-слуга НЕ лёг (%s) — скажи архитектору"
+                    % (res.text or res.status))
     return ""
 
 

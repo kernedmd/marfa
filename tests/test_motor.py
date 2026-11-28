@@ -112,7 +112,10 @@ def test_parse_hotkey_forms():
 def test_parse_scroll_directions():
     assert motor.parse_task("прокрути вверх")["direction"] == "up"
     assert motor.parse_task("листай вниз")["direction"] == "down"
-    assert motor.parse_task("прокрути")["direction"] == "down"
+    # КРУГ 36 (ритуал продления): голое «прокрути» больше НЕ догадывается
+    # «вниз» — неизвестное направление честный отказ, а не тихий клик
+    assert motor.parse_task("прокрути")["verb"] == "unknown"
+    assert motor.parse_task("прокрути влево")["verb"] == "unknown"
 
 
 def test_parse_garbage_is_unknown():
@@ -243,12 +246,15 @@ def test_no_server_management_left():
 
 
 def test_vram_dance_lives_only_in_vram_module():
-    """Церемония заёма VRAM — у кодера (core/vram.py), не у рук."""
+    """Церемония заёма VRAM — у кодера (core/vram.py), не у рук.
+    КРУГ 36 (ритуал продления): церемония зовётся lay_down (статусы
+    вместо bool-лжи) — якорь проверяет новое имя шва."""
     from core import repair, vram
-    assert callable(vram.stop_llama)
+    assert callable(vram.stop_llama)          # совместимый шов жив
+    assert callable(vram.lay_down)            # честная церемония жива
     assert not hasattr(motor, "_stop_llama")
     src = Path(repair.__file__).read_text(encoding="utf-8")
-    assert "from core.vram import stop_llama" in src
+    assert "from core.vram import lay_down" in src
 
 
 # ---------- цикл задачи: один взгляд глаз — одно действие ----------
@@ -513,8 +519,10 @@ def test_run_click_by_po_prefix(home, monkeypatch):
 
 
 def test_dpi_aware_is_safe_outside_windows():
-    """На чужой платформе (песочница архитектора) DPI-шов молчит."""
-    assert motor._dpi_aware() is None
+    """На чужой платформе (песочница архитектора) DPI-шов молчит.
+    КРУГ 36 (ритуал продления): молчит ЧЕСТНО — возвращает True
+    (политика не нужна вне Windows), а не None без ответа."""
+    assert motor._dpi_aware() is True
 
 
 def test_hint_names_verbs():

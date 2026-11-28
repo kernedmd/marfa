@@ -363,6 +363,34 @@ def clipboard_read_raw() -> str:
         config.CLIPBOARD_READ_LIMIT, len(text))
 
 
+def clipboard_save_raw() -> str:
+    """ПОЛНЫЙ сырой буфер — билет туда-обратно для моторики (круг 36,
+    аудит motor: «напечатай» больше не уничтожает буфер Создателя).
+
+    Отличие от clipboard_read_raw: БЕЗ лимита (вернуть обрезанный
+    буфер = подменить его) и БЕЗ проверки секретов — текст не уходит
+    ни в чат, ни в память, ни в журнал: он читается и в ту же секунду
+    пишется обратно тем же pyperclip. Проверка секретов здесь роняла
+    бы восстановление чужого буфера («в буфере пароль — не трону» =
+    «пароль стёрла руками Марфы»)."""
+    try:
+        pc = _pyperclip()
+    except ImportError as e:
+        raise RuntimeError("нет модуля буфера: %s" % e)
+    return str(pc.paste() or "")
+
+
+def clipboard_restore(text: str) -> str:
+    """Вернуть сохранённый буфер на место (парная к clipboard_save_raw).
+    Возвращает человекочитаемую сводку для журнала действия."""
+    try:
+        pc = _pyperclip()
+    except ImportError as e:
+        raise RuntimeError("нет модуля буфера: %s" % e)
+    pc.copy(text or "")
+    return "буфер Создателя возвращён на место (%d симв.)" % len(text or "")
+
+
 def clipboard_write_lines(lines: list) -> str:
     """«экран в буфер» (Ф62, день-10): надписи, прочитанные глазами, —
     в буфер обмена. Сколько ЦЕЛЫХ строк влезло в лимит — столько и

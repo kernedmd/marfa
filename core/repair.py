@@ -174,8 +174,16 @@ def ensure_server(wait_secs: Optional[float] = None) -> tuple:
     больше не танцуют — работают на координатах глаз): кодер ~4.7 ГБ
     + глаза ~3.0 ГБ > 6 ГБ — глаза присаживает на время патча,
     после задачи release() возвращает их доктором.
+
+    КРУГ 36 (аудит 269–271): «глаза присели» — теперь ФАКТ, а не
+    догадка. Прежде ложный stop_llama означал «не смогла уложить»,
+    «psutil не стоит» и «глаз не было» одновременно — и ensure_server
+    просто ШЁЛ ДАЛЬШЕ: спавнил кодера в ещё занятые 6 ГБ → OOM
+    посреди патча. Теперь танец ОТКАЗЫВАЕТСЯ, если глаза не
+    уложились: патч не начат — лучше честный отказ, чем мёртвый
+    посреди работы орган.
     """
-    from core.vram import stop_llama
+    from core.vram import lay_down
 
     def _return_eyes(notes: list) -> None:
         """К13 аудита-6: провал подъёма НЕ оставляет глаза мёртвыми —
@@ -193,18 +201,33 @@ def ensure_server(wait_secs: Optional[float] = None) -> tuple:
         # К12 аудита-6: «кодер уже на посту» — не пропуск танца. Если кодер
         # пережил сбой (release не отработал), глаза занимают VRAM: 4.7 +
         # 3.0 > 6 ГБ — генерация умирает OOM посреди патча. Присаживаем всегда.
-        if stop_llama(config.PORT_EYES):
+        res = lay_down(config.PORT_EYES)
+        if res.ok:
             return True, ("кодер уже на посту; глаза присели "
                           "(VRAM 6 ГБ: двоим не хватит)")
-        return True, "кодер уже на посту"
+        if res.status == "no-server":
+            return True, "кодер уже на посту; глаз на посту не было"
+        return True, ("кодер уже на посту; глаза НЕ присели (%s) — "
+                      "VRAM 6 ГБ: двоим не хватит, патч может умереть "
+                      "OOM; скажи архитектору" % (res.text or res.status))
     model = _find_model()
     if model is None:
         return False, ("модели кодера нет в чулане: жду qwen2.5-coder-7b"
                        "*.gguf в %s — проверь, доехал ли файл (АРСЕНАЛ, "
                        "раздел «в строю»)" % config.MODELS_DIR)
     notes = []
-    if stop_llama(config.PORT_EYES):
+    res = lay_down(config.PORT_EYES)
+    if res.ok:
         notes.append("глаза присели (VRAM 6 ГБ: двоим не хватит)")
+    elif res.status == "no-server":
+        notes.append("глаза и не стояли — VRAM свободна")
+    else:
+        # could-not / no-psutil / busy / forbidden: танец ОТКАЗАН —
+        # «не смогла» ≠ «не нужно» (закон факта): поднимать кодера в
+        # занятую VRAM — это OOM посреди патча
+        return False, ("танец отменён: глаза не уложить (%s) — кодер не "
+                       "поднимается, патч не начат. VRAM 6 ГБ на двоих "
+                       "не хватит" % (res.text or res.status))
     try:
         _spawn_server(model)
         notes.append("кодер поднимается (%s с NVMe — десятки секунд)"
@@ -224,17 +247,36 @@ def ensure_server(wait_secs: Optional[float] = None) -> tuple:
 
 def release() -> str:
     """Кодер ложится, глаза возвращаются (церемония заёма — core/vram.py;
-    после Рук v2 кодер — единственный танцор VRAM)."""
-    from core.vram import stop_llama
-    stopped = stop_llama(config.PORT_CODER)
-    note = "кодер лёг; " if stopped else "кодера на посту не было; "
+    после Рук v2 кодер — единственный танцор VRAM).
+
+    КРУГ 36 (аудит 269–271): «лёг» — подтверждённый факт смерти.
+    Если кодер НЕ лёг (выжил terminate и kill) — глаза НЕ
+    поднимаются: 4.7 занятых гигабайта + 3.0 свежих > 6 ГБ, поднимать
+    глаза в занятую VRAM — гарантированный OOM обоим. Честная
+    сводка зовёт архитектора, дом не изображает здоровье.
+    """
+    from core.vram import lay_down
+    res = lay_down(config.PORT_CODER)
+    if res.status == "no-server":
+        try:
+            from core import doctor
+            actions = doctor.heal(["eyes"])
+            return ("кодера на посту не было; " + "; ".join(
+                a.replace("глаза %d: " % config.PORT_EYES, "")
+                for a in actions))
+        except Exception as e:
+            return "кодера на посту не было; глаза не поднять: %s" % e
+    if not res.ok:
+        return ("КОДЕР НЕ ЛЁГ (%s) — глаза НЕ поднимаю: VRAM занята, "
+                "двоим не хватит. Скажи архитектору: порт %d занят"
+                % (res.text or res.status, config.PORT_CODER))
     try:
         from core import doctor
         actions = doctor.heal(["eyes"])
-        note += "; ".join(a.replace("глаза %d: " % config.PORT_EYES, "")
-                          for a in actions)
+        note = "кодер лёг; " + "; ".join(
+            a.replace("глаза %d: " % config.PORT_EYES, "") for a in actions)
     except Exception as e:
-        note += "глаза не поднять: %s" % e
+        note = "кодер лёг; глаза не поднять: %s" % e
     return note
 
 

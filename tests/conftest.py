@@ -22,12 +22,36 @@ def _sandbox(tmp_path, monkeypatch):
     Только каталоги, о которых дом пишет НА КАЖДОМ ходу (лениво от
     DATA_DIR/LOGS_DIR); константы, вычисленные на импорте (NOTES_FILE
     и родня), тесты патчат явно, как и раньше — у каждого круга своя
-    песочница, закон не меняется, только подстилается страховка."""
+    песочница, закон не меняется, только подстилается страховка.
+
+    КРУГ 36 (аудит brain 329): скорость дозвона мозга в тестах —
+    ЗДЕСЬ, а не веткой PYTEST_CURRENT_TEST в боевом коде (переменную
+    окружения наследуют дочерние процессы run_python — тестовая ветка
+    попадала в прод). Батарея не спит 45 с ради симуляции погрузки.
+    """
     data = tmp_path / "data"
     logs = tmp_path / "logs"
     monkeypatch.setattr(config, "DATA_DIR", data)
     monkeypatch.setattr(config, "LOGS_DIR", logs)
     monkeypatch.setattr(config, "BRAIN_LOG_FILE", logs / "brain_log.jsonl")
+    monkeypatch.setattr(config, "BRAIN_CONNECT_BACKOFF_SEC", 0)
+    # КРУГ 36: журнал уроков — тоже песочница. EVOLUTION_DIR вычислен на
+    # импорте от dev-дома (/home/z/marfa_dev на берегу, C:\Marfa — на
+    # станции): БЕЗ этой строки уроки батарей утекали в НАСТОЯЩИЙ
+    # журнал, прорастали правилами в состояние дома и рвали чужие
+    # якоря диеты (живой случай круга 36: «уроков за сутки: 1263»)
+    monkeypatch.setattr(config, "EVOLUTION_DIR", data / "evolution")
+    # КРУГ 36: резолюции и файлы органов — тоже песочница. Эти константы
+    # вычислены на импорте: тесты калитки/глаз/ремонта писали
+    # screen_watch.json, self_write.json и родню в НАСТОЯЩИЙ dev-дом —
+    # и состояние дома (которое их читает) росло, рвая чужие якоря
+    # диеты. Потребители читают константы лениво — патч ложится
+    # поверх, тесты со своими патчами — ещё выше (закон песочницы).
+    monkeypatch.setattr(config, "SCREEN_WATCH_FILE", data / "screen_watch.json")
+    monkeypatch.setattr(config, "SELF_WRITE_FILE", data / "self_write.json")
+    monkeypatch.setattr(config, "HANDS_ENABLED_FILE", data / "hands_enabled.json")
+    monkeypatch.setattr(config, "SLEEP_FILE", data / "sleep.json")
+    monkeypatch.setattr(config, "GATE_ROTATE_FILE", data / "gate_rotate.json")
 
 
 @pytest.fixture

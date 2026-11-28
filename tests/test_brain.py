@@ -98,13 +98,45 @@ def test_ask_json_no_regex_salvage(client, srv):
         client.ask_json("спаси", retries=1)
 
 
-def test_ask_json_fallback_used(client, srv):
-    srv.reply_content = "не json"
+def test_ask_json_fallback_used(client, monkeypatch):
+    """КРУГ 36 (аудит 312/313, ритуал продления): фоллбэк включается,
+    когда МОЗГ УПАЛ (транспорт), — не когда живой мозг болтает не-JSON;
+    и отвечает ЯДРОМ Марфы: голос чужой модели без ядра — нарушение
+    «доктрина нерушима». Флаг FALLBACK_ENABLED — закон, не декорация."""
+    monkeypatch.setattr(config, "FALLBACK_ENABLED", True)
+    monkeypatch.setattr(client, "url", "http://127.0.0.1:1")   # мозг упал
     fb = FakeFallback(answer="ответ из GigaChat")
     client.fallback = fb
     out = client.ask_json("выручай")
     assert out == {"answer": "ответ из GigaChat", "source": "fallback"}
-    assert fb.asked == ["выручай"]
+    assert len(fb.asked) == 1
+    assert "Марфа" in fb.asked[0]           # ядро — с фоллбэком
+    assert fb.asked[0].endswith("выручай")  # и слова Создателя тоже
+
+
+def test_ask_json_bad_json_is_not_fallback(client, srv, monkeypatch):
+    """КРУГ 36 (аудит 312): брак JSON ≠ «мозг упал» — фоллбэк НЕ
+    подменяет живой мозг с плохой дисциплиной: его лекарство — ретрай,
+    а не чужой голос."""
+    monkeypatch.setattr(config, "FALLBACK_ENABLED", True)
+    srv.reply_content = "не json"
+    fb = FakeFallback(answer="подмена")
+    client.fallback = fb
+    with pytest.raises(brain.BrainError):
+        client.ask_json("куку")
+    assert fb.asked == []                  # чужой голос не звался
+
+
+def test_ask_json_fallback_disabled_by_law(client, monkeypatch):
+    """КРУГ 36 (аудит 312): FALLBACK_ENABLED=False (закон по умолчанию,
+    доктрина «наружу ничего») — даже упавший мозг не включает фоллбэк."""
+    monkeypatch.setattr(config, "FALLBACK_ENABLED", False)
+    monkeypatch.setattr(client, "url", "http://127.0.0.1:1")
+    fb = FakeFallback(answer="вопреки закону")
+    client.fallback = fb
+    with pytest.raises(brain.BrainError):
+        client.ask_json("выручай")
+    assert fb.asked == []
 
 
 def test_ask_json_no_fallback_raises(client, srv):

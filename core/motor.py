@@ -68,6 +68,26 @@ _VERBS_SCROLL = ("прокрути", "прокрутить", "скролль", "
                  "скроль", "листай", "прокрутишь")
 # Латинское сочетание клавиш: «enter», «ctrl c», «ctrl+c», «alt tab»
 _COMBO_RX = re.compile(r"^[a-z0-9]+(?:\s*[+\s]\s*[a-z0-9]+)*$")
+# КРУГ 36 (аудит 333): хоткей — это модификатор («ctrl c») или
+# ИЗВЕСТНАЯ одиночная клавиша («enter», «esc»). Одиночное латинское
+# слово («Send», «OK», «Save») — НАДПИСЬ кнопки английского интерфейса:
+# её КЛИКАЮТ, а не «нажимают клавишей» — прежде английский интерфейс
+# был некликабелен в принципе (verb=hotkey → «не в whitelist» → отказ).
+# Источник имён — whitelist стража: чего страж не нажмёт, то и не клавиша.
+_KEY_NAMES = frozenset(k for k in config.HANDS_HOTKEY_WHITELIST
+                       if "+" not in k)
+_MODIFIERS = frozenset(("ctrl", "alt", "shift", "win", "cmd", "meta"))
+
+
+def _is_hotkey(combo: str) -> bool:
+    """Сочетание с модификатором или одиночная известная клавиша —
+    хоткей; «send»/«ok»/«save» — цели для клика."""
+    parts = [p for p in re.split(r"[+ ]", (combo or "").strip().lower()) if p]
+    if not parts:
+        return False
+    if len(parts) == 1:
+        return parts[0] in _KEY_NAMES
+    return any(p in _MODIFIERS for p in parts[:-1])
 
 
 # ---------------------------------------------------------------
@@ -75,13 +95,46 @@ _COMBO_RX = re.compile(r"^[a-z0-9]+(?:\s*[+\s]\s*[a-z0-9]+)*$")
 # ---------------------------------------------------------------
 
 def enabled() -> bool:
-    """Включена ли моторика: data\\hands_enabled.json (кнопка 91).
+    """Включена ли моторика: data\\hands_enabled.json (кнопка 91 или
+    калитка Создателя).
 
-    Воля Создателя живёт в data/ (в git не попадает) — как резолюция
-    живого языка. Файл есть — руки двигают мышью; файла нет — сухой
-    режим: план без движения. Код НИКОГДА не пишет этот файл сам.
+    КРУГ 36 (аудит 332): файл обязан быть ЧЕСТНОЙ резолюцией —
+    валидный JSON-словарь, как пишет кнопка 91. Пустой файл или мусор
+    раньше включали моторику по самому факту существования — мозгу
+    хватало пустого write_file, чтобы разрешить себе реальные клики.
+    (Страж круга 36 заодно запретил мозгу писать этот файл вовсе.)
     """
-    return Path(config.HANDS_ENABLED_FILE).is_file()
+    try:
+        rec = json.loads(Path(config.HANDS_ENABLED_FILE)
+                         .read_text(encoding="utf-8"))
+        return isinstance(rec, dict)
+    except (OSError, ValueError):
+        return False
+
+
+def set_enabled(on: bool) -> str:
+    """Резолюция Создателя на моторику — ЧЕСТНОЙ записью: атомарно
+    (tmp + replace, как кнопка 91) и с обоснованием внутри. Зовет
+    калитка (за кодовым словом) и диспетчер (для выключения); мозг
+    этот файл писать не может — страж, круг 36."""
+    p = Path(config.HANDS_ENABLED_FILE)
+    if on:
+        rec = {"ts": dt.datetime.now().isoformat(timespec="seconds"),
+               "resolution": "моторика рук включена Создателем",
+               "basis": "кнопка 91 / калитка кодового слова (круг 36)"}
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(rec, ensure_ascii=False, indent=1),
+                       encoding="utf-8")
+        tmp.replace(p)
+        return ("моторика ВКЛЮЧЕНА: руки исполняют действия под стражем "
+                "(whitelist клавиш, лимит печати, клики в границах "
+                "экрана)")
+    try:
+        p.unlink()
+    except FileNotFoundError:
+        pass
+    return "моторика выключена — руки снова в сухом режиме"
 
 
 # ---------------------------------------------------------------
@@ -94,10 +147,15 @@ def _norm_combo(s: str) -> str:
     return "+".join(parts)
 
 
-def _after_verb(text: str, verb: str) -> str:
+def _after_verb(text: str, verb: str, keep_punct: bool = False) -> str:
     """Хвост задания после глагола — в ИСХОДНОМ регистре (печать
-    бережёт регистр, сверка текстов приводит сама)."""
-    return text[len(verb):].strip(" ,:;!.")
+    бережёт регистр, сверка текстов приводит сама).
+
+    КРУГ 36 (аудит, р4 №20): «напечатай Привет!» печатает «Привет!» —
+    «!» и «.» в печати — ДАННЫЕ, не интонация. Для клика/прокрутки
+    пунктуация цели всё равно нормализуется сверкой — там режем."""
+    cut = " ,:;" if keep_punct else " ,:;!."
+    return text[len(verb):].strip(cut)
 
 
 def parse_task(task: str) -> dict:
@@ -129,12 +187,12 @@ def parse_task(task: str) -> dict:
             target = _after_verb(t, v)
             if not target:
                 return {"verb": "empty"}       # «нажми» без цели — подсказка
-            if _COMBO_RX.match(target.lower().strip()):
+            if _COMBO_RX.match(target.lower().strip()) and _is_hotkey(target):
                 return {"verb": "hotkey", "combo": _norm_combo(target)}
             return {"verb": "click", "target": target}
     for v in _VERBS_TYPE:
         if low.startswith(v + " ") or low == v:
-            text = _after_verb(t, v)
+            text = _after_verb(t, v, keep_punct=True)
             if not text:
                 return {"verb": "empty"}       # «напечатай» без текста
             return {"verb": "type", "text": text}
@@ -145,7 +203,9 @@ def parse_task(task: str) -> dict:
                 return {"verb": "scroll", "direction": "up"}
             if "вниз" in rest or "down" in rest:
                 return {"verb": "scroll", "direction": "down"}
-            return {"verb": "scroll", "direction": "down"}  # по умолчанию вниз
+            # КРУГ 36 (аудит): «прокрути влево» — НЕ догадка «вниз»:
+            # неизвестное направление — честный отказ, не тихий клик
+            return {"verb": "unknown", "raw": t[:120]}
     return {"verb": "unknown", "raw": t[:120]}
 
 
@@ -202,6 +262,27 @@ def _conf(el: dict) -> float:
         return 0.0
 
 
+def _label(el: dict) -> str:
+    """Надпись элемента для честного вопроса Создателю."""
+    return str(el.get("text") or el.get("type") or "?").strip()
+
+
+class AmbiguousTarget(Exception):
+    """Несколько элементов подходят под цель — клик без уточнения
+    опасен (аудит 336: «Сохранить» и «Сохранить как» были
+    неразличимы, бралось первое молча — клик не по той кнопке — самая
+    дорогая ошибка модуля). candidates — надписи для вопроса."""
+
+    def __init__(self, candidates: list):
+        super().__init__("несколько элементов подходят под цель")
+        self.candidates = [str(c) for c in candidates]
+
+
+def _words_of(s) -> list:
+    """Слова нормализованной строки — сверка по ГРАНИЦАМ слов."""
+    return [w for w in _norm_text(s).split(" ") if w]
+
+
 # Слова-указатели рода элемента: «кнопку Сохранить» → «Сохранить»
 _KIND_WORDS = (r"(?:кнопк\w+|ссылк\w+|поле|поля|меню|вкладк\w+|"
                r"иконк\w+|окн\w+)")
@@ -213,8 +294,12 @@ def find_element(d: dict, target: str,
 
     Мастер-ТЗ §10: VLM возвращает текст И координаты — руки сверяют
     надпись. §10.3: элементы с confidence < 0.6 — НЕИЗВЕСТНЫЕ, кликать
-    нельзя. Порядок сверки: точное совпадение → надпись внутри цели →
-    цель внутри надписи («Пуск» в «нажми кнопку Пуска»). Ничего — None:
+    нельзя. Порядок сверки: точное совпадение → слова надписи — начала
+    слов цели («Пуск» ⊂ «нажми кнопку Пуска») → слова цели — начала
+    слов надписи («блокнот» ⊂ «Блокнот — Безымянный»). КРУГ 36 (аудит
+    336): сверка по ГРАНИЦАМ слов и началам (не короче 3 симв.) —
+    подстроки без границ матчили «ус» к «пуск»; НЕСКОЛЬКО кандидатов —
+    AmbiguousTarget (кликать первое молча запрещено). Ничего — None:
     руки не угадывают, честно говорят «не вижу».
     """
     want = _norm_text(target)
@@ -223,24 +308,36 @@ def find_element(d: dict, target: str,
     want = re.sub(r"^%s\s+" % _KIND_WORDS, "", want).strip()
     if not want:
         return None
+    want_words = [w for w in want.split(" ") if w]
     thr = config.HANDS_MIN_CONFIDENCE if min_conf is None else min_conf
     els = [e for e in (d.get("elements") or [])
            if isinstance(e, dict) and e.get("bbox")]
     sure = [e for e in els if _conf(e) >= thr]
     # 1) точное совпадение среди уверенных
-    for e in sure:
-        if _norm_text(e.get("text")) == want:
-            return e
-    # 2) надпись внутри цели («нажми кнопку Пуска» ⊃ «пуск»)
-    for e in sure:
-        txt = _norm_text(e.get("text"))
-        if txt and txt in want:
-            return e
-    # 3) цель внутри надписи («блокнот» ⊂ «Блокнот — Безымянный»)
-    for e in sure:
-        txt = _norm_text(e.get("text"))
-        if txt and want in txt:
-            return e
+    exact = [e for e in sure if _norm_text(e.get("text")) == want]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        raise AmbiguousTarget([_label(e) for e in exact])
+    # 2) слова надписи — начала слов цели («нажми кнопку Пуска» ⊃ «пуск»)
+    def _step2(e: dict) -> bool:
+        return any(len(tw) >= 3 and any(w.startswith(tw) for w in want_words)
+                   for tw in _words_of(e.get("text")))
+    hits = [e for e in sure if _step2(e)]
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        raise AmbiguousTarget([_label(e) for e in hits])
+    # 3) слова цели — начала слов надписи («блокнот» ⊂ «Блокнот — Безымянный»)
+    def _step3(e: dict) -> bool:
+        tws = _words_of(e.get("text"))
+        return any(len(w) >= 3 and any(tw.startswith(w) for tw in tws)
+                   for w in want_words)
+    hits = [e for e in sure if _step3(e)]
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        raise AmbiguousTarget([_label(e) for e in hits])
     return None
 
 
@@ -256,9 +353,20 @@ def scale_point(x: int, y: int, real_size, sent_size) -> tuple:
     Клип в границы экрана — страховка от округления на краю: валидный
     bbox по построению даёт точку ВНУТРИ экрана (инвариант единого
     зрения, тест гоняет его 200 случайными кадрами).
+
+    КРУГ 36 (аудит 334/335): размеры не полные — ЧЕСТНЫЙ ОТКАЗ, а не
+    «страховка» сырыми кадровыми координатами: прежний return x, y —
+    промах в левый верхний угол при включённой моторике, не отказ.
+    Высоты (обе пары) проверяются наравне с ширинами: нулевая высота
+    кадра раньше роняла ZeroDivisionError.
     """
-    if not sent_size or not sent_size[0] or not real_size:
-        return int(x), int(y)
+    if (not isinstance(sent_size, (tuple, list)) or len(sent_size) < 2
+            or not sent_size[0] or not sent_size[1]
+            or not isinstance(real_size, (tuple, list)) or len(real_size) < 2
+            or not real_size[0] or not real_size[1]):
+        raise ValueError("глаза не дали полные размеры кадра/экрана — "
+                         "масштаб клика не считается; кликаю только по "
+                         "валидной геометрии (скажи «посмотри» и повтори)")
     kx = float(real_size[0]) / float(sent_size[0])
     ky = float(real_size[1]) / float(sent_size[1])
     px = min(int(round(x * kx)), int(real_size[0]) - 1)
@@ -267,10 +375,14 @@ def scale_point(x: int, y: int, real_size, sent_size) -> tuple:
 
 
 def frame_center(el: dict) -> tuple:
-    """Центр bbox в координатах КАДРА (bbox уже проверен глазами:
-    живёт внутри кадра — валидатор глаз v3 выбрасывает выдуманную
-    геометрию ДО того, как её увидят руки)."""
-    x1, y1, x2, y2 = el["bbox"]
+    """Центр bbox в координатах КАДРА. КРУГ 36 (аудит 338): без
+    валидного бокса — честный отказ, а не KeyError и не мёртвый
+    [0,0,0,0]-фальшбэк: центр выдумывать нельзя."""
+    bbox = el.get("bbox") if isinstance(el, dict) else None
+    if not bbox or len(bbox) != 4:
+        raise ValueError("элемент без валидного bbox — центра нет, клик "
+                         "не считается")
+    x1, y1, x2, y2 = bbox
     return (x1 + x2) // 2, (y1 + y2) // 2
 
 
@@ -286,9 +398,21 @@ def click_point(el: dict, real_size, sent_size) -> tuple:
 # ---------------------------------------------------------------
 
 def guard_action(name: str, args, real_size) -> guard.Verdict:
-    """Вердикт стража на ОДНО действие рук (точка уже в экранных
-    пикселях — координаты дала валидированная геометрия глаз)."""
+    """Вердикт стража на ОДНО действие рук. real_size нужен только
+    клику (границы экрана); остальным действиям экран не нужен — и
+    КРУГ 36 (аудит) запрещает подсунуть ему ВЫДУМАННЫЙ экран: прежде
+    _do_simple/_do_paste передавали (1920,1080) — интерфейс получал
+    ложь о геометрии.
+
+    КРУГ 36 (аудит 339): неизвестное имя действия — ОТКАЗ. Прежний
+    fail-open в финальном else разрешал ВСЁ, что страж не знал, —
+    страж с дырой; scroll получил свою явную ветку и проверку
+    направления."""
     if name == "click":
+        if not isinstance(real_size, (tuple, list)) or len(real_size) < 2:
+            return guard.Verdict("HIGH", "deny",
+                                 "клик без размеров экрана — границы не "
+                                 "проверить", "hands.bounds")
         x, y = int(args[0]), int(args[1])
         if not (0 <= x < real_size[0] and 0 <= y < real_size[1]):
             return guard.Verdict("HIGH", "deny",
@@ -339,57 +463,85 @@ def guard_action(name: str, args, real_size) -> guard.Verdict:
                                  "hands.hotkey.whitelist")
         return guard.Verdict("MEDIUM", "allow", "hotkey %s" % key,
                              "hands.hotkey")
-    # scroll — простое, без координат и текста
-    return guard.Verdict("LOW", "allow", name, "hands.simple")
+    if name == "scroll":
+        direction = str(args[0] if args else "").strip().lower()
+        if direction not in ("up", "down"):
+            return guard.Verdict("HIGH", "deny",
+                                 "прокрутка «%s» не бывает — только "
+                                 "вверх/вниз" % direction,
+                                 "hands.scroll.dir")
+        return guard.Verdict("LOW", "allow", "прокрутка %s" % direction,
+                             "hands.scroll")
+    # КРУГ 36 (аудит 339): страж не fail-open — незнакомое действие
+    # НЕ исполняется тихо (прежде — LOW/allow для любого мусора)
+    return guard.Verdict("HIGH", "deny",
+                         "неизвестное действие рук: %s" % name,
+                         "hands.unknown")
 
 
 # ---------------------------------------------------------------
 # Исполнение (pyautogui — лениво, честная ошибка без него)
 # ---------------------------------------------------------------
 
-def _dpi_aware() -> None:
+def _dpi_aware() -> bool:
     """Физические пиксели для мыши (мастер-ТЗ §10.2): DPI-aware процесс.
 
     Windows-виртуализация (125%/150%) отдаёт не-aware процессу
     логические координаты — pyautogui жмёт мимо даже при верном
-    масштабе. Вызываем до первого движения мыши; повторный вызов
-    безвреден (отказ уже выставленной политики молча проглатываем)."""
+    масштабе. Вызывается ДО ИМПОРТА pyautogui (КРУГ 36, аудит 340:
+    прежде импорт кэшировал виртуализованный размер экрана, и вызов
+    после ничего уже не исправлял — клик мимо при верном масштабе).
+    Повторный вызов безвреден. Возвращает False, если политику
+    выставить не вышла, — дом должен ЗНАТЬ, что кликает в
+    виртуализованных координатах (аудит: прежде отказы глатались
+    молча, без урока и строки в ответе)."""
     if sys.platform != "win32":
-        return
+        return True
     try:
         import ctypes
         try:
             ctypes.windll.shcore.SetProcessDpiAwareness(2)   # per-monitor
+            return True
         except Exception:
             ctypes.windll.user32.SetProcessDPIAware()
+            return True
     except Exception:
-        pass
+        return False
 
 
 def _execute(name: str, args) -> str:
-    """Исполнить одобренное действие. Возвращает честную сводку."""
+    """Исполнить одобренное действие. Возвращает честную сводку.
+
+    КРУГ 36 (аудит 340): DPI-aware ДО импорта pyautogui — прежде
+    импорт кэшировал виртуализованный размер экрана, и _dpi_aware
+    после него уже ничего не исправлял. Отказ DPI — честная строка в
+    ответе, не молчание."""
+    dpi_warn = ""
+    if not _dpi_aware():
+        dpi_warn = ("; ВНИМАНИЕ: DPI-осознанность не выставилась — при "
+                    "масштабе экрана 125%/150% клик может уйти мимо, "
+                    "скажи архитектору")
     try:
         import pyautogui
     except ImportError as e:
         return ("не исполнила: нет pyautogui (%s) — "
                 "venv\\Scripts\\pip install pyautogui" % e)
-    _dpi_aware()
     if name == "click":
         x, y = int(args[0]), int(args[1])
         pyautogui.click(x, y)
-        return "кликнула (%d, %d)" % (x, y)
+        return "кликнула (%d, %d)%s" % (x, y, dpi_warn)
     if name == "type":
         pyautogui.write(args[0] or "", interval=0.02)
-        return "напечатала %d символов" % len(args[0] or "")
+        return "напечатала %d символов%s" % (len(args[0] or ""), dpi_warn)
     if name == "scroll":
         up = str(args[0]).lower() == "up"
         pyautogui.scroll(300 if up else -300)
-        return "прокрутила %s" % ("вверх" if up else "вниз")
+        return "прокрутила %s%s" % ("вверх" if up else "вниз", dpi_warn)
     if name == "hotkey":
         parts = [p.strip() for p in str(args[0]).lower().split("+")
                  if p.strip()]
         pyautogui.hotkey(*parts)
-        return "нажала %s" % "+".join(parts)
+        return "нажала %s%s" % ("+".join(parts), dpi_warn)
     return ""
 
 
@@ -453,11 +605,20 @@ def _lesson(kind: str, text: str) -> None:
 # ---------------------------------------------------------------
 
 def _screenshot():
-    """Снимок для пиксельной сверки — тем же инструментом, что и глаза."""
+    """Снимок для пиксельной сверки — тем же инструментом, что и глаза.
+
+    КРУГ 36 (аудит): швы соседа — через getattr с честным отказом:
+    переименование в глазах не должно ронять руки МОЛЧА (броня
+    съедала AttributeError и говорила «ошибка рук» без причины)."""
     from core import eyes
-    if eyes._VISION_ERROR:
-        raise RuntimeError("глаза не готовы: " + eyes._VISION_ERROR)
-    return eyes._screenshot_b64(eyes.WORK_WIDTH)
+    err = getattr(eyes, "_VISION_ERROR", "")
+    if err:
+        raise RuntimeError("глаза не готовы: " + err)
+    shot = getattr(eyes, "_screenshot_b64", None)
+    if shot is None:
+        raise RuntimeError("глаза не дали инструмент снимка — скажи "
+                           "архитектору (шов _screenshot_b64 пропал)")
+    return shot(eyes.WORK_WIDTH)
 
 
 # ---------------------------------------------------------------
@@ -470,10 +631,30 @@ def run(task: str) -> str:
     Цепочка: задание словами → дескриптор глаз → элемент по тексту →
     центр bbox → масштаб → СТРАЖ → (исполнить | сухой режим) →
     пиксельная сверка. Сервер зрения не гаснет: VRAM не танцует.
+
+    КРУГ 36 (аудит): метки разглядывания — только в ПОЗИЦИИ глагола
+    (задание НАЧИНАЕТСЯ с них): «нажми кнопку Прочитай» и «напечатай
+    текст про камеру» — задания рук, а не редирект к глазам; резолюция
+    читается ОДИН раз (режим строки и факт действия не расходятся);
+    исход — в журнал рук (ok — по содержимому строк ответа); перевод
+    строки в латинице уходит в буфер (pyautogui.write не умеет \n).
     """
     task = (task or "").strip()
-    low = task.lower()
-    if any(mark in low for mark in _LOOKING_MARKS):
+    # «руки, нажми Пуск» — слово «руки» съедает агент, но на всякий
+    # случай снимаем и его сами — ДО меток разглядывания: иначе
+    # «руки, посмотри на экран» выглядело заданием про руки
+    stripped = re.sub(r"^руки\b[\s,;:—-]*", "", task,
+                      flags=re.IGNORECASE).strip() or task
+    low = stripped.lower()
+    # КРУГ 36 (аудит): метки разглядывания — ГЛАГОЛЬНЫЕ по ПРЕФИКСУ
+    # задачи («посмотри…», «опиши…», «прочитай…»), ПРЕДМЕТНЫЕ
+    # («камер», «скриншот») — в первых двух словах («включи камеру»,
+    # «сделай скриншот»). Прежде подстрока по ВСЕМУ заданию уводила
+    # к глазам «нажми кнопку Прочитай» и «напечатай текст про камеру».
+    first_words = low.split()[:2]
+    if any(low.startswith(m) for m in _LOOKING_MARKS) \
+            or any(w.startswith(m) for m in _LOOKING_MARKS
+                   for w in first_words):
         # Урок живого прогона 22.11: «посмотри на меня» ушло РУКАМ —
         # VRAM-танец впустую и клик в никуда. Руки не смотрят.
         _log_act({"task": task, "redirect": "eyes"})
@@ -490,7 +671,8 @@ def run(task: str) -> str:
         _log_act({"task": task, "ok": False, "why": "не поняла задание"})
         return ("РУКИ не поняли задание «%s». %s"
                 % (task.strip(",;:.! "), _HINT))
-    mode = ("моторика ВКЛЮЧЕНА (резолюция Создателя)" if enabled()
+    motor_on = enabled()
+    mode = ("моторика ВКЛЮЧЕНА (резолюция Создателя)" if motor_on
             else "сухой режим: план без кликов (включить — кнопка 91)")
     lines = ["РУКИ — задание: %s [%s]" % (task, mode)]
     # эфир: самый долгий шаг рук — взгляд глаз; дальше план мгновенен
@@ -498,37 +680,47 @@ def run(task: str) -> str:
     started = time.time()
     try:
         if plan["verb"] == "click":
-            lines += _do_click(task, plan["target"], enabled())
+            lines += _do_click(task, plan["target"], motor_on)
         elif plan["verb"] == "type":
             text = plan["text"]
-            if any(ord(ch) > 127 for ch in text):
-                # Р-4 закрыт (№18): кириллица/юникод — через буфер и
-                # ctrl+v, прямой ввод pyautogui.write их не умеет
-                lines += _do_paste(task, text, enabled())
+            if any(ord(ch) > 127 for ch in text) \
+                    or "\n" in text or "\r" in text:
+                # Р-4 закрыт (№18) + КРУГ 36: кириллица/юникод И переводы
+                # строк — через буфер и ctrl+v: pyautogui.write не умеет
+                # \n, многострочная латиница ломалась прямой печатью
+                lines += _do_paste(task, text, motor_on)
             else:
                 lines += _do_simple(task, "type", (text,),
-                                    'напечатать «%s»' % text, enabled())
+                                    'напечатать «%s»' % text, motor_on)
         elif plan["verb"] == "hotkey":
             lines += _do_simple(task, "hotkey", (plan["combo"],),
-                                'нажать %s' % plan["combo"], enabled())
+                                'нажать %s' % plan["combo"], motor_on)
         elif plan["verb"] == "scroll":
             lines += _do_simple(task, "scroll", (plan["direction"],),
-                                'прокрутить %s' % plan["direction"], enabled())
+                                'прокрутить %s' % plan["direction"], motor_on)
     except Exception as e:
         lines.append("ошибка рук: %s" % e)
         _lesson("руки-ошибка", "%s: %s" % (task, e))
-    _log_act({"task": task, "verb": plan["verb"],
-              "secs": round(time.time() - started, 1), "mode":
-              "motor" if enabled() else "dry"})
+    # КРУГ 36 (аудит): журнал рук отвечает на вопрос «кликнула ли» —
+    # ok — по факту строк ответа, не по молчанию
+    ok = not any(l.startswith(("СТРАЖ ОТКАЗАЛ", "ошибка рук", "РУКИ не"))
+                 for l in lines)
+    _log_act({"task": task, "verb": plan["verb"], "ok": ok,
+              "secs": round(time.time() - started, 1),
+              "mode": "motor" if motor_on else "dry"})
     return "\n".join(lines)
 
 
 def _eyes_or_honest():
     """Глаза живы? Рукам нужны их координаты — без зрения честный отказ,
-    никакого самовольного перезапуска серверов (хозяин VRAM — глаза)."""
+    никакого самовольного перезапуска серверов (хозяин VRAM — глаза).
+
+    КРУГ 36 (аудит): шов _VISION_ERROR — через getattr: переименование
+    в глазах не роняет руки молча."""
     from core import eyes
-    if eyes._VISION_ERROR:
-        raise RuntimeError("глаза не готовы: " + eyes._VISION_ERROR)
+    err = getattr(eyes, "_VISION_ERROR", "")
+    if err:
+        raise RuntimeError("глаза не готовы: " + err)
     if not eyes.health():
         raise RuntimeError(
             "глаза %d не отвечают — рукам нужны координаты глаз (единое "
@@ -552,9 +744,16 @@ def _seen_texts(d: dict, limit: int = 6) -> str:
         return ", ".join("«%s»" % t for t in texts[:limit])
     st = d.get("_stats") if isinstance(d, dict) else None
     if isinstance(st, dict):
-        raw = int(st.get("raw") or 0)
-        kept = int(st.get("kept") or 0)
-        dropped = int(st.get("dropped") or 0)
+        # КРУГ 36 (аудит): нечисловая статистика — честный ноль, а не
+        # ValueError «ошибка рук» без причины
+        def _num(v):
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return 0
+        raw = _num(st.get("raw"))
+        kept = _num(st.get("kept"))
+        dropped = _num(st.get("dropped"))
         if raw and dropped >= raw:
             return ("глаза увидели %d элемент(ов), но НИ ОДИН не прошёл "
                     "проверку координат (геометрия вне кадра) — сообщи "
@@ -567,10 +766,24 @@ def _seen_texts(d: dict, limit: int = 6) -> str:
 
 
 def _do_click(task: str, target: str, motor: bool) -> list:
-    """Клик по элементу с надписью из задания (ТЗ 5.1)."""
+    """Клик по элементу с надписью из задания (ТЗ 5.1).
+
+    КРУГ 36 (аудит 336): несколько подходящих элементов — честный
+    ВОПРОС, а не тихий клик по первому. Порог пиксельной сверы 2%
+    (аудит: 0.5% ловили мигание курсора и тикающие часы как «цикл
+    работает»)."""
     eyes = _eyes_or_honest()
     d, real, sent = eyes.describe_with_sizes()
-    el = find_element(d, target)
+    try:
+        el = find_element(d, target)
+    except AmbiguousTarget as amb:
+        seen = ", ".join("«%s»" % c for c in amb.candidates[:4])
+        _log_act({"task": task, "verb": "click", "ok": False,
+                  "why": "неоднозначно", "candidates": amb.candidates[:4]})
+        _lesson("руки-неоднозначно", "%s: %s" % (task, seen))
+        return [("РУКИ видят НЕСКОЛЬКО подходящих: %s — скажи точнее, "
+                 "кликать наугад не буду (не по той кнопке — самая "
+                 "дорогая моя ошибка)" % seen)]
     if el is None:
         weak = find_element(d, target, min_conf=0.0)
         if weak is not None:
@@ -613,9 +826,9 @@ def _do_click(task: str, target: str, motor: bool) -> list:
     if frac is None:
         lines.append("сверка пикселей: не смогла сравнить — честно, "
                      "не выдумываю")
-    elif frac > 0.005:
+    elif frac > 0.02:
         lines.append("сверка пикселей: у клика экран изменился на %.0f%% "
-                     "кадра — замкнутый цикл работает" % (frac * 100))
+                     "области бокса — замкнутый цикл работает" % (frac * 100))
     else:
         lines.append("сверка пикселей: экран почти не изменился (%.1f%%) — "
                      "возможно, клик не сработал; скажи «посмотри», "
@@ -631,9 +844,16 @@ def _do_paste(task: str, text: str, motor: bool) -> list:
     план без движения мыши. Буфер споткнулся — честный отказ,
     вставки не будет (ctrl+v без буфера вставил бы ПРОШЛЫЙ текст —
     это хуже, чем ничего).
+
+    КРУГ 36 (аудит): буфер Создателя — НЕ расходный материал: (1)
+    сохраняю ДО записи (не смогла прочитать — честной строкой);
+    (2) сверяю ЧТЕНИЕМ после записи — тихое несовпадение лечится
+    отказом, а не вставкой прошлого; (3) возвращаю ПОСЛЕ вставки,
+    отказ возврата — честной строкой. Раньше печать кириллицы
+    уничтожала то, что Создатель скопировал до того.
     """
     from core import hands as _hands
-    v = guard_action("paste", (text,), (1920, 1080))
+    v = guard_action("paste", (text,), None)
     guard.decide(v, {"tool": "ui_action", "task": task, "verb": "paste"})
     _log_act({"task": task, "verb": "paste", "args": [len(text)],
               "verdict": v.to_dict(), "mode": "motor" if motor else "dry"})
@@ -644,6 +864,13 @@ def _do_paste(task: str, text: str, motor: bool) -> list:
         return [("СУХОЙ РЕЖИМ: положила бы «%s» (%d симв.) в буфер и "
                  "вставила ctrl+v. Включить моторику — кнопка 91"
                  % (text[:40], len(text)))]
+    saved = None
+    save_note = ""
+    try:
+        saved = _hands.clipboard_save_raw()
+    except Exception as e:
+        save_note = ("; старый буфер прочитать не смогла (%s) — если там "
+                     "лежало что-то важное, оно затёрто этой печатью" % e)
     try:
         clip_note = _hands.clipboard_write(text)
     except Exception as e:
@@ -652,25 +879,86 @@ def _do_paste(task: str, text: str, motor: bool) -> list:
                  "без нового буфера вставил бы ПРОШЛОЕ, это хуже, чем "
                  "ничего. Скажи «в буфер %s» — проверим буфер отдельно"
                  % (e, text[:20]))]
+    # сверка: в буфере лежит ТО, что кладём — закон этого модуля
+    try:
+        back = _hands.clipboard_save_raw()
+    except Exception:
+        back = text            # сверить нечем — не врём про сверку
+    if back != text:
+        if saved:
+            try:
+                _hands.clipboard_restore(saved)
+            except Exception:
+                pass
+        _lesson("руки-буфер-подмена", "%s: %d→%d симв."
+                % (task, len(text), len(back)))
+        return [("БУФЕР подменил текст при записи (клала %d симв., "
+                 "прочитала %d) — вставки НЕ будет: ctrl+v вставил бы "
+                 "не то. Скажи архитектору" % (len(text), len(back)))]
     res = _execute("hotkey", ("ctrl+v",))
-    return ["%s; вставила ctrl+v — «%s» (%d симв.)"
-            % (clip_note.split(".")[0], text[:40], len(text)), res]
+    restore_note = ""
+    if saved:
+        try:
+            _hands.clipboard_restore(saved)
+        except Exception as e:
+            restore_note = ("; буфер вернуть не смогла: %s — скопированное "
+                            "до печати потеряно, прости" % e)
+    elif saved == "":
+        restore_note = ("; старый буфер был пуст (или не текст — картинкой "
+                        "я не распоряжаюсь)")
+    lines = ["%s; вставила ctrl+v — «%s» (%d симв.)%s%s"
+             % (clip_note.split(".")[0], text[:40], len(text),
+                restore_note, save_note), res]
+    lines += _pixel_check_after()
+    return lines
+
+
+def _pixel_check_after() -> list:
+    """Пиксельная сверка после моторного действия без координат
+    (§10.4-3 обещан ВСЕМ действиям, не одному клику — КРУГ 36):
+    печать/клавиши/прокрутка меняют экран так же. Сравнить не смогли —
+    честно молчим, не выдумываем «работает»."""
+    try:
+        before, _, _ = _screenshot()
+        time.sleep(0.4)
+        after, _, _ = _screenshot()
+        frac = _pixel_diff(before, after)
+        if frac is None:
+            return []
+        if frac > 0.005:
+            return ["сверка пикселей: экран изменился на %.1f%% кадра — "
+                    "действие дало эффект" % (frac * 100)]
+        return ["сверка пикселей: экран почти не изменился (%.1f%%) — "
+                "возможно, действие не сработало; скажи «посмотри»"
+                % (frac * 100)]
+    except Exception:
+        return []       # сверка — не орган дыхания действия
 
 
 def _do_simple(task: str, name: str, args, human: str,
                motor: bool) -> list:
-    """Печать / клавиши / прокрутка — без координат (ТЗ 5.2-5.4)."""
-    real = (1920, 1080)                  # для стража границы не нужны,
-    v = guard_action(name, args, real)   # но интерфейс один
+    """Печать / клавиши / прокрутка — без координат (ТЗ 5.2-5.4).
+
+    КРУГ 36 (аудит): в журнал рук уходит ДЛИНА печати, а не сам текст
+    (hands_log.jsonl читается мозгом — печать Создателя не должна
+    лежать в читаемой мозгом папке); стражу этих действий экран не
+    нужен (прежде передавали выдуманный 1920×1080); после моторного
+    действия — пиксельная сверка (§10.4-3 — всем глаголам, не одному
+    клику)."""
+    v = guard_action(name, args, None)
     guard.decide(v, {"tool": "ui_action", "task": task, "verb": name})
-    _log_act({"task": task, "verb": name, "args": list(args)[:1],
+    shown = [len(args[0]) if name in ("type", "paste") and args
+             else (args[0] if args else None)]
+    _log_act({"task": task, "verb": name, "args": shown,
               "verdict": v.to_dict(), "mode": "motor" if motor else "dry"})
     if not v.allowed():
         _lesson("руки-страж", "%s: %s" % (task, v.reason))
         return ["СТРАЖ ОТКАЗАЛ: %s" % v.reason]
     if not motor:
         return ["СУХОЙ РЕЖИМ: %s. Включить моторику — кнопка 91" % human]
-    return [_execute(name, args)]
+    lines = [_execute(name, args)]
+    lines += _pixel_check_after()
+    return lines
 
 
 # ---------------------------------------------------------------
@@ -684,27 +972,52 @@ def exam() -> str:
     масштаб. Сухой режим — только рассчитанная точка; моторный —
     настоящий клик, пиксельная сверка и Esc (меню закроется). VRAM
     не танцует: сервер зрения один и не гаснет — в этом и экзамен.
+
+    КРУГ 36 (аудит 337/338): экзамен подчиняется ЗАКОНУ модуля, который
+    сам же цитирует: §10.3 — элементы с confidence < 0.6 НЕИЗВЕСТНЫЕ,
+    экзамен на неуверенном Пуске не проводится (прежде порог действовал
+    для кликов, но не для экзамена); элемент без живого bbox — честный
+    отказ, а не KeyError сквозь мёртвую защиту [0,0,0,0]. Уборка Esc
+    идёт ЧЕРЕЗ СТРАЖА (прежде _execute звался напрямую — надзор
+    обходился). Провалы — в журнал рук: экзамен без следа в аудите
+    не экзамен.
     """
     lines = ["ЭКЗАМЕН Р-0 v2 (цепочка глаза→руки, единое зрение)"]
     progress.stage("экзамен Р-0: глаза ищут «Пуск», руки меряют клик…")
+    motor = enabled()
     try:
         eyes = _eyes_or_honest()
         d, real, sent = eyes.describe_with_sizes()
     except Exception as e:
+        _log_act({"exam": True, "ok": False, "why": str(e)[:120],
+                  "mode": "motor" if motor else "dry"})
         return "\n".join(lines + ["не смогла спросить глаза: %s" % e])
     el = None
+    weak = None
     for cand in d.get("elements", []):
+        if not isinstance(cand, dict) or not cand.get("bbox"):
+            continue                      # аудит 338: без бокса не экзаменуем
         t = str(cand.get("text", "")).lower()
         if "пуск" in t or "start" in t:
-            el = cand
-            break
+            if _conf(cand) >= config.HANDS_MIN_CONFIDENCE:
+                el = cand
+                break
+            weak = weak or cand           # §10.3: неуверенное — НЕИЗВЕСТНОЕ
     if el is None:
-        return "\n".join(
-            lines + ["глаза не нашли Пуск в дескрипторе — экзамен не "
-                     "состоялся. Глаза читают: %s. Открой меню Пуска "
-                     "(клавиша Win) и скажи «руки, экзамен» ещё раз"
-                     % _seen_texts(d)])
-    bbox = el.get("bbox") or [0, 0, 0, 0]
+        why = ("глаза видят похожее на Пуск, но неуверенно (%.2f < %.1f — "
+               "§10.3: неуверенное — НЕИЗВЕСТНОЕ). Скажи «посмотри» — "
+               "глаза опишут экран точнее, и повтори экзамен"
+               % (_conf(weak), config.HANDS_MIN_CONFIDENCE)
+               if weak is not None else
+               "глаза не нашли Пуск в дескрипторе. Глаза читают: %s. "
+               "Открой меню Пуска (клавиша Win) и скажи «руки, экзамен» "
+               "ещё раз" % _seen_texts(d))
+        _log_act({"exam": True, "ok": False,
+                  "why": "неуверенный Пуск" if weak is not None
+                  else "Пуск не найден",
+                  "mode": "motor" if motor else "dry"})
+        return "\n".join(lines + ["экзамен не состоялся: " + why])
+    bbox = el.get("bbox")
     cx, cy = frame_center(el)
     x, y = scale_point(cx, cy, real, sent)
     lines.append("глаза: «%s» bbox %s (уверенность %s); центр кадра "
@@ -713,7 +1026,6 @@ def exam() -> str:
                     cx, cy, x, y,
                     real[0] / float(sent[0] or 1),
                     real[1] / float(sent[1] or 1)))
-    motor = enabled()
     if not motor:
         _log_act({"exam": True, "eyes_bbox": bbox, "point": [x, y],
                   "mode": "dry"})
@@ -726,14 +1038,21 @@ def exam() -> str:
         guard.decide(v, {"tool": "ui_action", "task": "экзамен Р-0",
                          "verb": "exam"})
         if not v.allowed():
+            _log_act({"exam": True, "ok": False, "why": v.reason,
+                      "mode": "motor"})
             return "\n".join(lines + ["СТРАЖ ОТКАЗАЛ: %s" % v.reason])
         before, _, _ = _screenshot()
         lines.append(_execute("click", (x, y)))
         time.sleep(0.8)                  # меню Пуска успевает открыться
         after, _, _ = _screenshot()
         frac = _pixel_diff(before, after)
-        # уборка за экзаменом: Esc из whitelist закроет меню
-        _execute("hotkey", ("esc",))
+        # уборка за экзаменом: Esc — ЧЕРЕЗ СТРАЖА (аудит: прежде
+        # _execute звался напрямую, надзор обходился)
+        v_esc = guard_action("hotkey", ("esc",), real)
+        guard.decide(v_esc, {"tool": "ui_action", "task": "экзамен Р-0 "
+                                                      "(уборка)", "verb": "esc"})
+        if v_esc.allowed():
+            _execute("hotkey", ("esc",))
         if frac is not None and frac > 0.01:
             verdict = ("ЦЕПОЧКА РАБОТАЕТ: открытие меню изменило %.0f%% "
                        "кадра — глаза навели точно, руки нажали верно"
@@ -747,8 +1066,10 @@ def exam() -> str:
         lines.append("сверка пикселей: " + verdict)
         _log_act({"exam": True, "eyes_bbox": bbox, "point": [x, y],
                   "changed_frac": None if frac is None else round(frac, 4),
-                  "mode": "motor"})
+                  "mode": "motor", "ok": "ЦЕПОЧКА" in verdict})
         _lesson("руки-экзамен", "(%d,%d): %s" % (x, y, verdict[:80]))
         return "\n".join(lines)
     except Exception as e:
+        _log_act({"exam": True, "ok": False, "why": str(e)[:120],
+                  "mode": "motor"})
         return "\n".join(lines + ["ошибка экзамена: %s" % e])

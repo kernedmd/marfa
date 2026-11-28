@@ -177,11 +177,13 @@ def test_tail_filter_no_match_honest(gate, brain_logs):
 
 
 def test_tail_without_filter_unchanged(gate, brain_logs):
-    """Старое поведение цело: «хвост brain» — все последние строки."""
+    """Старое поведение цело: «хвост brain» — все последние строки.
+    КРУГ 36 (ритуал продления): строк теперь с ЧИСЛОМ — сколько
+    показали, честно видно и без фильтра."""
     hit, reply = creator_gate.check(WORD + " хвост brain")
     assert hit is True
     assert "вопрос принят" in reply and "ретрай" in reply
-    assert "последние строки" in reply
+    assert "последние 6 строк" in reply
 
 
 def test_tail_filter_multiword(gate, brain_logs):

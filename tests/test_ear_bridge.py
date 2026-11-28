@@ -200,9 +200,11 @@ def test_maybe_release_respects_keepalive(home, monkeypatch):
     from core import vram
     monkeypatch.setattr(bridge, "server_alive", lambda: True)
     stopped = []
-    monkeypatch.setattr(vram, "stop_llama",
-                        lambda port, server_name="llama-server": stopped
-                        .append((port, server_name)) or True)
+    # КРУГ 36 (ритуал продления): церемония — lay_down со статусами
+    monkeypatch.setattr(vram, "lay_down",
+                        lambda port, server_name="llama-server":
+                        stopped.append((port, server_name))
+                        or vram.StopResult("laid", "шов"))
     bridge._last_used = time.time()          # только что работал
     assert bridge.maybe_release() == "" and not stopped
     bridge._last_used = time.time() - config.WHISPER_KEEPALIVE_SEC - 10

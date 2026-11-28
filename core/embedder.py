@@ -106,13 +106,19 @@ def ensure_server(wait_secs: Optional[float] = None) -> tuple:
 
 
 def lay_to_rest() -> str:
-    """Уложить слугу (кнопка 93, второй выбор): семантика — по вызову."""
-    from core.vram import stop_llama
-    if stop_llama(config.PORT_EMBEDDER, server_name="llama-server"):
+    """Уложить слугу (кнопка 93, второй выбор): семантика — по вызову.
+
+    КРУГ 36 (аудит 270): «не смогла» ≠ «не нужно» — lay_down
+    различает эти исходы, сводка не врёт.
+    """
+    from core.vram import lay_down
+    res = lay_down(config.PORT_EMBEDDER, server_name="llama-server")
+    if res.ok:
         return "слуга-эмбеддер уложен — порт %d свободен" % config.PORT_EMBEDDER
-    if not alive():
+    if res.status == "no-server":
         return "слуга и так спал — порт %d тих" % config.PORT_EMBEDDER
-    return "не смогла уложить слугу — скажи архитектору"
+    return ("не смогла уложить слугу (%s) — скажи архитектору"
+            % (res.text or res.status))
 
 
 def embed(texts: list) -> list:

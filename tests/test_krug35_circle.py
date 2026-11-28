@@ -315,7 +315,11 @@ def test_ensure_server_returns_eyes_on_fail(monkeypatch, tmp_path):
                         lambda model: (_ for _ in ()).throw(RuntimeError("нет тела")))
     import core.vram as vram
     import core.doctor as doctor
-    monkeypatch.setattr(vram, "stop_llama", lambda port: True)
+    # КРУГ 36: церемония звётся lay_down (статусы вместо bool-лжи) —
+    # якорь продлён по ритуалу, дух цел: глаза присели ДО спавна
+    monkeypatch.setattr(vram, "lay_down",
+                        lambda port, server_name="llama-server":
+                        vram.StopResult("laid", "шов"))
     monkeypatch.setattr(doctor, "heal",
                         lambda organs: healed.append(organs) or ["глаза %d: жив" % config.PORT_EYES])
     ok, note = repair.ensure_server(wait_secs=1)
@@ -329,8 +333,10 @@ def test_ensure_server_sits_eyes_when_alive(monkeypatch):
     sits = []
     monkeypatch.setattr(repair, "server_alive", lambda: True)
     import core.vram as vram
-    monkeypatch.setattr(vram, "stop_llama",
-                        lambda port: sits.append(port) or True)
+    # КРУГ 36 (ритуал продления): lay_down вместо stop_llama
+    monkeypatch.setattr(vram, "lay_down",
+                        lambda port, server_name="llama-server":
+                        sits.append(port) or vram.StopResult("laid", "шов"))
     ok, note = repair.ensure_server(wait_secs=1)
     assert ok is True
     assert sits == [config.PORT_EYES]

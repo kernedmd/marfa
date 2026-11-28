@@ -192,6 +192,10 @@ def test_set_watch_on_off(home, monkeypatch, tmp_path):
 
 
 def test_agent_commands_toggle_watch(home, monkeypatch, tmp_path):
+    """КРУГ 36 (аудит 284, ритуал продления): ВКЛЮЧЕНИЕ слежения — за
+    калиткой Создателя (прежде любая фраза показывала мозгу весь
+    экран); ВЫКЛЮЧЕНИЕ — свободно (безопасное направление); «смотри за
+    экраном» — та же резолюция, тоже за словом."""
     class FakeBrain:
         calls = 0
 
@@ -200,17 +204,33 @@ def test_agent_commands_toggle_watch(home, monkeypatch, tmp_path):
             return {"answer": "мозг"}
 
     class FakeMemory:
-        def recall(self, *a, **kw):
+        def recall(self, *a, **k):
             return []
 
+    word = "тайное-слово-калитки"
+    (tmp_path / ".env").write_text("MARFA_CODEWORD=%s\n" % word,
+                                   encoding="utf-8")
     a = agent.Agent(brain=FakeBrain(), memory=FakeMemory())
+
+    # без слова — честный указатель, экран мозгу не показывается
     r = a.handle("следи за экраном")
-    assert r.tool_used == "screen_watch" and "Теперь слежу" in r.text
-    assert eyes.watch_enabled() is True
+    assert r.tool_used == "screen_watch" and "калитк" in r.text
+    assert eyes.watch_enabled() is False
     assert a.brain.calls == 0
+
+    # со словом — резолюция Создателя
+    r = a.handle(word + " следи за экраном")
+    assert r.tool_used == "creator_gate"
+    assert eyes.watch_enabled() is True
+    assert a.brain.calls == 0          # слово и команда — мимо мозга
+
+    # выключение — свободно
     r = a.handle("не следи за экраном")
     assert r.tool_used == "screen_watch" and "Больше не слежу" in r.text
     assert eyes.watch_enabled() is False
-    # «смотри за экраном» — та же резолюция
-    a.handle("смотри за экраном")
+
+    # «смотри за экраном» — та же резолюция за словом
+    a.handle(word + " смотри за экраном")
     assert eyes.watch_enabled() is True
+    a.handle("не следи за экраном")
+    assert eyes.watch_enabled() is False
