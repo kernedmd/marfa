@@ -347,3 +347,64 @@ def test_config_law_anchors():
     assert config.PORT_CODER == 8085
     assert config.CODER_MAX_FILE_LINES <= 250      # v1: не расползается
     assert str(config.PATCHES_DIR).endswith("patches")
+
+
+def test_agent_patch_live_forms(home, monkeypatch):
+    r"""УРОК ЖИВОГО ЛОГА (день-18, 28.11): Создатель СЕМЬ раз звал
+    внедрить патч №0002 живыми формами — кавычки («совет дома»
+    повторён дословно), «№», инфинитив, ответ без глагола. Рефлекс
+    понимал только голое «примени патч N» — и мозг ходил по кругу.
+    Все живые формы должны попадать в рефлекс, не в мозг."""
+    a = agent.Agent(brain=FakeBrain(), memory=FakeMemory())
+    got = {}
+    monkeypatch.setattr(repair, "apply_patch",
+                        lambda n: got.update(n=n) or "ПРИМЕНЁН %d" % n)
+    for phrase in ("примени патч 0002",
+                   "«примени патч 0002»",
+                   "примени патч №0002",
+                   "применить патч 0002",
+                   "примени 0002",
+                   "патч 0002",
+                   "№0002",
+                   "Патч №0002",
+                   "Марфа, примени патч 0002"):
+        r = a.handle(phrase)
+        assert r.tool_used == "patch_apply", phrase
+        assert got["n"] == 2 and a.brain.calls == 0, phrase
+    # откаты тем же живым языком
+    monkeypatch.setattr(repair, "rollback_patch", lambda n: "ОТКАЧЕН %d" % n)
+    r = a.handle("откати патч №0002")
+    assert r.tool_used == "patch_rollback" and "ОТКАЧЕН 2" in r.text
+    r = a.handle("откатить 0002")
+    assert r.tool_used == "patch_rollback" and "ОТКАЧЕН 2" in r.text
+
+
+def test_agent_bare_patch_number_not_command(home, monkeypatch):
+    r"""Голые формы не жадничают: «что меняет патч N» и «покажи патч N»
+    — свои маршруты, «патчи» — список. Точное над жадным (круг 25)."""
+    a = agent.Agent(brain=FakeBrain(), memory=FakeMemory())
+    monkeypatch.setattr(repair, "patch_summary", lambda n: "СВОДКА %d" % n)
+    monkeypatch.setattr(repair, "patch_diff", lambda n: "ДИФФ %d" % n)
+    monkeypatch.setattr(repair, "list_patches", lambda: "№0001 — ждёт")
+    r = a.handle("что меняет патч 0002")
+    assert r.tool_used == "patch_summary" and "СВОДКА 2" in r.text
+    r = a.handle("покажи патч 0002")
+    assert r.tool_used == "patch_diff" and "ДИФФ 2" in r.text
+    assert a.handle("патчи").tool_used == "patches"
+    assert a.brain.calls == 0
+
+
+def test_agent_apply_patch_tool_finds_number(home, monkeypatch):
+    r"""День-18, мозг: apply_patch звался с номером в text/query —
+    ручка читала только patch/n и ходила по кругу «внедрить какой
+    патч?». Номер ищется в любом ключе и в тексте; без номера —
+    научение СПРОСИТЬ, а не звать вслепую."""
+    a = agent.Agent(brain=FakeBrain(), memory=FakeMemory())
+    monkeypatch.setattr(repair, "self_apply", lambda n: "ВНЕДРЁН %d" % n)
+    for args in ({"text": "патч 0002"}, {"query": "№0002"},
+                 {"value": "0002"}, {"patch": 2}, {"n": "0002"},
+                 {"patch_id": 2}):
+        r = a._act({"tool": "apply_patch", "args": args})
+        assert "ВНЕДРЁН 2" in r.text, args
+    r = a._act({"tool": "apply_patch", "args": {"text": "какой патч?"}})
+    assert "спроси Создателя" in r.text

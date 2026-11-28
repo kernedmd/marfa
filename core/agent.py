@@ -901,7 +901,11 @@ class Agent:
         # команду в медленный трек: «время?», «статус!», «дневник…» —
         # это те же команды. lowq — ТОЛЬКО для сравнений «вся команда»;
         # payload всегда режется с t — у «скобки ()» хвост часть текста.
-        lowq = low.rstrip("?.!…,;: ")
+        # УРОК ЖИВОГО ЛОГА (день-18, 28.11): Создатель повторил совет
+        # дома ДОСЛОВНО — «примени патч 0002» В КАВЫЧКАХ — и команда
+        # улетела в медленный мозг. Кавычки («», " и прямые) снимаются
+        # с обоих концов вместе с пунктуацией: совет дома стал командой.
+        lowq = low.strip("?.!…,;: «»\"'“”‘’ ")
 
         if lowq in ("время", "который час", "сколько времени"):
             return Reply("Сейчас " + time.strftime("%H:%M:%S") +
@@ -2186,12 +2190,24 @@ class Agent:
         if lowq in ("патчи", "список патчей"):
             from core import repair
             return Reply(repair.list_patches(), "python", "patches")
-        m = re.match(r"^примени\s+патч\s+(\d+)$", lowq)
+        # УРОК ЖИВОГО ЛОГА (день-18, 28.11): Создатель СЕМЬ раз звал
+        # внедрить патч №0002 — «примени патч 0002» (в кавычках, как
+        # посоветовал сам дом), «патч 0002», «№0002», «Патч №0002» —
+        # рефлекс понимал ТОЛЬКО голое «примени патч N», фразы улетали
+        # в мозг, а тот крутил apply_patch без номера по кругу. Лечение:
+        # глагольные формы шире (примени/применить, откати/откатить,
+        # внедри/внедрить), слово «патч» и «№» необязательны, а ГОЛЫЙ
+        # номер после вопроса дома «внедрить какой патч?» — тоже выбор.
+        # Точное («что меняет патч N», «покажи патч N») стоит ниже и
+        # не задето: у тех фраз есть свой глагол.
+        m = re.match(r"^примен(?:и|ить)\s+(?:патч\s*)?(?:№\s*)?(\d+)$",
+                     lowq)
         if m:
             from core import repair
             return Reply(repair.apply_patch(int(m.group(1))),
                          "python", "patch_apply")
-        m = re.match(r"^откати\s+патч\s+(\d+)$", lowq)
+        m = re.match(r"^откат(?:и|ить)\s+(?:патч\s*)?(?:№\s*)?(\d+)$",
+                     lowq)
         if m:
             from core import repair
             return Reply(repair.rollback_patch(int(m.group(1))),
@@ -2223,11 +2239,26 @@ class Agent:
         if lowq in ("запрети внедрять себя", "запрещаю внедрять себя"):
             from core import repair
             return Reply(repair.forbid_self_write(), "python", "self_write")
-        m = re.match(r"^внедри\s+патч\s+(\d+)$", lowq)
+        m = re.match(r"^внедр(?:и|ить)\s+(?:патч\s*)?(?:№\s*)?(\d+)$",
+                     lowq)
         if m:
             from core import repair
             return Reply(repair.self_apply(int(m.group(1))),
                          "python", "self_apply")
+        # день-18, продолжение: ответ на вопрос дома «внедрить какой
+        # патч? скажи номер» — Создатель отвечает КОРОТКО: «патч 0002»,
+        # «№0002», «Патч №0002». Это ВЫБОР номера, не новый приказ —
+        # голые формы без глагола идут в применение (Создатель просил).
+        m = re.match(r"^патч\s*(?:№\s*)?(\d{1,4})$", lowq)
+        if m:
+            from core import repair
+            return Reply(repair.apply_patch(int(m.group(1))),
+                         "python", "patch_apply")
+        m = re.match(r"^№\s*(\d{1,4})$", lowq)
+        if m:
+            from core import repair
+            return Reply(repair.apply_patch(int(m.group(1))),
+                         "python", "patch_apply")
         # Ф161 «МАСТЕРСКАЯ ИНСТРУМЕНТОВ» (круг 26, живой лог дня-15:
         # Создатель ШЕСТЬ раз просил «создай инструмент для озвучивания»
         # — дом отвечал шпаргалкой «почини что?» или выдумкой «Создан
@@ -2760,14 +2791,32 @@ class Agent:
             if tool == "apply_patch":
                 # Ф75 «свобода внедрять себя»: мозг доверяет ДОМУ самому
                 # внедрить готовый патч — с резолюцией Создателя, бэкапом,
-                # дым-тестом и автоОткатом (core/repair.self_apply)
+                # дым-тестом и автоОткатом (core/repair.self_apply).
+                # УРОК ЖИВОГО ЛОГА (день-18): мозг звал apply_patch с
+                # номером в text/query/value, а ручка читала ТОЛЬКО
+                # patch/n — и ходила по кругу «внедрить какой патч?».
+                # Номер теперь ищется в любом ключе и в самом тексте
+                # («патч 0002», «№0002», «0002»); если номера нет —
+                # научение СПРОСИТЬ Создателя, а не звать вслепую.
                 from core import repair
                 raw = args.get("patch", args.get("n"))
-                try:
-                    n = int(str(raw).strip())
-                except (TypeError, ValueError):
+                if raw is None or not str(raw).strip():
+                    for _k in ("patch_id", "number", "num", "id",
+                               "value", "text", "query", "name"):
+                        if args.get(_k):
+                            raw = args.get(_k)
+                            break
+                n = None
+                if raw is not None:
+                    _m = re.search(r"\d{1,4}", str(raw))
+                    if _m:
+                        n = int(_m.group(0))
+                if n is None:
                     return Reply("внедрить какой патч? скажи номер — "
-                                 "«патчи» покажет список", "brain", "apply_patch")
+                                 "«патчи» покажет список. Если номера "
+                                 "нет — спроси Создателя и ЖДИ его "
+                                 "ответа, не зови apply_patch вслепую",
+                                 "brain", "apply_patch")
                 return Reply(repair.self_apply(n), "brain", "apply_patch")
             # Ф161 «МАСТЕРСКАЯ» (круг 26): инструмент-файл из
             # core\customtools\ жив той же жизнью, что встроенный —
