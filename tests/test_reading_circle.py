@@ -139,9 +139,13 @@ def test_clipboard_read_shows_and_caps(home, monkeypatch):
     clip.copy(long)
     out = hands.clipboard_read()
     assert "показала первые 2000" in out and len(out) < 2200
-    # сырой буфер — без чатовой приписки: память хранит текст, не отчёт
+    # сырой буфер — текст без чатовой приписки Ф63, НО обрезка не молчит:
+    # круг 34 (В7 аудита): «запомнила из буфера» без слова «обрезано»
+    # читалось как «запомнила целиком» — честная пометка уезжает в
+    # память вместе с текстом, а не заменяет его
     raw = hands.clipboard_read_raw()
-    assert "показала" not in raw and len(raw) == config.CLIPBOARD_READ_LIMIT
+    assert raw.startswith(long[:config.CLIPBOARD_READ_LIMIT])
+    assert "обрезано" in raw and "4200" in raw
 
 
 def test_clipboard_read_empty_and_no_module(home, monkeypatch):

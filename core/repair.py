@@ -649,7 +649,7 @@ def apply_patch(n: int) -> str:
         if target.is_file():
             (d / ("backup_" + target.name)).write_text(
                 target.read_text(encoding="utf-8"), encoding="utf-8")
-        hands.write_file(target, code)
+        hands.write_file(target, code, _via="repair")
     except PermissionError as e:
         return "СТРАЖ не пустил: %s" % e
     ok, report = _smoke_test(target)
@@ -664,7 +664,7 @@ def apply_patch(n: int) -> str:
         rolled = False
         if backup is not None:
             try:
-                hands.write_file(target, backup.read_text(encoding="utf-8"))
+                hands.write_file(target, backup.read_text(encoding="utf-8"), _via="repair")
                 rolled = True
             except Exception as e:
                 _lesson("применение-откат-не-удался", "%s: %s"
@@ -718,7 +718,7 @@ def rollback_patch(n: int) -> str:
                 "если не нужен, удали руками %s)" % (n, target))
     target = guard.resolve_path(str(meta.get("target") or ""))
     try:
-        hands.write_file(target, backup.read_text(encoding="utf-8"))
+        hands.write_file(target, backup.read_text(encoding="utf-8"), _via="repair")
     except PermissionError as e:
         return "СТРАЖ не пустил: %s" % e
     meta["applied"] = False
@@ -887,7 +887,7 @@ def self_apply(n: int) -> str:
         if target.is_file():
             (d / ("backup_" + target.name)).write_text(
                 target.read_text(encoding="utf-8"), encoding="utf-8")
-        hands.write_file(target, code)
+        hands.write_file(target, code, _via="repair")
     except PermissionError as e:
         return "СТРАЖ не пустил: %s" % e
     except Exception as e:
@@ -902,7 +902,7 @@ def self_apply(n: int) -> str:
         rolled = False
         if backup is not None:
             try:
-                hands.write_file(target, backup.read_text(encoding="utf-8"))
+                hands.write_file(target, backup.read_text(encoding="utf-8"), _via="repair")
                 rolled = True
             except Exception as e:
                 _lesson("самовнедрение-откат-не-удался", "%s: %s"
