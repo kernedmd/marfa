@@ -336,14 +336,24 @@ def check(user_text: str):
         return False, None
     command = rest.strip().lower()
 
-    if command.startswith("статус"):
-        return True, _cmd_status()
-    if command.startswith("тест"):
-        return True, _cmd_tests()
-    if command.startswith("хвост"):
-        return True, _cmd_tail(command[len("хвост"):].strip())
-    if command.startswith("новое слово"):
-        return True, _cmd_rotate_new(command[len("новое слово"):].strip())
-    if command.startswith("подтверждаю"):
-        return True, _cmd_rotate_confirm()
-    return True, HELP
+    # КРУГ 33 (аудит И., К6): команда за словом — в броне. Падение
+    # исполнения больше НЕ роняет check (а значит не роняет fail-closed
+    # диспетчера): слово опознано — ход уже голос Создателя, честный
+    # текст вместо исключения. Слово в мозг и в журнал не уезжает.
+    try:
+        if command.startswith("статус"):
+            return True, _cmd_status()
+        if command.startswith("тест"):
+            return True, _cmd_tests()
+        if command.startswith("хвост"):
+            return True, _cmd_tail(command[len("хвост"):].strip())
+        if command.startswith("новое слово"):
+            return True, _cmd_rotate_new(command[len("новое слово"):].strip())
+        if command.startswith("подтверждаю"):
+            return True, _cmd_rotate_confirm()
+        return True, HELP
+    except Exception as e:
+        return True, ("калитка споткнулась (мой сбой, не твой): %s: %s — "
+                      "команда за словом не исполнилась, само слово в мозг "
+                      "не уехало. Повтори через минуту."
+                      % (type(e).__name__, e))

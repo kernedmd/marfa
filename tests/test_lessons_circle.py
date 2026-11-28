@@ -234,19 +234,27 @@ def test_build_system_empty_no_block():
 # ---------- интеграция: агент везёт уроки в каждом ходе ----------
 
 def test_agent_static_system_carries_core_rules(home):
-    """ГЛАВНЫЙ ЯКОРЬ Ф112: системный промпт мозгового трека несёт блок
-    УРОКИ-ЗАКОНЫ с ядерной пятёркой — цикл «ошибка -> урок -> правило
-    -> проверка» доезжает до мозга, а не лежит складом в файле."""
+    """ГЛАВНЫЙ ЯКОРЬ Ф112 — ПРОДЛЁН КРУГОМ 33 (аудит И., К10): уроки
+    едут в КАЖДЫЙ ход, но больше НЕ в статичной системе — они в
+    подвижном хвосте (_turn_context). Раньше блок УРОКИ-ЗАКОНЫ лежал
+    в статике и рвал KV-кэш при каждом новом уроке (нарушение Ф77
+    именно в дни, когда дом сыпет уроками). Цикл «ошибка -> урок ->
+    правило -> проверка» доезжает до мозга так же честно — префикс
+    при этом стабилен между ходами."""
     _write_journal()
     agent = Agent(brain=BrainClient(brain_url="http://127.0.0.1:1"),
                   memory=Memory(data_dir=Path(config.DATA_DIR)),
                   doctrine="Тестовая доктрина")
     sys_prompt = agent._static_system()
-    assert "[УРОКИ-ЗАКОНЫ" in sys_prompt
-    assert "- R1: путь — подпапка, не корень" in sys_prompt
-    assert "- R7: моя ошибка и баг дома" in sys_prompt
+    # К10: статика чиста от уроков — префикс не меняется от хода к ходу
+    assert "[УРОКИ-ЗАКОНЫ" not in sys_prompt
+    assert "- R1: путь — подпапка, не корень" not in sys_prompt
+    tail = agent._turn_context("привет")
+    assert "ПРАВИЛА УРОКОВ" in tail
+    assert "- R1: путь — подпапка, не корень" in tail
+    assert "- R7: моя ошибка и баг дома" in tail
     # рабочие правила (R3, R6, R8, R9, R10) — по теме, не в каждом ходе
-    assert "R9:" not in sys_prompt and "R10:" not in sys_prompt
+    assert "R9:" not in tail and "R10:" not in tail
 
 
 def test_agent_survives_broken_journal(home):
